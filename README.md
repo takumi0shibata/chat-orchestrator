@@ -60,6 +60,37 @@ cp .env.example .env
 docker compose up --build
 ```
 
+## バージョン管理（王道の最小運用）
+
+- ルール: SemVer (`MAJOR.MINOR.PATCH`)
+- 単一のバージョン源: `VERSION`
+- 同期対象:
+  - `backend/pyproject.toml`
+  - `frontend/package.json`
+  - `CHANGELOG.md`
+
+使い方:
+
+```bash
+# バグ修正リリース
+make release-patch
+
+# 機能追加リリース
+make release-minor
+
+# 破壊的変更リリース
+make release-major
+```
+
+リリース時の流れ:
+
+1. `make release-xxx` を実行
+2. `CHANGELOG.md` の該当バージョン欄を埋める
+3. `git add VERSION backend/pyproject.toml frontend/package.json CHANGELOG.md`
+4. `git commit -m "chore(release): vX.Y.Z"`
+5. `git tag vX.Y.Z`
+6. `git push origin main --tags`
+
 ## モデル追加方法（特にOpenAI）
 
 `backend/app/model_catalog.py` の `OPENAI_MODELS` に1件追加するだけです。

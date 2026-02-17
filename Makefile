@@ -1,4 +1,4 @@
-.PHONY: setup-backend setup-frontend dev-backend dev-frontend dev docker-up docker-down
+.PHONY: setup-backend setup-frontend dev-backend dev-frontend dev docker-up docker-down release-patch release-minor release-major
 
 setup-backend:
 	cd backend && uv venv && . .venv/bin/activate && uv pip install -e .
@@ -20,3 +20,12 @@ docker-up:
 
 docker-down:
 	docker compose down
+
+release-patch:
+	./scripts/release.sh patch
+
+release-minor:
+	./scripts/release.sh minor
+
+release-major:
+	./scripts/release.sh major
