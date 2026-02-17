@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     google_api_key: str | None = None
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com/v1"
+    edinet_api_key: str | None = None
+    edinet_cache_dir: str | None = None
+    edinet_cache_ttl_hours: int = 24
+    edinet_router_enable_llm: bool = False
+    edinet_router_model: str = "gpt-4o-mini"
+    edinet_lookback_days: int = 365
 
     default_openai_model: str = "gpt-4o-mini"
     default_anthropic_model: str = "claude-3-5-haiku-latest"
