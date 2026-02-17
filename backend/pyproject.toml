@@ -1,0 +1,25 @@
+[project]
+name = "chat-orchestrator-backend"
+version = "0.1.0"
+description = "Extensible multi-provider chatbot backend"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116.0",
+  "uvicorn[standard]>=0.35.0",
+  "httpx>=0.28.1",
+  "pydantic-settings>=2.6.1",
+  "openai>=1.60.0",
+  "anthropic>=0.57.0",
+  "google-genai>=1.31.0",
+  "python-dotenv>=1.0.1",
+  "pypdf>=5.1.0",
+  "python-multipart>=0.0.12"
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]
