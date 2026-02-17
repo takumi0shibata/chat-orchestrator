@@ -66,6 +66,13 @@ class XbrlExtractor:
         self._available_tags = {
             etree.QName(el).localname for el in self.root.iter() if isinstance(el.tag, str)
         }
+        self._id_index: dict[str, Any] = {}
+        for el in self.root.iter():
+            if not isinstance(el.tag, str):
+                continue
+            el_id = el.get("id")
+            if el_id:
+                self._id_index[el_id] = el
 
     def extract_first_available(self, tag_candidates: list[str]) -> tuple[str | None, str]:
         if not tag_candidates:
@@ -81,9 +88,10 @@ class XbrlExtractor:
                 continue
             if etree.QName(el).localname != selected_tag:
                 continue
-            if not el.text:
+            raw_payload = self._collect_payload_with_continuation(el)
+            if not raw_payload:
                 continue
-            decoded = html_module.unescape(el.text)
+            decoded = html_module.unescape(raw_payload)
             plain_text = self._html_to_text(decoded)
             if plain_text.strip():
                 texts.append(plain_text.strip())
@@ -92,6 +100,34 @@ class XbrlExtractor:
             return None, f"{selected_tag} は見つかりましたが本文抽出できませんでした"
 
         return "\n\n".join(texts), selected_tag
+
+    def _collect_payload_with_continuation(self, el: Any) -> str:
+        chunks: list[str] = []
+        head = self._element_payload(el)
+        if head:
+            chunks.append(head)
+
+        continued_at = el.get("continuedAt")
+        visited: set[str] = set()
+        while continued_at and continued_at not in visited:
+            visited.add(continued_at)
+            cont = self._id_index.get(continued_at)
+            if cont is None:
+                break
+            cont_payload = self._element_payload(cont)
+            if cont_payload:
+                chunks.append(cont_payload)
+            continued_at = cont.get("continuedAt")
+
+        return "".join(chunks).strip()
+
+    def _element_payload(self, el: Any) -> str:
+        parts: list[str] = []
+        if el.text:
+            parts.append(el.text)
+        for child in el:
+            parts.append(etree.tostring(child, encoding="unicode"))
+        return "".join(parts)
 
     def _html_to_text(self, html_content: str) -> str:
         soup = BeautifulSoup(html_content, "html.parser")
@@ -217,7 +253,7 @@ class EdinetReportQASkill(Skill):
                             unsupported_sections.append(f"{section.section_id} {section.title}")
                         lines.append(f"  - {section.section_id} {section.title}: {source}")
                         continue
-                    clipped = self._clip_text(text, max_chars=6000)
+                    clipped = self._clip_text(text, max_chars=20000)
                     extraction_hits += 1
                     lines.append(
                         f"  - {section.section_id} {section.title} [tag={source}]\n{self._indent(clipped, '    ')}"
