@@ -160,6 +160,30 @@ function renderCodeBlock(rawChunk: string): string {
   return `<div class="code-wrap"><button class="code-copy-btn" data-copy-btn="1" type="button">Copy</button><pre class="code-block language-${language}"><code>${highlighted}</code></pre></div>`;
 }
 
+function isTableSeparatorLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed || !trimmed.includes("|")) return false;
+
+  const normalized = trimmed.replace(/^\|/, "").replace(/\|$/, "");
+  const cells = normalized.split("|").map((cell) => cell.trim());
+  if (cells.length === 0) return false;
+
+  return cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function splitTableRow(line: string): string[] {
+  const normalized = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return normalized.split("|").map((cell) => formatInline(cell.trim()));
+}
+
+function renderTable(header: string[], rows: string[][]): string {
+  const thead = `<thead><tr>${header.map((cell) => `<th>${cell}</th>`).join("")}</tr></thead>`;
+  const tbodyRows = rows
+    .map((row) => `<tr>${header.map((_, idx) => `<td>${row[idx] || ""}</td>`).join("")}</tr>`)
+    .join("");
+  return `<table>${thead}<tbody>${tbodyRows}</tbody></table>`;
+}
+
 function markdownToHtml(markdown: string): string {
   const chunks = markdown.split(/```/);
   const htmlParts: string[] = [];
@@ -174,13 +198,15 @@ function markdownToHtml(markdown: string): string {
     const lines = escapeHtml(chunk).split("\n");
     let inList = false;
 
-    for (const rawLine of lines) {
-      const line = rawLine.trim();
+    let lineIndex = 0;
+    while (lineIndex < lines.length) {
+      const line = lines[lineIndex].trim();
       if (!line) {
         if (inList) {
           htmlParts.push("</ul>");
           inList = false;
         }
+        lineIndex += 1;
         continue;
       }
 
@@ -190,12 +216,30 @@ function markdownToHtml(markdown: string): string {
           inList = true;
         }
         htmlParts.push(`<li>${formatInline(line.slice(2))}</li>`);
+        lineIndex += 1;
         continue;
       }
 
       if (inList) {
         htmlParts.push("</ul>");
         inList = false;
+      }
+
+      const nextLine = lines[lineIndex + 1]?.trim() || "";
+      if (line.includes("|") && isTableSeparatorLine(nextLine)) {
+        const header = splitTableRow(line);
+        const rows: string[][] = [];
+        lineIndex += 2;
+
+        while (lineIndex < lines.length) {
+          const rowLine = lines[lineIndex].trim();
+          if (!rowLine || !rowLine.includes("|")) break;
+          rows.push(splitTableRow(rowLine));
+          lineIndex += 1;
+        }
+
+        htmlParts.push(renderTable(header, rows));
+        continue;
       }
 
       if (line.startsWith("### ")) {
@@ -207,6 +251,7 @@ function markdownToHtml(markdown: string): string {
       } else {
         htmlParts.push(`<p>${formatInline(line)}</p>`);
       }
+      lineIndex += 1;
     }
 
     if (inList) htmlParts.push("</ul>");

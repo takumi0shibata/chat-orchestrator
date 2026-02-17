@@ -221,6 +221,7 @@ body {
 .markdown p,
 .markdown ul,
 .markdown pre,
+.markdown table,
 .markdown h1,
 .markdown h2,
 .markdown h3 {
@@ -255,6 +256,28 @@ body {
 .markdown pre code {
   background: transparent;
   padding: 0;
+}
+
+.markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid #313a4a;
+  border-radius: 10px;
+  overflow: hidden;
+  font-size: 14px;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid #313a4a;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown th {
+  background: #1a2233;
+  font-weight: 600;
 }
 
 .markdown .code-wrap {
