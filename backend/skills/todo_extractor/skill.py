@@ -1,4 +1,5 @@
 import re
+from typing import Any
 
 from app.skills_runtime.base import Skill, SkillMetadata
 
@@ -10,7 +11,12 @@ class TodoExtractorSkill(Skill):
         description="入力文から行動可能なTODOを抽出して箇条書き化します。",
     )
 
-    async def run(self, user_text: str, history: list[dict[str, str]]) -> str:
+    async def run(
+        self,
+        user_text: str,
+        history: list[dict[str, str]],
+        skill_context: dict[str, Any] | None = None,
+    ) -> str:
         parts = re.split(r"[。.!?\n]", user_text)
         candidates = [p.strip() for p in parts if p.strip()]
         bullets = []

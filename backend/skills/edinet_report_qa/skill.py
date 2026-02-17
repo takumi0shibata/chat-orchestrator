@@ -155,7 +155,12 @@ class EdinetReportQASkill(Skill):
         ),
     )
 
-    async def run(self, user_text: str, history: list[dict[str, str]]) -> str:
+    async def run(
+        self,
+        user_text: str,
+        history: list[dict[str, str]],
+        skill_context: dict[str, Any] | None = None,
+    ) -> str:
         settings = get_settings()
         api_key = (settings.edinet_api_key or "").strip()
         if not api_key:
@@ -170,7 +175,11 @@ class EdinetReportQASkill(Skill):
             )
 
         section_defs = self._build_sections()
-        selected, routing_reasons = await self._route_sections(user_text, section_defs)
+        selected, routing_reasons = await self._route_sections(
+            user_text,
+            section_defs,
+            skill_context=skill_context,
+        )
 
         context_text = self._build_company_context(user_text=user_text, history=history)
         docs_by_date: dict[str, list[dict[str, Any]]] = {}
@@ -817,6 +826,7 @@ class EdinetReportQASkill(Skill):
         self,
         question: str,
         sections: list[SectionDefinition],
+        skill_context: dict[str, Any] | None = None,
     ) -> tuple[list[SectionDefinition], dict[str, str]]:
         scored: dict[str, int] = {section.section_id: 0 for section in sections}
         normalized_q = self._norm_text(question)
@@ -838,7 +848,11 @@ class EdinetReportQASkill(Skill):
         if not self._router_llm_enabled():
             return selected, reasons
 
-        reranked = await self._rerank_sections_by_llm(question=question, sections=selected)
+        reranked = await self._rerank_sections_by_llm(
+            question=question,
+            sections=selected,
+            skill_context=skill_context,
+        )
         if not reranked:
             return selected, reasons
 
@@ -854,14 +868,18 @@ class EdinetReportQASkill(Skill):
         *,
         question: str,
         sections: list[SectionDefinition],
+        skill_context: dict[str, Any] | None = None,
     ) -> list[str]:
         settings = get_settings()
-        openai_api_key = (settings.openai_api_key or "").strip()
-        if not openai_api_key:
+        provider_id = str((skill_context or {}).get("provider_id") or "openai")
+        selected_model = str((skill_context or {}).get("model") or "").strip()
+        model = selected_model or (settings.edinet_router_model or "gpt-4o-mini").strip() or "gpt-4o-mini"
+
+        client_kwargs = self._build_router_client_kwargs(provider_id=provider_id, settings=settings)
+        if client_kwargs is None:
             return []
 
-        client = AsyncOpenAI(api_key=openai_api_key)
-        model = (settings.edinet_router_model or "gpt-4o-mini").strip() or "gpt-4o-mini"
+        client = AsyncOpenAI(**client_kwargs)
         candidates = [{"id": sec.section_id, "title": sec.title} for sec in sections]
         prompt = (
             "あなたは有価証券報告書のセクション選択器です。"
@@ -882,6 +900,29 @@ class EdinetReportQASkill(Skill):
         if not output_text:
             return []
         return self._extract_section_ids_from_text(output_text=output_text)
+
+    def _build_router_client_kwargs(self, *, provider_id: str, settings: Any) -> dict[str, str] | None:
+        if provider_id == "openai":
+            api_key = (settings.openai_api_key or "").strip()
+            if not api_key:
+                return None
+            return {"api_key": api_key}
+
+        if provider_id == "azure_openai":
+            api_key = (settings.azure_openai_api_key or "").strip()
+            endpoint = (settings.azure_openai_endpoint or "").strip().rstrip("/")
+            if not api_key or not endpoint:
+                return None
+            return {"api_key": api_key, "base_url": f"{endpoint}/openai/v1/"}
+
+        if provider_id == "deepseek":
+            api_key = (settings.deepseek_api_key or "").strip()
+            base_url = (settings.deepseek_base_url or "").strip()
+            if not api_key:
+                return None
+            return {"api_key": api_key, "base_url": base_url} if base_url else {"api_key": api_key}
+
+        return None
 
     def _extract_section_ids_from_text(self, *, output_text: str) -> list[str]:
         text = output_text.strip()

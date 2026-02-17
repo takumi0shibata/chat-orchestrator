@@ -1,3 +1,5 @@
+from typing import Any
+
 from app.skills_runtime.base import Skill, SkillMetadata
 
 
@@ -8,7 +10,12 @@ class ContextSummarizerSkill(Skill):
         description="会話履歴を短く要約して、モデルへ補助コンテキストとして渡します。",
     )
 
-    async def run(self, user_text: str, history: list[dict[str, str]]) -> str:
+    async def run(
+        self,
+        user_text: str,
+        history: list[dict[str, str]],
+        skill_context: dict[str, Any] | None = None,
+    ) -> str:
         last_messages = history[-6:]
         if not last_messages:
             return "履歴はありません。"

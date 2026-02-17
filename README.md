@@ -1,6 +1,6 @@
 # Chat Orchestrator
 
-OpenAI / Anthropic / Google / DeepSeek など複数Providerに対応した、拡張しやすいチャットボット基盤です。  
+OpenAI / Azure OpenAI / Anthropic / Google / DeepSeek など複数Providerに対応した、拡張しやすいチャットボット基盤です。  
 フロントエンドは TypeScript + Vite + React、バックエンドは Python + FastAPI です。
 
 ## 特徴
@@ -108,6 +108,25 @@ ModelCapability(
     default_reasoning_effort="medium",
 )
 ```
+
+## Azure OpenAI の設定
+
+`.env` に以下を設定すると、Provider 一覧に `Azure OpenAI` が追加されます。
+
+```bash
+AZURE_OPENAI_API_KEY=...
+AZURE_OPENAI_ENDPOINT=https://<your-resource>.openai.azure.com
+AZURE_OPENAI_DEPLOYMENT=<your-deployment-name>
+```
+
+任意設定:
+
+```bash
+# responses か chat_completions
+AZURE_OPENAI_API_MODE=responses
+```
+
+この実装では Azure OpenAI の `model` にデプロイ名をそのまま渡します。
 
 ## API概要
 
