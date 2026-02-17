@@ -107,6 +107,7 @@ export async function streamChat(params: {
   temperature?: number | null;
   reasoningEffort?: "low" | "medium" | "high" | null;
   onChunk: (delta: string) => void;
+  onSkillStatus?: (status: "running" | "done", skillId: string) => void;
 }): Promise<StreamDone> {
   const response = await fetch("/api/chat/stream", {
     method: "POST",
@@ -139,6 +140,7 @@ export async function streamChat(params: {
     buffer += decoder.decode(value, { stream: true });
     const parsed = parseStreamBuffer(buffer, (event) => {
       if (event.type === "chunk") params.onChunk(event.delta);
+      if (event.type === "skill_status") params.onSkillStatus?.(event.status, event.skill_id);
     });
     buffer = parsed.rest;
     if (parsed.done) doneEvent = parsed.done;
@@ -147,6 +149,7 @@ export async function streamChat(params: {
   if (!doneEvent) {
     const parsed = parseStreamBuffer(`${buffer}\n`, (event) => {
       if (event.type === "chunk") params.onChunk(event.delta);
+      if (event.type === "skill_status") params.onSkillStatus?.(event.status, event.skill_id);
     });
     doneEvent = parsed.done;
   }

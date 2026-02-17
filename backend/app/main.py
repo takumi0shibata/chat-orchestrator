@@ -226,23 +226,36 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
     provider = state.providers.get(payload.provider_id)
     conversation_id = state.store.ensure_conversation(payload.conversation_id)
     history = state.store.get_messages(conversation_id)
+    if payload.skill_id and not state.skills.get(payload.skill_id):
+        raise HTTPException(status_code=400, detail=f"Unknown skill: {payload.skill_id}")
 
     user_input = payload.user_input.strip()
     messages = [*history, ChatMessage(role="user", content=user_input)]
-    prepared_messages, skill_output = await run_skill_if_needed(
-        skill_id=payload.skill_id,
-        provider_id=payload.provider_id,
-        model=payload.model,
-        user_input=user_input,
-        messages=messages,
-    )
 
     async def generate():
         state.store.ensure_title_from_user_input(conversation_id, user_input)
         state.store.add_message(conversation_id, ChatMessage(role="user", content=user_input))
         accumulated = ""
+        skill_output: str | None = None
+        prepared_messages = messages
 
         try:
+            if payload.skill_id:
+                yield json.dumps(
+                    {"type": "skill_status", "status": "running", "skill_id": payload.skill_id}
+                ) + "\n"
+
+            prepared_messages, skill_output = await run_skill_if_needed(
+                skill_id=payload.skill_id,
+                provider_id=payload.provider_id,
+                model=payload.model,
+                user_input=user_input,
+                messages=messages,
+            )
+
+            if payload.skill_id:
+                yield json.dumps({"type": "skill_status", "status": "done", "skill_id": payload.skill_id}) + "\n"
+
             async for chunk in provider.stream_chat(
                 model=payload.model,
                 messages=prepared_messages,

@@ -278,6 +278,7 @@ export function App() {
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [showThinking, setShowThinking] = useState<boolean>(false);
+  const [showSkillRunning, setShowSkillRunning] = useState<boolean>(false);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -285,6 +286,7 @@ export function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedModel = useMemo(() => models.find((item) => item.id === modelId), [models, modelId]);
+  const selectedSkill = useMemo(() => skills.find((item) => item.id === skillId), [skills, skillId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -476,6 +478,7 @@ export function App() {
     setLoading(true);
     setError("");
     setShowThinking(Boolean(selectedModel.supports_reasoning_effort));
+    setShowSkillRunning(Boolean(skillId));
 
     const userRaw = trimmed || "[Attached files only]";
     const payloadText = buildUserInput(userRaw, attachments);
@@ -499,6 +502,7 @@ export function App() {
         reasoningEffort,
         onChunk: (delta) => {
           if (delta) setShowThinking(false);
+          if (delta) setShowSkillRunning(false);
           setMessages((prev) => {
             const next = [...prev];
             const lastIndex = next.length - 1;
@@ -507,6 +511,9 @@ export function App() {
             }
             return next;
           });
+        },
+        onSkillStatus: (status) => {
+          setShowSkillRunning(status === "running");
         }
       });
 
@@ -529,6 +536,7 @@ export function App() {
       setError(e instanceof Error ? e.message : "送信に失敗しました");
       setMessages((prev) => prev.slice(0, -2));
     } finally {
+      setShowSkillRunning(false);
       setShowThinking(false);
       setLoading(false);
     }
@@ -592,7 +600,16 @@ export function App() {
         <section className="messages">
           {messages.map((message, index) => (
             <article className={`bubble ${message.role}`} key={`${message.role}-${index}`}>
-              {message.role === "assistant" && loading && showThinking && index === messages.length - 1 ? (
+              {message.role === "assistant" && loading && showSkillRunning && index === messages.length - 1 ? (
+                <div className="thinking">
+                  <span>{selectedSkill?.name || "Skill"} running</span>
+                  <span className="dots">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                </div>
+              ) : message.role === "assistant" && loading && showThinking && index === messages.length - 1 ? (
                 <div className="thinking">
                   <span>Thinking</span>
                   <span className="dots">

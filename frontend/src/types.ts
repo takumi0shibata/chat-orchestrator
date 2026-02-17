@@ -62,4 +62,10 @@ export interface StreamError {
   message: string;
 }
 
-export type StreamEvent = StreamChunk | StreamDone | StreamError;
+export interface StreamSkillStatus {
+  type: "skill_status";
+  status: "running" | "done";
+  skill_id: string;
+}
+
+export type StreamEvent = StreamChunk | StreamDone | StreamError | StreamSkillStatus;
