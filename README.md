@@ -192,3 +192,32 @@ EDINET_LOOKBACK_DAYS=365
 ```
 
 `再取得` / `再実行` / `retry` などの語が質問に含まれる場合は、キャッシュより再取得を優先します。
+
+## Paper Reviewer Skill (AI/ML/NLP)
+
+`backend/skills/paper_reviewer/skill.py` は、論文本文/段落/センテンス草稿を AI/ML/NLP 論文向けにレビューする補助コンテキストを生成するスキルです。
+
+主な仕様:
+
+- デフォルト評価軸: ACL/ARR中心（ML一般観点として ICML/NeurIPS の観点を補助適用）
+- 出力契約: 以下5セクションを必須化
+  1. `判定サマリ`
+  2. `主要指摘 (Major)`
+  3. `軽微指摘 (Minor)`
+  4. `修正案 (LaTeX)`
+  5. `不足情報 / 追加で欲しい情報`
+- 修正案方針: 問題箇所のみ最小編集を優先
+- 修正案は `latex` コードブロックで提示（必要時は最低1ブロック）
+
+利用例（`skill_id` 指定）:
+
+```json
+{
+  "provider_id": "openai",
+  "model": "gpt-4o-mini",
+  "user_input": "Please review this abstract for ACL style and clarity: We propose ...",
+  "skill_id": "paper_reviewer"
+}
+```
+
+一次情報ベースの rubric は `backend/skills/paper_reviewer/docs/rubric_ai_ml_nlp.md` を参照してください。
