@@ -1,6 +1,6 @@
 # Chat Orchestrator
 
-OpenAI / Anthropic / Google / DeepSeek など複数Providerに対応した、拡張しやすいチャットボット基盤です。  
+OpenAI / Azure OpenAI / Anthropic / Google / DeepSeek など複数Providerに対応した、拡張しやすいチャットボット基盤です。  
 フロントエンドは TypeScript + Vite + React、バックエンドは Python + FastAPI です。
 
 ## 特徴
@@ -109,6 +109,25 @@ ModelCapability(
 )
 ```
 
+## Azure OpenAI の設定
+
+`.env` に以下を設定すると、Provider 一覧に `Azure OpenAI` が追加されます。
+
+```bash
+AZURE_OPENAI_API_KEY=...
+AZURE_OPENAI_ENDPOINT=https://<your-resource>.openai.azure.com
+AZURE_OPENAI_DEPLOYMENT=<your-deployment-name>
+```
+
+任意設定:
+
+```bash
+# responses か chat_completions
+AZURE_OPENAI_API_MODE=responses
+```
+
+この実装では Azure OpenAI の `model` にデプロイ名をそのまま渡します。
+
 ## API概要
 
 - `GET /api/providers`: 利用可能Provider一覧
@@ -134,3 +153,35 @@ ModelCapability(
   "skill_id": "todo_extractor"
 }
 ```
+
+## EDINET有報QA Skill
+
+`backend/skills/edinet_report_qa/skill.py` は、EDINET APIから有価証券報告書（通常/訂正）を取得し、XBRLの関連セクションを抽出して回答補助コンテキストを作るスキルです。
+
+最低限の設定:
+
+```bash
+EDINET_API_KEY=your_subscription_key
+```
+
+任意設定:
+
+```bash
+EDINET_CACHE_DIR=/tmp/edinet-skill-cache
+EDINET_CACHE_TTL_HOURS=24
+EDINET_ROUTER_ENABLE_LLM=false
+EDINET_ROUTER_MODEL=gpt-4o-mini
+```
+
+利用例（`skill_id` 指定）:
+
+```json
+{
+  "provider_id": "openai",
+  "model": "gpt-4o-mini",
+  "user_input": "[E02144, E01777] の事業等のリスクを比較して",
+  "skill_id": "edinet_report_qa"
+}
+```
+
+このスキルは企業指定をEDINETコード入力で受け付けます（推奨形式: `[E00001, E12345]`）。

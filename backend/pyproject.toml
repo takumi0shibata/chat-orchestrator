@@ -14,7 +14,9 @@ dependencies = [
   "google-genai>=1.31.0",
   "python-dotenv>=1.0.1",
   "pypdf>=5.1.0",
-  "python-multipart>=0.0.12"
+  "python-multipart>=0.0.12",
+  "lxml>=6.0.2",
+  "beautifulsoup4>=4.14.3",
 ]
 
 [build-system]

@@ -11,9 +11,16 @@ from app.schemas import ChatMessage
 class OpenAIProvider(LLMProvider):
     provider_id = "openai"
 
-    def __init__(self, api_key: str, base_url: str | None = None, provider_id: str = "openai") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str | None = None,
+        provider_id: str = "openai",
+        default_api_mode: str | None = None,
+    ) -> None:
         self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         self.provider_id = provider_id
+        self.default_api_mode = default_api_mode
 
     def _chat_messages(self, messages: list[ChatMessage]) -> list[dict[str, str]]:
         return [m.model_dump() for m in messages]
@@ -54,14 +61,17 @@ class OpenAIProvider(LLMProvider):
         reasoning_effort: str | None,
     ) -> str:
         capability = get_model_capability(self.provider_id, model)
+        api_mode = self.default_api_mode or capability.api_mode
+        supports_temperature = capability.supports_temperature and api_mode != "responses"
+        supports_reasoning_effort = capability.supports_reasoning_effort and api_mode == "responses"
         kwargs = self._build_optional_kwargs(
-            capability_api_mode=capability.api_mode,
-            temperature=temperature if capability.supports_temperature else None,
+            capability_api_mode=api_mode,
+            temperature=temperature if supports_temperature else None,
             max_tokens=max_tokens,
-            reasoning_effort=reasoning_effort if capability.supports_reasoning_effort else None,
+            reasoning_effort=reasoning_effort if supports_reasoning_effort else None,
         )
 
-        if capability.api_mode == "responses":
+        if api_mode == "responses":
             response = await self.client.responses.create(
                 model=model,
                 input=self._responses_input(messages),
@@ -86,14 +96,17 @@ class OpenAIProvider(LLMProvider):
         reasoning_effort: str | None,
     ) -> AsyncGenerator[str, None]:
         capability = get_model_capability(self.provider_id, model)
+        api_mode = self.default_api_mode or capability.api_mode
+        supports_temperature = capability.supports_temperature and api_mode != "responses"
+        supports_reasoning_effort = capability.supports_reasoning_effort and api_mode == "responses"
         kwargs = self._build_optional_kwargs(
-            capability_api_mode=capability.api_mode,
-            temperature=temperature if capability.supports_temperature else None,
+            capability_api_mode=api_mode,
+            temperature=temperature if supports_temperature else None,
             max_tokens=max_tokens,
-            reasoning_effort=reasoning_effort if capability.supports_reasoning_effort else None,
+            reasoning_effort=reasoning_effort if supports_reasoning_effort else None,
         )
 
-        if capability.api_mode == "responses":
+        if api_mode == "responses":
             stream = await self.client.responses.create(
                 model=model,
                 input=self._responses_input(messages),

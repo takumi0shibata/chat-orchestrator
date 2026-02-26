@@ -1,4 +1,5 @@
 import json
+import inspect
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -66,6 +67,8 @@ app.add_middleware(
 async def run_skill_if_needed(
     *,
     skill_id: str | None,
+    provider_id: str,
+    model: str,
     user_input: str,
     messages: list[ChatMessage],
 ) -> tuple[list[ChatMessage], str | None]:
@@ -77,7 +80,15 @@ async def run_skill_if_needed(
         raise HTTPException(status_code=400, detail=f"Unknown skill: {skill_id}")
 
     history = [m.model_dump() for m in messages]
-    skill_output = await skill.run(user_text=user_input, history=history)
+    run_params = inspect.signature(skill.run).parameters
+    if "skill_context" in run_params:
+        skill_output = await skill.run(
+            user_text=user_input,
+            history=history,
+            skill_context={"provider_id": provider_id, "model": model},
+        )
+    else:
+        skill_output = await skill.run(user_text=user_input, history=history)
     messages = [
         ChatMessage(
             role="system",
@@ -103,6 +114,19 @@ def list_providers() -> list[ProviderInfo]:
 
 @app.get("/api/providers/{provider_id}/models", response_model=list[ModelInfo])
 def list_provider_models(provider_id: str) -> list[ModelInfo]:
+    if provider_id == "azure_openai" and state.settings.azure_openai_deployment:
+        supports_temperature = state.settings.azure_openai_api_mode != "responses"
+        return [
+            ModelInfo(
+                id=state.settings.azure_openai_deployment,
+                label=f"{state.settings.azure_openai_deployment} (Azure deployment)",
+                api_mode=state.settings.azure_openai_api_mode,
+                supports_temperature=supports_temperature,
+                supports_reasoning_effort=False,
+                default_temperature=0.3 if supports_temperature else None,
+                default_reasoning_effort=None,
+            )
+        ]
     return [ModelInfo(**item) for item in to_api(list_models(provider_id))]
 
 
@@ -167,6 +191,8 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     messages = [*history, ChatMessage(role="user", content=user_input)]
     prepared_messages, skill_output = await run_skill_if_needed(
         skill_id=payload.skill_id,
+        provider_id=payload.provider_id,
+        model=payload.model,
         user_input=user_input,
         messages=messages,
     )
@@ -200,21 +226,36 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
     provider = state.providers.get(payload.provider_id)
     conversation_id = state.store.ensure_conversation(payload.conversation_id)
     history = state.store.get_messages(conversation_id)
+    if payload.skill_id and not state.skills.get(payload.skill_id):
+        raise HTTPException(status_code=400, detail=f"Unknown skill: {payload.skill_id}")
 
     user_input = payload.user_input.strip()
     messages = [*history, ChatMessage(role="user", content=user_input)]
-    prepared_messages, skill_output = await run_skill_if_needed(
-        skill_id=payload.skill_id,
-        user_input=user_input,
-        messages=messages,
-    )
 
     async def generate():
         state.store.ensure_title_from_user_input(conversation_id, user_input)
         state.store.add_message(conversation_id, ChatMessage(role="user", content=user_input))
         accumulated = ""
+        skill_output: str | None = None
+        prepared_messages = messages
 
         try:
+            if payload.skill_id:
+                yield json.dumps(
+                    {"type": "skill_status", "status": "running", "skill_id": payload.skill_id}
+                ) + "\n"
+
+            prepared_messages, skill_output = await run_skill_if_needed(
+                skill_id=payload.skill_id,
+                provider_id=payload.provider_id,
+                model=payload.model,
+                user_input=user_input,
+                messages=messages,
+            )
+
+            if payload.skill_id:
+                yield json.dumps({"type": "skill_status", "status": "done", "skill_id": payload.skill_id}) + "\n"
+
             async for chunk in provider.stream_chat(
                 model=payload.model,
                 messages=prepared_messages,
