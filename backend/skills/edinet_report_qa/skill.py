@@ -356,7 +356,8 @@ class EdinetReportQASkill(Skill):
     def _cache_root(self) -> Path:
         settings = get_settings()
         if settings.edinet_cache_dir:
-            return Path(settings.edinet_cache_dir)
+            expanded = Path(os.path.expandvars(os.path.expanduser(settings.edinet_cache_dir)))
+            return expanded if expanded.is_absolute() else Path.home() / expanded
         xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
         if xdg_cache_home:
             return Path(xdg_cache_home) / "chat-orchestrator" / "edinet"

@@ -64,6 +64,15 @@ GOOGLE_MODELS: list[ModelCapability] = [
         supports_reasoning_effort=False,
         default_temperature=0.3,
         default_reasoning_effort=None,
+    ),
+    ModelCapability(
+        id="gemini-3-flash-preview",
+        label="Gemini 3 Flash",
+        api_mode="chat_completions",
+        supports_temperature=True,
+        supports_reasoning_effort=True,
+        default_temperature=0.3,
+        default_reasoning_effort="medium",
     )
 ]
 
