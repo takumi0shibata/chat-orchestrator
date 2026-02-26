@@ -193,6 +193,43 @@ EDINET_LOOKBACK_DAYS=365
 
 `再取得` / `再実行` / `retry` などの語が質問に含まれる場合は、キャッシュより再取得を優先します。
 
+## BOJ時系列 Skill
+
+`backend/skills/boj_timeseries_insight/skill.py` は、日銀の時系列統計データAPIを使って代表系列を取得し、分析サマリ + 生データの補助コンテキストを生成するスキルです。
+
+主な仕様:
+
+- 対象系列（初期）: 短期金利（無担保コール翌日物）/ 政策金利 / 貸出約定平均金利 / 為替（ドル円・ユーロドル）/ 実質実効為替 / マネーストックM2 / マネタリーベース平残 / 経常収支 / 貿易収支 / 企業物価（全国CPI代替）
+- 注記: BOJ APIカタログ上で系列コードが解決できない系列（例: 10年国債利回り）は、取得不可理由を明示して代替候補を返します。
+- 自然文解釈: キーワードベースで系列を選択。曖昧時は候補を提示
+- 期間既定: 月次で直近24か月（四半期・年次キーワードで切替）
+- 出力形式: `解釈結果` / `分析サマリ` / `生データ（抜粋）` / `API・データ品質メモ` / `回答ポリシー`
+- 機械可読出力: 数値データがある場合、末尾に `chart-json` ブロック（`schema=boj_timeseries_chart/v1`）を付与
+- UI表示: `boj_timeseries_insight` 利用時は `chart-json` から折れ線グラフを描画し、生の `Skill Output` 本文は画面に表示しない
+- キャッシュ: TTLベースのローカルキャッシュ。`再取得` / `再実行` / `retry` / `refresh` で強制更新
+
+認証:
+
+- APIキーは不要です（2026-02-18 公開の BOJ 時系列統計API仕様に準拠）。
+
+任意設定:
+
+```bash
+BOJ_STAT_CACHE_DIR=$HOME/.cache/chat-orchestrator/boj-stat
+BOJ_STAT_CACHE_TTL_HOURS=24
+```
+
+利用例（`skill_id` 指定）:
+
+```json
+{
+  "provider_id": "openai",
+  "model": "gpt-4o-mini",
+  "user_input": "全国CPIを直近2年で要約して",
+  "skill_id": "boj_timeseries_insight"
+}
+```
+
 ## Paper Reviewer Skill (AI/ML/NLP)
 
 `backend/skills/paper_reviewer/skill.py` は、論文本文/段落/センテンス草稿を AI/ML/NLP 論文向けにレビューする補助コンテキストを生成するスキルです。

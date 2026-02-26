@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     edinet_cache_dir: str | None = None
     edinet_cache_ttl_hours: int = 24
     edinet_lookback_days: int = 365
+    boj_stat_cache_dir: str | None = None
+    boj_stat_cache_ttl_hours: int = 24
 
     default_openai_model: str = "gpt-4o-mini"
     default_azure_openai_model: str | None = None

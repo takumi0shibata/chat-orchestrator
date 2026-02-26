@@ -27,6 +27,21 @@ type Attachment = {
   content: string;
 };
 
+type SkillChartPoint = {
+  time: string;
+  value: number;
+  raw: string;
+};
+
+type SkillChartPayload = {
+  schema: "boj_timeseries_chart/v1";
+  series_label: string;
+  frequency: string;
+  points: SkillChartPoint[];
+};
+
+const BOJ_CHART_SCHEMA = "boj_timeseries_chart/v1";
+
 function PlusIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -266,6 +281,113 @@ function markdownToHtml(markdown: string): string {
   }
 
   return htmlParts.join("");
+}
+
+function isSkillChartPoint(node: unknown): node is SkillChartPoint {
+  if (!node || typeof node !== "object") return false;
+  const item = node as Record<string, unknown>;
+  return (
+    typeof item.time === "string" &&
+    typeof item.value === "number" &&
+    Number.isFinite(item.value) &&
+    typeof item.raw === "string"
+  );
+}
+
+function isSkillChartPayload(node: unknown): node is SkillChartPayload {
+  if (!node || typeof node !== "object") return false;
+  const item = node as Record<string, unknown>;
+  return (
+    item.schema === BOJ_CHART_SCHEMA &&
+    typeof item.series_label === "string" &&
+    typeof item.frequency === "string" &&
+    Array.isArray(item.points) &&
+    item.points.length > 0 &&
+    item.points.every(isSkillChartPoint)
+  );
+}
+
+function extractChartPayload(messageContent: string): { chart: SkillChartPayload | null; contentWithoutChartBlock: string } {
+  let chart: SkillChartPayload | null = null;
+  const contentWithoutChartBlock = messageContent.replace(/```chart-json\s*\n([\s\S]*?)```/g, (full, block) => {
+    if (chart) return "";
+    try {
+      const parsed = JSON.parse(block) as unknown;
+      if (!isSkillChartPayload(parsed)) return full;
+      chart = parsed;
+      return "";
+    } catch {
+      return full;
+    }
+  });
+  return {
+    chart,
+    contentWithoutChartBlock: contentWithoutChartBlock.replace(/\n{3,}/g, "\n\n").trimEnd()
+  };
+}
+
+function buildPolyline(points: SkillChartPoint[], width: number, height: number, padding: number): string {
+  if (points.length === 0) return "";
+  const innerWidth = width - padding * 2;
+  const innerHeight = height - padding * 2;
+  const values = points.map((item) => item.value);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const span = maxValue - minValue || Math.max(Math.abs(maxValue), 1) * 0.05;
+
+  const coords = points.map((point, index) => {
+    const x = points.length <= 1 ? width / 2 : padding + (innerWidth * index) / (points.length - 1);
+    const ratio = (point.value - minValue) / span;
+    const y = padding + innerHeight - ratio * innerHeight;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  });
+  return coords.join(" ");
+}
+
+function formatChartValue(value: number): string {
+  if (Math.abs(value) >= 1000) return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (Math.abs(value) >= 10) return value.toFixed(2);
+  return value.toFixed(4);
+}
+
+function SkillChartCard({ chart }: { chart: SkillChartPayload }) {
+  const width = 680;
+  const height = 260;
+  const padding = 28;
+  const polyline = buildPolyline(chart.points, width, height, padding);
+  const values = chart.points.map((item) => item.value);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const middlePoint = chart.points[Math.floor((chart.points.length - 1) / 2)];
+
+  return (
+    <section className="skill-chart-card">
+      <div className="chart-label">
+        <span>{chart.series_label}</span>
+        <span>{chart.frequency === "D" ? "日次" : chart.frequency === "M" ? "月次" : chart.frequency}</span>
+      </div>
+      <svg className="skill-chart-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${chart.series_label} 時系列`}>
+        <line className="chart-axis" x1={padding} y1={padding} x2={padding} y2={height - padding} />
+        <line className="chart-axis" x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} />
+        <polyline className="chart-line" points={polyline} />
+        <text className="chart-y-label" x={padding + 6} y={padding + 12}>
+          max {formatChartValue(maxValue)}
+        </text>
+        <text className="chart-y-label" x={padding + 6} y={height - padding - 6}>
+          min {formatChartValue(minValue)}
+        </text>
+        <text className="chart-x-label" x={padding} y={height - 8}>
+          {chart.points[0].time}
+        </text>
+        <text className="chart-x-label" x={width / 2} y={height - 8} textAnchor="middle">
+          {middlePoint.time}
+        </text>
+        <text className="chart-x-label" x={width - padding} y={height - 8} textAnchor="end">
+          {chart.points[chart.points.length - 1].time}
+        </text>
+      </svg>
+    </section>
+  );
 }
 
 export function App() {
@@ -533,21 +655,33 @@ export function App() {
         }
       });
 
-      if (done.skill_output) {
+      const skillOutput = done.skill_output;
+      if (skillOutput) {
         setMessages((prev) => {
           const next = [...prev];
           const lastIndex = next.length - 1;
           if (lastIndex >= 0 && next[lastIndex].role === "assistant") {
+            if (skillId === "boj_timeseries_insight") {
+              const parsed = extractChartPayload(skillOutput);
+              if (parsed.chart) {
+                next[lastIndex] = {
+                  ...next[lastIndex],
+                  content: `${next[lastIndex].content}\n\n\`\`\`chart-json\n${JSON.stringify(parsed.chart)}\n\`\`\``
+                };
+              }
+              return next;
+            }
             next[lastIndex] = {
               ...next[lastIndex],
-              content: `${next[lastIndex].content}\n\n---\n[Skill Output]\n${done.skill_output}`
+              content: `${next[lastIndex].content}\n\n---\n[Skill Output]\n${skillOutput}`
             };
           }
           return next;
         });
       }
 
-      await loadConversations(conversationId);
+      const latestConversations = await fetchConversations();
+      setConversations(latestConversations);
     } catch (e) {
       const isAbortError = e instanceof Error && e.name === "AbortError";
       if (isAbortError) {
@@ -627,37 +761,44 @@ export function App() {
         </button>
 
         <section className="messages">
-          {messages.map((message, index) => (
-            <article className={`bubble ${message.role}`} key={`${message.role}-${index}`}>
-              {message.role === "assistant" && loading && showSkillRunning && index === messages.length - 1 ? (
-                <div className="thinking">
-                  <span>{selectedSkill?.name || "Skill"} running</span>
-                  <span className="dots">
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                </div>
-              ) : message.role === "assistant" && loading && showThinking && index === messages.length - 1 ? (
-                <div className="thinking">
-                  <span>Thinking</span>
-                  <span className="dots">
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                </div>
-              ) : message.role === "assistant" ? (
-                <div
-                  className="markdown"
-                  onClick={onMarkdownClick}
-                  dangerouslySetInnerHTML={{ __html: markdownToHtml(message.content) }}
-                />
-              ) : (
-                <p>{message.content}</p>
-              )}
-            </article>
-          ))}
+          {messages.map((message, index) => {
+            const chartResult = message.role === "assistant" ? extractChartPayload(message.content) : null;
+            const renderedContent = chartResult?.contentWithoutChartBlock ?? message.content;
+            return (
+              <article className={`bubble ${message.role}`} key={`${message.role}-${index}`}>
+                {message.role === "assistant" && loading && showSkillRunning && index === messages.length - 1 ? (
+                  <div className="thinking">
+                    <span>{selectedSkill?.name || "Skill"} running</span>
+                    <span className="dots">
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                  </div>
+                ) : message.role === "assistant" && loading && showThinking && index === messages.length - 1 ? (
+                  <div className="thinking">
+                    <span>Thinking</span>
+                    <span className="dots">
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                  </div>
+                ) : message.role === "assistant" ? (
+                  <>
+                    <div
+                      className="markdown"
+                      onClick={onMarkdownClick}
+                      dangerouslySetInnerHTML={{ __html: markdownToHtml(renderedContent) }}
+                    />
+                    {chartResult?.chart && <SkillChartCard chart={chartResult.chart} />}
+                  </>
+                ) : (
+                  <p>{message.content}</p>
+                )}
+              </article>
+            );
+          })}
           <div ref={messagesEndRef} />
         </section>
 

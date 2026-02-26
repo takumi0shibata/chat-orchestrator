@@ -331,6 +331,51 @@ body {
   text-decoration: underline;
 }
 
+.skill-chart-card {
+  margin-top: 10px;
+  border: 1px solid #3a4256;
+  border-radius: 12px;
+  background: #131b2b;
+  padding: 10px;
+}
+
+.chart-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  color: #cdd8ee;
+  font-size: 12px;
+}
+
+.skill-chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: #101726;
+  border: 1px solid #2d3a56;
+  border-radius: 10px;
+}
+
+.chart-axis {
+  stroke: #44506b;
+  stroke-width: 1;
+}
+
+.chart-line {
+  fill: none;
+  stroke: #61a7ff;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chart-y-label,
+.chart-x-label {
+  fill: #9aabc8;
+  font-size: 11px;
+}
+
 .thinking {
   display: inline-flex;
   align-items: center;
@@ -537,5 +582,14 @@ body {
   .composer-tools select {
     min-width: 120px;
     max-width: 100%;
+  }
+
+  .skill-chart-card {
+    padding: 8px;
+  }
+
+  .chart-y-label,
+  .chart-x-label {
+    font-size: 10px;
   }
 }
