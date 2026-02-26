@@ -1,7 +1,7 @@
 import json
+import os
 import re
 import sys
-import tempfile
 from datetime import UTC, date, datetime, timedelta
 from dataclasses import asdict
 from pathlib import Path
@@ -357,7 +357,10 @@ class EdinetReportQASkill(Skill):
         settings = get_settings()
         if settings.edinet_cache_dir:
             return Path(settings.edinet_cache_dir)
-        return Path(tempfile.gettempdir()) / "edinet-skill-cache"
+        xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
+        if xdg_cache_home:
+            return Path(xdg_cache_home) / "chat-orchestrator" / "edinet"
+        return Path.home() / ".cache" / "chat-orchestrator" / "edinet"
 
     def _cache_ttl_hours(self) -> int:
         try:

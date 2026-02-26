@@ -175,11 +175,9 @@ EDINET_API_KEY=your_subscription_key
 任意設定:
 
 ```bash
-EDINET_CACHE_DIR=/tmp/edinet-skill-cache
+EDINET_CACHE_DIR=$HOME/.cache/chat-orchestrator/edinet
 EDINET_CACHE_TTL_HOURS=24
 EDINET_LOOKBACK_DAYS=365
-EDINET_ROUTER_ENABLE_LLM=false
-EDINET_ROUTER_MODEL=gpt-4o-mini
 ```
 
 利用例（`skill_id` 指定）:

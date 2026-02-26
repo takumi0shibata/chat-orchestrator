@@ -34,8 +34,6 @@ class Settings(BaseSettings):
     edinet_api_key: str | None = None
     edinet_cache_dir: str | None = None
     edinet_cache_ttl_hours: int = 24
-    edinet_router_enable_llm: bool = False
-    edinet_router_model: str = "gpt-4o-mini"
     edinet_lookback_days: int = 365
 
     default_openai_model: str = "gpt-4o-mini"
