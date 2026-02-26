@@ -64,6 +64,14 @@ function SendIcon() {
   );
 }
 
+function StopIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" />
+    </svg>
+  );
+}
+
 function ChevronDownIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -284,6 +292,7 @@ export function App() {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const selectedModel = useMemo(() => models.find((item) => item.id === modelId), [models, modelId]);
   const selectedSkill = useMemo(() => skills.find((item) => item.id === skillId), [skills, skillId]);
@@ -465,6 +474,10 @@ export function App() {
     }
   };
 
+  const onCancelStreaming = () => {
+    abortControllerRef.current?.abort();
+  };
+
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = input.trim();
@@ -490,6 +503,8 @@ export function App() {
     const userMessage: ChatMessage = { role: "user", content: userRaw };
     const assistantPlaceholder: ChatMessage = { role: "assistant", content: "" };
     setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
 
     try {
       const done = await streamChat({
@@ -500,6 +515,7 @@ export function App() {
         skillId: skillId || undefined,
         temperature,
         reasoningEffort,
+        signal: abortController.signal,
         onChunk: (delta) => {
           if (delta) setShowThinking(false);
           if (delta) setShowSkillRunning(false);
@@ -533,9 +549,22 @@ export function App() {
 
       await loadConversations(conversationId);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "送信に失敗しました");
-      setMessages((prev) => prev.slice(0, -2));
+      const isAbortError = e instanceof Error && e.name === "AbortError";
+      if (isAbortError) {
+        setMessages((prev) => {
+          const next = [...prev];
+          const lastIndex = next.length - 1;
+          if (lastIndex >= 0 && next[lastIndex].role === "assistant" && !next[lastIndex].content.trim()) {
+            next[lastIndex] = { ...next[lastIndex], content: "[キャンセルしました]" };
+          }
+          return next;
+        });
+      } else {
+        setError(e instanceof Error ? e.message : "送信に失敗しました");
+        setMessages((prev) => prev.slice(0, -2));
+      }
     } finally {
+      abortControllerRef.current = null;
       setShowSkillRunning(false);
       setShowThinking(false);
       setLoading(false);
@@ -725,9 +754,15 @@ export function App() {
               </div>
             )}
 
-            <button className="send-btn" type="submit" disabled={loading || !conversationId || !selectedModel}>
-              {loading ? "..." : <SendIcon />}
-            </button>
+            {loading ? (
+              <button className="send-btn stop-btn" type="button" onClick={onCancelStreaming} title="Cancel generation">
+                <StopIcon />
+              </button>
+            ) : (
+              <button className="send-btn" type="submit" disabled={!conversationId || !selectedModel}>
+                <SendIcon />
+              </button>
+            )}
           </div>
         </form>
 

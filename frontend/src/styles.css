@@ -467,6 +467,10 @@ body {
   cursor: pointer;
 }
 
+.stop-btn {
+  background: #8a3144;
+}
+
 .send-btn svg {
   width: 18px;
   height: 18px;

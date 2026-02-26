@@ -106,12 +106,14 @@ export async function streamChat(params: {
   skillId?: string;
   temperature?: number | null;
   reasoningEffort?: "low" | "medium" | "high" | null;
+  signal?: AbortSignal;
   onChunk: (delta: string) => void;
   onSkillStatus?: (status: "running" | "done", skillId: string) => void;
 }): Promise<StreamDone> {
   const response = await fetch("/api/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal: params.signal,
     body: JSON.stringify({
       provider_id: params.providerId,
       model: params.model,

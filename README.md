@@ -156,7 +156,15 @@ AZURE_OPENAI_API_MODE=responses
 
 ## EDINET有報QA Skill
 
-`backend/skills/edinet_report_qa/skill.py` は、EDINET APIから有価証券報告書（通常/訂正）を取得し、XBRLの関連セクションを抽出して回答補助コンテキストを作るスキルです。
+`backend/skills/edinet_report_qa/skill.py` は、質問文から企業・年度/決算期・参照セクションを解釈し、EDINET APIから有価証券報告書（通常/訂正）を取得して XBRL 抽出コンテキストを作るスキルです。
+
+主な仕様:
+
+- 企業指定: `EDINETコード(E12345)` / 企業名 / 証券コード(4桁) に対応
+- 期間指定: `2024年度` または `2024年3月期` などに対応（複数期比較も対応）
+- セクション指定: `事業等のリスク` などを辞書（`docs/sections.json`）で解決
+- 曖昧時: 候補企業を返して再指定を促す
+- 意図解析: 利用中の provider/model で LLM 解析を試行し、失敗時はルールベースにフォールバック
 
 最低限の設定:
 
@@ -169,6 +177,7 @@ EDINET_API_KEY=your_subscription_key
 ```bash
 EDINET_CACHE_DIR=/tmp/edinet-skill-cache
 EDINET_CACHE_TTL_HOURS=24
+EDINET_LOOKBACK_DAYS=365
 EDINET_ROUTER_ENABLE_LLM=false
 EDINET_ROUTER_MODEL=gpt-4o-mini
 ```
@@ -179,9 +188,9 @@ EDINET_ROUTER_MODEL=gpt-4o-mini
 {
   "provider_id": "openai",
   "model": "gpt-4o-mini",
-  "user_input": "[E02144, E01777] の事業等のリスクを比較して",
+  "user_input": "トヨタ(7203)とホンダの2024年3月期の事業等のリスクを比較して",
   "skill_id": "edinet_report_qa"
 }
 ```
 
-このスキルは企業指定をEDINETコード入力で受け付けます（推奨形式: `[E00001, E12345]`）。
+`再取得` / `再実行` / `retry` などの語が質問に含まれる場合は、キャッシュより再取得を優先します。
