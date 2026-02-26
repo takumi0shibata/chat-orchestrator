@@ -1,6 +1,6 @@
 [project]
 name = "chat-orchestrator-backend"
-version = "0.1.0"
+version = "0.1.2"
 description = "Extensible multi-provider chatbot backend"
 readme = "README.md"
 requires-python = ">=3.11"
