@@ -357,14 +357,10 @@ function isAuditNewsAlert(node: unknown): node is AuditNewsAlert {
 function isAuditNewsPayload(node: unknown): node is AuditNewsPayload {
   if (!node || typeof node !== "object") return false;
   const item = node as Record<string, unknown>;
-  const client = item.client as Record<string, unknown> | undefined;
   return (
     item.schema === AUDIT_NEWS_SCHEMA &&
     typeof item.run_id === "string" &&
     typeof item.generated_at === "string" &&
-    !!client &&
-    typeof client.name === "string" &&
-    typeof client.industry === "string" &&
     Array.isArray(item.alerts) &&
     item.alerts.every(isAuditNewsAlert)
   );
@@ -373,22 +369,33 @@ function isAuditNewsPayload(node: unknown): node is AuditNewsPayload {
 function extractAuditNewsPayload(messageContent: string): {
   payload: AuditNewsPayload | null;
   contentWithoutAuditBlock: string;
+  hasAuditBlock: boolean;
+  parseError: boolean;
 } {
   let payload: AuditNewsPayload | null = null;
+  let hasAuditBlock = false;
+  let parseError = false;
   const contentWithoutAuditBlock = messageContent.replace(/```audit-news-json\s*\n([\s\S]*?)```/g, (full, block) => {
+    hasAuditBlock = true;
     if (payload) return "";
     try {
       const parsed = JSON.parse(block) as unknown;
-      if (!isAuditNewsPayload(parsed)) return full;
+      if (!isAuditNewsPayload(parsed)) {
+        parseError = true;
+        return full;
+      }
       payload = parsed;
       return "";
     } catch {
+      parseError = true;
       return full;
     }
   });
   return {
     payload,
-    contentWithoutAuditBlock: contentWithoutAuditBlock.replace(/\n{3,}/g, "\n\n").trimEnd()
+    contentWithoutAuditBlock: contentWithoutAuditBlock.replace(/\n{3,}/g, "\n\n").trimEnd(),
+    hasAuditBlock,
+    parseError
   };
 }
 
@@ -823,23 +830,23 @@ export function App() {
           const next = [...prev];
           const lastIndex = next.length - 1;
           if (lastIndex >= 0 && next[lastIndex].role === "assistant") {
-            if (skillId === "boj_timeseries_insight") {
-              const parsed = extractChartPayload(skillOutput);
-              if (parsed.chart) {
-                next[lastIndex] = {
-                  ...next[lastIndex],
-                  content: `${next[lastIndex].content}\n\n\`\`\`chart-json\n${JSON.stringify(parsed.chart)}\n\`\`\``
-                };
-              }
+            const chartParsed = extractChartPayload(skillOutput);
+            if (chartParsed.chart) {
+              next[lastIndex] = {
+                ...next[lastIndex],
+                content: `${next[lastIndex].content}\n\n\`\`\`chart-json\n${JSON.stringify(chartParsed.chart)}\n\`\`\``
+              };
             }
-            if (skillId === "audit_news_action_brief") {
-              const parsed = extractAuditNewsPayload(skillOutput);
-              if (parsed.payload) {
-                next[lastIndex] = {
-                  ...next[lastIndex],
-                  content: `${next[lastIndex].content}\n\n\`\`\`audit-news-json\n${JSON.stringify(parsed.payload)}\n\`\`\``
-                };
-              }
+
+            const auditParsed = extractAuditNewsPayload(skillOutput);
+            if (auditParsed.payload || auditParsed.hasAuditBlock) {
+              const auditBlock = auditParsed.payload
+                ? `\`\`\`audit-news-json\n${JSON.stringify(auditParsed.payload)}\n\`\`\``
+                : (skillOutput.match(/```audit-news-json\s*\n[\s\S]*?```/)?.[0] ?? "");
+              next[lastIndex] = {
+                ...next[lastIndex],
+                content: `${next[lastIndex].content}\n\n${auditBlock}`
+              };
             }
             // Default behavior: do not render raw skill output in chat UI.
             // Exception skills can enrich message content above (e.g., chart block injection).
@@ -966,7 +973,35 @@ export function App() {
                     />
                     {(() => {
                       const payload = auditResult?.payload;
-                      if (!payload) return null;
+                      if (!payload) {
+                        if (auditResult?.hasAuditBlock && auditResult.parseError) {
+                          return (
+                            <section className="audit-news-card audit-news-empty-card">
+                              <header className="audit-news-card-header">
+                                <h4>監査ニュースカードの表示に失敗</h4>
+                                <span className="priority-chip medium">PARSE ERROR</span>
+                              </header>
+                              <p className="audit-news-line">
+                                `audit-news-json` ブロックは受信しましたが、JSON形式が想定と異なりました。
+                              </p>
+                            </section>
+                          );
+                        }
+                        return null;
+                      }
+                      if (payload.alerts.length === 0) {
+                        return (
+                          <section className="audit-news-card audit-news-empty-card">
+                            <header className="audit-news-card-header">
+                              <h4>今回の判定: 追加対応は不要</h4>
+                              <span className="priority-chip low">NO ACTION</span>
+                            </header>
+                            <p className="audit-news-line">
+                              収集ニュースは評価済みですが、アラート閾値を超える案件はありませんでした。継続監視を推奨します。
+                            </p>
+                          </section>
+                        );
+                      }
                       return payload.alerts.map((alert) => {
                         const key = `${payload.run_id}:${alert.alert_id}`;
                         return (
