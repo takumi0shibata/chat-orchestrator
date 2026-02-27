@@ -669,12 +669,9 @@ export function App() {
                   content: `${next[lastIndex].content}\n\n\`\`\`chart-json\n${JSON.stringify(parsed.chart)}\n\`\`\``
                 };
               }
-              return next;
             }
-            next[lastIndex] = {
-              ...next[lastIndex],
-              content: `${next[lastIndex].content}\n\n---\n[Skill Output]\n${skillOutput}`
-            };
+            // Default behavior: do not render raw skill output in chat UI.
+            // Exception skills can enrich message content above (e.g., chart block injection).
           }
           return next;
         });
