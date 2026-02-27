@@ -28,6 +28,42 @@ export interface SkillInfo {
   description: string;
 }
 
+export type SkillFeedbackDecision = "acted" | "monitor" | "not_relevant";
+
+export interface AuditNewsAlert {
+  alert_id: string;
+  title: string;
+  url: string;
+  source: string;
+  published_at: string;
+  category: string;
+  impact_hypothesis: string;
+  recommended_audit_action: string;
+  priority: "high" | "medium" | "low";
+  score: number;
+}
+
+export interface AuditNewsPayload {
+  schema: "audit_news_action_brief/v1";
+  run_id: string;
+  generated_at: string;
+  client: {
+    name: string;
+    industry: string;
+    lookback_days: number;
+    focus_topics: string[];
+    watch_competitors: string[];
+  };
+  alerts: AuditNewsAlert[];
+}
+
+export interface AuditNewsMetricsResponse {
+  total_alerts: number;
+  total_feedback: number;
+  acted_count: number;
+  action_rate: number;
+}
+
 export interface ConversationInfo {
   id: string;
 }
