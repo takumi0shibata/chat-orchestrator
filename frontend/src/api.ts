@@ -1,10 +1,12 @@
 import type {
   ChatMessage,
+  AuditNewsMetricsResponse,
   ConversationInfo,
   ConversationSummary,
   ExtractedAttachment,
   ModelInfo,
   ProviderInfo,
+  SkillFeedbackDecision,
   SkillInfo,
   StreamDone,
   StreamEvent
@@ -160,4 +162,44 @@ export async function streamChat(params: {
 
   if (!doneEvent) throw new Error("Stream ended without done event");
   return doneEvent;
+}
+
+export async function submitAuditNewsFeedback(params: {
+  conversationId: string;
+  runId: string;
+  alertId: string;
+  decision: SkillFeedbackDecision;
+  note?: string;
+}): Promise<void> {
+  const response = await fetch("/api/skills/audit_news_action_brief/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      conversation_id: params.conversationId,
+      run_id: params.runId,
+      alert_id: params.alertId,
+      decision: params.decision,
+      note: params.note ?? null
+    })
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(body || "Failed to submit feedback");
+  }
+}
+
+export async function fetchAuditNewsMetrics(params?: {
+  from?: string;
+  to?: string;
+}): Promise<AuditNewsMetricsResponse> {
+  const query = new URLSearchParams();
+  if (params?.from) query.set("from", params.from);
+  if (params?.to) query.set("to", params.to);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const response = await fetch(`/api/skills/audit_news_action_brief/metrics${suffix}`);
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(body || "Failed to load metrics");
+  }
+  return response.json();
 }

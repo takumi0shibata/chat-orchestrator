@@ -69,3 +69,22 @@ class ExtractedAttachment(BaseModel):
 
 class ExtractAttachmentsResponse(BaseModel):
     files: list[ExtractedAttachment]
+
+
+class SkillFeedbackRequest(BaseModel):
+    conversation_id: str
+    run_id: str
+    alert_id: str
+    decision: str
+    note: str | None = None
+
+
+class SkillFeedbackResponse(BaseModel):
+    ok: bool
+
+
+class AuditNewsMetricsResponse(BaseModel):
+    total_alerts: int
+    total_feedback: int
+    acted_count: int
+    action_rate: float

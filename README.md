@@ -140,6 +140,8 @@ Azure OpenAI のモデルは `backend/app/model_catalog.py` の `AZURE_OPENAI_MO
 - `POST /api/attachments/extract`: 添付ファイル（PDF/TXT等）からテキスト抽出
 - `POST /api/chat`: 非ストリーミング応答
 - `POST /api/chat/stream`: NDJSONストリーミング応答
+- `POST /api/skills/audit_news_action_brief/feedback`: 監査ニュースSkillの行動フィードバック記録
+- `GET /api/skills/audit_news_action_brief/metrics`: 監査ニュースSkillのKPI集計（`from`/`to` 任意）
 
 `POST /api/chat/stream` body例:
 
@@ -260,5 +262,21 @@ BOJ_STAT_CACHE_TTL_HOURS=24
   "skill_id": "paper_reviewer"
 }
 ```
+
+## Audit News Action Brief Skill
+
+`backend/skills/audit_news_action_brief/skill.py` は、監査クライアント情報をもとに直近ニュース（競合・マクロ・規制）を探索し、監査アクション優先度付きの候補を返すスキルです。
+
+主な仕様:
+
+- OpenAI Responses API モデル（Web検索）必須
+- 既定期間は直近7日（入力で変更可）
+- 出力は人間可読セクション + `audit-news-json` ブロック
+- `audit-news-json` の `alerts` をもとに、UI から `対応する / 様子見 / 対象外` を記録可能
+
+KPI計測:
+
+- `POST /api/skills/audit_news_action_brief/feedback` によりアクション記録
+- `GET /api/skills/audit_news_action_brief/metrics` で `total_alerts / total_feedback / acted_count / action_rate` を確認
 
 一次情報ベースの rubric は `backend/skills/paper_reviewer/docs/rubric_ai_ml_nlp.md` を参照してください。

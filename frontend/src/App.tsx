@@ -9,9 +9,19 @@ import {
   fetchProviderModels,
   fetchProviders,
   fetchSkills,
+  submitAuditNewsFeedback,
   streamChat
 } from "./api";
-import type { ChatMessage, ConversationSummary, ModelInfo, ProviderInfo, SkillInfo } from "./types";
+import type {
+  AuditNewsAlert,
+  AuditNewsPayload,
+  ChatMessage,
+  ConversationSummary,
+  ModelInfo,
+  ProviderInfo,
+  SkillFeedbackDecision,
+  SkillInfo
+} from "./types";
 
 const ACTIVE_CONVERSATION_KEY = "chat_orchestrator_active_conversation_id";
 
@@ -41,6 +51,7 @@ type SkillChartPayload = {
 };
 
 const BOJ_CHART_SCHEMA = "boj_timeseries_chart/v1";
+const AUDIT_NEWS_SCHEMA = "audit_news_action_brief/v1";
 
 function PlusIcon() {
   return (
@@ -326,6 +337,61 @@ function extractChartPayload(messageContent: string): { chart: SkillChartPayload
   };
 }
 
+function isAuditNewsAlert(node: unknown): node is AuditNewsAlert {
+  if (!node || typeof node !== "object") return false;
+  const item = node as Record<string, unknown>;
+  return (
+    typeof item.alert_id === "string" &&
+    typeof item.title === "string" &&
+    typeof item.url === "string" &&
+    typeof item.source === "string" &&
+    typeof item.published_at === "string" &&
+    typeof item.category === "string" &&
+    typeof item.impact_hypothesis === "string" &&
+    typeof item.recommended_audit_action === "string" &&
+    typeof item.priority === "string" &&
+    typeof item.score === "number"
+  );
+}
+
+function isAuditNewsPayload(node: unknown): node is AuditNewsPayload {
+  if (!node || typeof node !== "object") return false;
+  const item = node as Record<string, unknown>;
+  const client = item.client as Record<string, unknown> | undefined;
+  return (
+    item.schema === AUDIT_NEWS_SCHEMA &&
+    typeof item.run_id === "string" &&
+    typeof item.generated_at === "string" &&
+    !!client &&
+    typeof client.name === "string" &&
+    typeof client.industry === "string" &&
+    Array.isArray(item.alerts) &&
+    item.alerts.every(isAuditNewsAlert)
+  );
+}
+
+function extractAuditNewsPayload(messageContent: string): {
+  payload: AuditNewsPayload | null;
+  contentWithoutAuditBlock: string;
+} {
+  let payload: AuditNewsPayload | null = null;
+  const contentWithoutAuditBlock = messageContent.replace(/```audit-news-json\s*\n([\s\S]*?)```/g, (full, block) => {
+    if (payload) return "";
+    try {
+      const parsed = JSON.parse(block) as unknown;
+      if (!isAuditNewsPayload(parsed)) return full;
+      payload = parsed;
+      return "";
+    } catch {
+      return full;
+    }
+  });
+  return {
+    payload,
+    contentWithoutAuditBlock: contentWithoutAuditBlock.replace(/\n{3,}/g, "\n\n").trimEnd()
+  };
+}
+
 function buildPolyline(points: SkillChartPoint[], width: number, height: number, padding: number): string {
   if (points.length === 0) return "";
   const innerWidth = width - padding * 2;
@@ -390,6 +456,57 @@ function SkillChartCard({ chart }: { chart: SkillChartPayload }) {
   );
 }
 
+function AuditNewsCard(props: {
+  runId: string;
+  alert: AuditNewsAlert;
+  selectedDecision: SkillFeedbackDecision | undefined;
+  disabled: boolean;
+  onSubmitDecision: (decision: SkillFeedbackDecision, alert: AuditNewsAlert) => void;
+}) {
+  const { runId, alert, selectedDecision, disabled, onSubmitDecision } = props;
+  const actions: { label: string; value: SkillFeedbackDecision }[] = [
+    { label: "対応する", value: "acted" },
+    { label: "様子見", value: "monitor" },
+    { label: "対象外", value: "not_relevant" }
+  ];
+
+  return (
+    <section className="audit-news-card" data-run-id={runId} data-alert-id={alert.alert_id}>
+      <header className="audit-news-card-header">
+        <h4>{alert.title}</h4>
+        <span className={`priority-chip ${alert.priority}`}>{alert.priority.toUpperCase()}</span>
+      </header>
+      <p className="audit-news-meta">
+        {alert.source} • {alert.published_at} • score={alert.score}
+      </p>
+      <p className="audit-news-line">
+        <strong>想定影響:</strong> {alert.impact_hypothesis}
+      </p>
+      <p className="audit-news-line">
+        <strong>推奨監査アクション:</strong> {alert.recommended_audit_action}
+      </p>
+      <p className="audit-news-link">
+        <a href={alert.url} target="_blank" rel="noreferrer">
+          Source
+        </a>
+      </p>
+      <div className="audit-news-actions">
+        {actions.map((item) => (
+          <button
+            key={item.value}
+            type="button"
+            className={`audit-action-btn ${selectedDecision === item.value ? "active" : ""}`}
+            disabled={disabled}
+            onClick={() => onSubmitDecision(item.value, alert)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function App() {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -411,6 +528,7 @@ export function App() {
   const [showThinking, setShowThinking] = useState<boolean>(false);
   const [showSkillRunning, setShowSkillRunning] = useState<boolean>(false);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
+  const [auditFeedback, setAuditFeedback] = useState<Record<string, SkillFeedbackDecision>>({});
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -442,6 +560,7 @@ export function App() {
     const history = await fetchConversationMessages(id);
     setConversationId(id);
     setMessages(history);
+    setAuditFeedback({});
     if (persist) localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
   };
 
@@ -620,6 +739,28 @@ export function App() {
     abortControllerRef.current?.abort();
   };
 
+  const onSubmitAuditDecision = async (
+    runId: string,
+    alert: AuditNewsAlert,
+    decision: SkillFeedbackDecision
+  ) => {
+    if (!conversationId) return;
+    const key = `${runId}:${alert.alert_id}`;
+    if (auditFeedback[key]) return;
+
+    try {
+      await submitAuditNewsFeedback({
+        conversationId,
+        runId,
+        alertId: alert.alert_id,
+        decision
+      });
+      setAuditFeedback((prev) => ({ ...prev, [key]: decision }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "フィードバック送信に失敗しました");
+    }
+  };
+
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = input.trim();
@@ -688,6 +829,15 @@ export function App() {
                 next[lastIndex] = {
                   ...next[lastIndex],
                   content: `${next[lastIndex].content}\n\n\`\`\`chart-json\n${JSON.stringify(parsed.chart)}\n\`\`\``
+                };
+              }
+            }
+            if (skillId === "audit_news_action_brief") {
+              const parsed = extractAuditNewsPayload(skillOutput);
+              if (parsed.payload) {
+                next[lastIndex] = {
+                  ...next[lastIndex],
+                  content: `${next[lastIndex].content}\n\n\`\`\`audit-news-json\n${JSON.stringify(parsed.payload)}\n\`\`\``
                 };
               }
             }
@@ -781,7 +931,12 @@ export function App() {
         <section className="messages">
           {messages.map((message, index) => {
             const chartResult = message.role === "assistant" ? extractChartPayload(message.content) : null;
-            const renderedContent = chartResult?.contentWithoutChartBlock ?? message.content;
+            const auditResult =
+              message.role === "assistant"
+                ? extractAuditNewsPayload(chartResult?.contentWithoutChartBlock ?? message.content)
+                : null;
+            const renderedContent =
+              auditResult?.contentWithoutAuditBlock ?? chartResult?.contentWithoutChartBlock ?? message.content;
             return (
               <article className={`bubble ${message.role}`} key={`${message.role}-${index}`}>
                 {message.role === "assistant" && loading && showSkillRunning && index === messages.length - 1 ? (
@@ -809,6 +964,25 @@ export function App() {
                       onClick={onMarkdownClick}
                       dangerouslySetInnerHTML={{ __html: markdownToHtml(renderedContent) }}
                     />
+                    {(() => {
+                      const payload = auditResult?.payload;
+                      if (!payload) return null;
+                      return payload.alerts.map((alert) => {
+                        const key = `${payload.run_id}:${alert.alert_id}`;
+                        return (
+                          <AuditNewsCard
+                            key={key}
+                            runId={payload.run_id}
+                            alert={alert}
+                            selectedDecision={auditFeedback[key]}
+                            disabled={Boolean(auditFeedback[key])}
+                            onSubmitDecision={(decision, currentAlert) => {
+                              void onSubmitAuditDecision(payload.run_id, currentAlert, decision);
+                            }}
+                          />
+                        );
+                      });
+                    })()}
                     {chartResult?.chart && <SkillChartCard chart={chartResult.chart} />}
                   </>
                 ) : (

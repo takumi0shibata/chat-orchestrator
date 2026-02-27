@@ -46,6 +46,31 @@ class ChatStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS skill_action_alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    alert_id TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(run_id, alert_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS skill_action_feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    alert_id TEXT NOT NULL,
+                    decision TEXT NOT NULL,
+                    note TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
 
             self._ensure_column(
                 conn,
@@ -82,6 +107,14 @@ class ChatStore:
                 return conversation_id
             conn.execute("INSERT INTO conversations (id) VALUES (?)", (conversation_id,))
         return conversation_id
+
+    def conversation_exists(self, conversation_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM conversations WHERE id = ?",
+                (conversation_id,),
+            ).fetchone()
+        return row is not None
 
     def list_conversations(self, limit: int = 100) -> list[ConversationSummary]:
         with self._connect() as conn:
@@ -157,3 +190,73 @@ class ChatStore:
             ).fetchall()
 
         return [ChatMessage(role=row["role"], content=row["content"]) for row in rows]
+
+    def record_skill_alerts(self, *, conversation_id: str, run_id: str, alert_ids: list[str]) -> None:
+        if not alert_ids:
+            return
+        with self._connect() as conn:
+            for alert_id in alert_ids:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO skill_action_alerts (conversation_id, run_id, alert_id)
+                    VALUES (?, ?, ?)
+                    """,
+                    (conversation_id, run_id, alert_id),
+                )
+
+    def add_skill_feedback(
+        self,
+        *,
+        conversation_id: str,
+        run_id: str,
+        alert_id: str,
+        decision: str,
+        note: str | None,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO skill_action_feedback (conversation_id, run_id, alert_id, decision, note)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (conversation_id, run_id, alert_id, decision, note),
+            )
+
+    def audit_news_metrics(self, *, date_from: str | None, date_to: str | None) -> dict[str, int | float]:
+        range_condition = ""
+        range_params: tuple[str, ...] = ()
+        if date_from and date_to:
+            range_condition = " WHERE date(created_at) BETWEEN ? AND ? "
+            range_params = (date_from, date_to)
+        elif date_from:
+            range_condition = " WHERE date(created_at) >= ? "
+            range_params = (date_from,)
+        elif date_to:
+            range_condition = " WHERE date(created_at) <= ? "
+            range_params = (date_to,)
+
+        with self._connect() as conn:
+            total_alerts = conn.execute(
+                f"SELECT COUNT(*) AS c FROM skill_action_alerts{range_condition}",
+                range_params,
+            ).fetchone()["c"]
+            total_feedback = conn.execute(
+                f"SELECT COUNT(*) AS c FROM skill_action_feedback{range_condition}",
+                range_params,
+            ).fetchone()["c"]
+            acted_count = conn.execute(
+                f"""
+                SELECT COUNT(*) AS c
+                FROM skill_action_feedback
+                {range_condition}{' AND ' if range_condition else ' WHERE '}decision = 'acted'
+                """,
+                range_params,
+            ).fetchone()["c"]
+
+        action_rate = (acted_count / total_alerts) if total_alerts > 0 else 0.0
+        return {
+            "total_alerts": int(total_alerts),
+            "total_feedback": int(total_feedback),
+            "acted_count": int(acted_count),
+            "action_rate": float(round(action_rate, 4)),
+        }
