@@ -5,6 +5,8 @@ from typing import Any
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.model_catalog import list_models
+
 
 class Settings(BaseSettings):
     _backend_env = Path(__file__).resolve().parents[1] / ".env"
@@ -25,8 +27,6 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     azure_openai_api_key: str | None = None
     azure_openai_endpoint: str | None = None
-    azure_openai_deployment: str | None = None
-    azure_openai_api_mode: str = "responses"
     anthropic_api_key: str | None = None
     google_api_key: str | None = None
     deepseek_api_key: str | None = None
@@ -50,7 +50,7 @@ class Settings(BaseSettings):
 
     @property
     def azure_openai_enabled(self) -> bool:
-        return bool(self.azure_openai_api_key and self.azure_openai_endpoint and self.azure_openai_deployment)
+        return bool(self.azure_openai_api_key and self.azure_openai_endpoint)
 
     @property
     def azure_openai_base_url(self) -> str:
@@ -59,7 +59,12 @@ class Settings(BaseSettings):
 
     @property
     def azure_openai_default_model(self) -> str:
-        return self.default_azure_openai_model or self.azure_openai_deployment or "azure-openai-deployment"
+        if self.default_azure_openai_model:
+            return self.default_azure_openai_model
+        azure_models = list_models("azure_openai")
+        if azure_models:
+            return azure_models[0].id
+        return "azure-openai"
 
     @property
     def outbound_proxy_url(self) -> str | None:

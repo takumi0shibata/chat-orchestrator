@@ -43,6 +43,18 @@ OPENAI_MODELS: list[ModelCapability] = [
     ),
 ]
 
+AZURE_OPENAI_MODELS: list[ModelCapability] = [
+    ModelCapability(
+        id="gpt-5.2-2025-12-11",
+        label="GPT-5.2",
+        api_mode="responses",
+        supports_temperature=False,
+        supports_reasoning_effort=True,
+        default_temperature=None,
+        default_reasoning_effort="medium",
+    ),
+]
+
 ANTHROPIC_MODELS: list[ModelCapability] = [
     ModelCapability(
         id="claude-3-5-haiku-latest",
@@ -90,6 +102,7 @@ DEEPSEEK_MODELS: list[ModelCapability] = [
 
 PROVIDER_MODELS: dict[str, list[ModelCapability]] = {
     "openai": OPENAI_MODELS,
+    "azure_openai": AZURE_OPENAI_MODELS,
     "anthropic": ANTHROPIC_MODELS,
     "google": GOOGLE_MODELS,
     "deepseek": DEEPSEEK_MODELS,

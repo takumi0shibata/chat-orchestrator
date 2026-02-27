@@ -114,19 +114,6 @@ def list_providers() -> list[ProviderInfo]:
 
 @app.get("/api/providers/{provider_id}/models", response_model=list[ModelInfo])
 def list_provider_models(provider_id: str) -> list[ModelInfo]:
-    if provider_id == "azure_openai" and state.settings.azure_openai_deployment:
-        supports_temperature = state.settings.azure_openai_api_mode != "responses"
-        return [
-            ModelInfo(
-                id=state.settings.azure_openai_deployment,
-                label=f"{state.settings.azure_openai_deployment} (Azure deployment)",
-                api_mode=state.settings.azure_openai_api_mode,
-                supports_temperature=supports_temperature,
-                supports_reasoning_effort=False,
-                default_temperature=0.3 if supports_temperature else None,
-                default_reasoning_effort=None,
-            )
-        ]
     return [ModelInfo(**item) for item in to_api(list_models(provider_id))]
 
 

@@ -26,7 +26,6 @@ class ProviderRegistry:
                 api_key=self.settings.azure_openai_api_key or "",
                 base_url=self.settings.azure_openai_base_url,
                 provider_id="azure_openai",
-                default_api_mode=self.settings.azure_openai_api_mode,
             )
         if self.settings.anthropic_api_key:
             self._providers["anthropic"] = AnthropicProvider(api_key=self.settings.anthropic_api_key)

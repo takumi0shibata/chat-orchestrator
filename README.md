@@ -91,9 +91,9 @@ make release-major
 5. `git tag vX.Y.Z`
 6. `git push origin main --tags`
 
-## モデル追加方法（特にOpenAI）
+## モデル追加方法（OpenAI / Azure OpenAI）
 
-`backend/app/model_catalog.py` の `OPENAI_MODELS` に1件追加するだけです。
+`backend/app/model_catalog.py` の `OPENAI_MODELS` または `AZURE_OPENAI_MODELS` に追加します。
 
 例:
 
@@ -116,14 +116,6 @@ ModelCapability(
 ```bash
 AZURE_OPENAI_API_KEY=...
 AZURE_OPENAI_ENDPOINT=https://<your-resource>.openai.azure.com
-AZURE_OPENAI_DEPLOYMENT=<your-deployment-name>
-```
-
-任意設定:
-
-```bash
-# responses か chat_completions
-AZURE_OPENAI_API_MODE=responses
 ```
 
 SSH の DynamicForward（SOCKS）経由で Azure OpenAI Private Endpoint に到達させる場合は、`.env` に以下を設定してください。
@@ -135,7 +127,7 @@ ALL_PROXY=socks5h://127.0.0.1:1080
 
 `chat-orchestrator` は `.env` から `ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` を読み取り、Provider SDK 呼び出しに適用します。
 
-この実装では Azure OpenAI の `model` にデプロイ名をそのまま渡します。
+Azure OpenAI のモデルは `backend/app/model_catalog.py` の `AZURE_OPENAI_MODELS` で管理します。`id` には Azure 側のデプロイ名を設定してください。
 
 ## API概要
 
