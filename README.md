@@ -126,6 +126,15 @@ AZURE_OPENAI_DEPLOYMENT=<your-deployment-name>
 AZURE_OPENAI_API_MODE=responses
 ```
 
+SSH の DynamicForward（SOCKS）経由で Azure OpenAI Private Endpoint に到達させる場合は、`.env` に以下を設定してください。
+
+```bash
+# DNS も踏み台側で解決するため socks5h を推奨
+ALL_PROXY=socks5h://127.0.0.1:1080
+```
+
+`chat-orchestrator` は `.env` から `ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` を読み取り、Provider SDK 呼び出しに適用します。
+
 この実装では Azure OpenAI の `model` にデプロイ名をそのまま渡します。
 
 ## API概要

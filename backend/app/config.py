@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     google_api_key: str | None = None
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com/v1"
+    http_proxy: str | None = None
+    https_proxy: str | None = None
+    all_proxy: str | None = None
+    no_proxy: str | None = None
     edinet_api_key: str | None = None
     edinet_cache_dir: str | None = None
     edinet_cache_ttl_hours: int = 24
@@ -56,6 +60,13 @@ class Settings(BaseSettings):
     @property
     def azure_openai_default_model(self) -> str:
         return self.default_azure_openai_model or self.azure_openai_deployment or "azure-openai-deployment"
+
+    @property
+    def outbound_proxy_url(self) -> str | None:
+        for value in (self.all_proxy, self.https_proxy, self.http_proxy):
+            if value and value.strip():
+                return value.strip()
+        return None
 
     @property
     def provider_catalog(self) -> list[dict[str, Any]]:

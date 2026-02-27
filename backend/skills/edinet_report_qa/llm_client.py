@@ -4,9 +4,9 @@ from typing import Any
 from anthropic import AsyncAnthropic
 from google import genai
 from google.genai import types
-from openai import AsyncOpenAI
 
 from app.config import get_settings
+from app.openai_client import build_openai_client
 
 
 def _openai_client_kwargs(provider_id: str) -> dict[str, str] | None:
@@ -38,7 +38,8 @@ async def run_json_prompt(
 ) -> str:
     kwargs = _openai_client_kwargs(provider_id)
     if kwargs is not None:
-        client = AsyncOpenAI(**kwargs)
+        settings = get_settings()
+        client = build_openai_client(settings=settings, **kwargs)
         response = await client.responses.create(
             model=model,
             input=prompt,

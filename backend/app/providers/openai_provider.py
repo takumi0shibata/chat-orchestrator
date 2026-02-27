@@ -1,11 +1,11 @@
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from openai import AsyncOpenAI
-
 from app.model_catalog import get_model_capability
+from app.openai_client import build_openai_client
 from app.providers.base import LLMProvider
 from app.schemas import ChatMessage
+from app.config import Settings
 
 
 class OpenAIProvider(LLMProvider):
@@ -13,12 +13,13 @@ class OpenAIProvider(LLMProvider):
 
     def __init__(
         self,
+        settings: Settings,
         api_key: str,
         base_url: str | None = None,
         provider_id: str = "openai",
         default_api_mode: str | None = None,
     ) -> None:
-        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self.client = build_openai_client(settings=settings, api_key=api_key, base_url=base_url)
         self.provider_id = provider_id
         self.default_api_mode = default_api_mode
 

@@ -16,11 +16,13 @@ class ProviderRegistry:
     def _build_registry(self) -> None:
         if self.settings.openai_api_key:
             self._providers["openai"] = OpenAIProvider(
+                settings=self.settings,
                 api_key=self.settings.openai_api_key,
                 provider_id="openai",
             )
         if self.settings.azure_openai_enabled:
             self._providers["azure_openai"] = OpenAIProvider(
+                settings=self.settings,
                 api_key=self.settings.azure_openai_api_key or "",
                 base_url=self.settings.azure_openai_base_url,
                 provider_id="azure_openai",
@@ -32,6 +34,7 @@ class ProviderRegistry:
             self._providers["google"] = GoogleProvider(api_key=self.settings.google_api_key)
         if self.settings.deepseek_api_key:
             self._providers["deepseek"] = OpenAIProvider(
+                settings=self.settings,
                 api_key=self.settings.deepseek_api_key,
                 base_url=self.settings.deepseek_base_url,
                 provider_id="deepseek",
