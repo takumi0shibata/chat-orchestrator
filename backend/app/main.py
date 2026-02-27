@@ -190,6 +190,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         temperature=payload.temperature,
         max_tokens=payload.max_tokens,
         reasoning_effort=payload.reasoning_effort,
+        enable_web_tool=payload.enable_web_tool,
     )
 
     state.store.ensure_title_from_user_input(conversation_id, user_input)
@@ -249,6 +250,7 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
                 temperature=payload.temperature,
                 max_tokens=payload.max_tokens,
                 reasoning_effort=payload.reasoning_effort,
+                enable_web_tool=payload.enable_web_tool,
             ):
                 accumulated += chunk
                 yield json.dumps({"type": "chunk", "delta": chunk}) + "\n"

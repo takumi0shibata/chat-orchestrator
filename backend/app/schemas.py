@@ -16,6 +16,7 @@ class ChatRequest(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     reasoning_effort: Literal["low", "medium", "high"] | None = None
+    enable_web_tool: bool | None = None
     skill_id: str | None = None
 
 
