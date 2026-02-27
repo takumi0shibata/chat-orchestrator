@@ -106,6 +106,7 @@ export async function streamChat(params: {
   skillId?: string;
   temperature?: number | null;
   reasoningEffort?: "low" | "medium" | "high" | null;
+  enableWebTool?: boolean;
   signal?: AbortSignal;
   onChunk: (delta: string) => void;
   onSkillStatus?: (status: "running" | "done", skillId: string) => void;
@@ -121,7 +122,8 @@ export async function streamChat(params: {
       conversation_id: params.conversationId,
       skill_id: params.skillId || null,
       temperature: params.temperature ?? null,
-      reasoning_effort: params.reasoningEffort ?? null
+      reasoning_effort: params.reasoningEffort ?? null,
+      enable_web_tool: params.enableWebTool ?? false
     })
   });
 

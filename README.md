@@ -151,9 +151,12 @@ Azure OpenAI のモデルは `backend/app/model_catalog.py` の `AZURE_OPENAI_MO
   "user_input": "こんにちは",
   "reasoning_effort": "medium",
   "temperature": null,
+  "enable_web_tool": false,
   "skill_id": "todo_extractor"
 }
 ```
+
+`enable_web_tool` は OpenAI / Azure OpenAI の Responses APIモデルでのみ有効です。`true` の場合、web検索ツールを有効化し、取得できた参照URLは回答末尾の `Sources:` セクションへ追記されます（初期値は `false`）。
 
 ## EDINET有報QA Skill
 

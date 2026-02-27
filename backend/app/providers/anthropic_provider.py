@@ -29,8 +29,9 @@ class AnthropicProvider(LLMProvider):
         temperature: float | None,
         max_tokens: int | None,
         reasoning_effort: str | None,
+        enable_web_tool: bool | None,
     ) -> str:
-        del reasoning_effort
+        del reasoning_effort, enable_web_tool
         system_prompt, chat_messages = self._split_messages(messages)
         response = await self.client.messages.create(
             model=model,
@@ -54,8 +55,9 @@ class AnthropicProvider(LLMProvider):
         temperature: float | None,
         max_tokens: int | None,
         reasoning_effort: str | None,
+        enable_web_tool: bool | None,
     ) -> AsyncGenerator[str, None]:
-        del reasoning_effort
+        del reasoning_effort, enable_web_tool
         system_prompt, chat_messages = self._split_messages(messages)
         async with self.client.messages.stream(
             model=model,

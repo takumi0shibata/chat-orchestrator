@@ -16,6 +16,7 @@ class LLMProvider(ABC):
         temperature: float | None,
         max_tokens: int | None,
         reasoning_effort: str | None,
+        enable_web_tool: bool | None,
     ) -> str:
         raise NotImplementedError
 
@@ -28,5 +29,6 @@ class LLMProvider(ABC):
         temperature: float | None,
         max_tokens: int | None,
         reasoning_effort: str | None,
+        enable_web_tool: bool | None,
     ) -> AsyncGenerator[str, None]:
         raise NotImplementedError

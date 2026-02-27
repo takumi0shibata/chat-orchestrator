@@ -33,8 +33,9 @@ class GoogleProvider(LLMProvider):
         temperature: float | None,
         max_tokens: int | None,
         reasoning_effort: str | None,
+        enable_web_tool: bool | None,
     ) -> str:
-        del reasoning_effort
+        del reasoning_effort, enable_web_tool
         system_prompt, contents = self._build_request(messages)
         config = types.GenerateContentConfig(
             temperature=temperature if temperature is not None else 0.3,
@@ -56,14 +57,16 @@ class GoogleProvider(LLMProvider):
         temperature: float | None,
         max_tokens: int | None,
         reasoning_effort: str | None,
+        enable_web_tool: bool | None,
     ) -> AsyncGenerator[str, None]:
-        del reasoning_effort
+        del reasoning_effort, enable_web_tool
         text = await self.chat(
             model=model,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
             reasoning_effort=None,
+            enable_web_tool=None,
         )
         if text:
             yield text

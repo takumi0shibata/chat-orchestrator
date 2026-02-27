@@ -395,10 +395,11 @@ export function App() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [models, setModels] = useState<RichModel[]>([]);
 
-  const [modelId, setModelId] = useState<string>("");
+  const [modelKey, setModelKey] = useState<string>("");
   const [skillId, setSkillId] = useState<string>("");
   const [temperature, setTemperature] = useState<number | null>(0.3);
   const [reasoningEffort, setReasoningEffort] = useState<"low" | "medium" | "high" | null>(null);
+  const [enableWebTool, setEnableWebTool] = useState<boolean>(false);
 
   const [conversationId, setConversationId] = useState<string>("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -416,8 +417,16 @@ export function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  const selectedModel = useMemo(() => models.find((item) => item.id === modelId), [models, modelId]);
+  const selectedModel = useMemo(
+    () => models.find((item) => `${item.providerId}::${item.id}` === modelKey),
+    [models, modelKey]
+  );
   const selectedSkill = useMemo(() => skills.find((item) => item.id === skillId), [skills, skillId]);
+  const canUseWebTool = Boolean(
+    selectedModel &&
+      selectedModel.api_mode === "responses" &&
+      (selectedModel.providerId === "openai" || selectedModel.providerId === "azure_openai")
+  );
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -472,10 +481,13 @@ export function App() {
     const merged = chunks.flat();
     setModels(merged);
 
-    const preferred = providers.find((item) => item.enabled)?.default_model || providers[0]?.default_model;
-    const initial = merged.find((item) => item.id === preferred) || merged[0];
+    const enabledProvider = providers.find((item) => item.enabled) || providers[0];
+    const initial =
+      merged.find((item) => item.providerId === enabledProvider?.id && item.id === enabledProvider.default_model) ||
+      merged.find((item) => item.providerEnabled) ||
+      merged[0];
     if (initial) {
-      setModelId(initial.id);
+      setModelKey(`${initial.providerId}::${initial.id}`);
       setTemperature(initial.supports_temperature ? (initial.default_temperature ?? 0.3) : null);
       setReasoningEffort(initial.supports_reasoning_effort ? initial.default_reasoning_effort : null);
     }
@@ -496,8 +508,8 @@ export function App() {
   }, []);
 
   const onModelChange = (value: string) => {
-    setModelId(value);
-    const item = models.find((entry) => entry.id === value);
+    setModelKey(value);
+    const item = models.find((entry) => `${entry.providerId}::${entry.id}` === value);
     if (!item) return;
 
     if (!item.supports_temperature) setTemperature(null);
@@ -505,7 +517,15 @@ export function App() {
 
     if (!item.supports_reasoning_effort) setReasoningEffort(null);
     else if (!reasoningEffort) setReasoningEffort(item.default_reasoning_effort ?? "medium");
+
+    if (!(item.api_mode === "responses" && (item.providerId === "openai" || item.providerId === "azure_openai"))) {
+      setEnableWebTool(false);
+    }
   };
+
+  useEffect(() => {
+    if (!canUseWebTool && enableWebTool) setEnableWebTool(false);
+  }, [canUseWebTool, enableWebTool]);
 
   const onNewChat = async () => {
     try {
@@ -637,6 +657,7 @@ export function App() {
         skillId: skillId || undefined,
         temperature,
         reasoningEffort,
+        enableWebTool: canUseWebTool ? enableWebTool : false,
         signal: abortController.signal,
         onChunk: (delta) => {
           if (delta) setShowThinking(false);
@@ -842,9 +863,9 @@ export function App() {
             <input ref={fileInputRef} type="file" multiple className="hidden-file" onChange={onAttachFiles} />
 
             <div className="select-wrap">
-              <select value={modelId} onChange={(e) => onModelChange(e.target.value)} title="Model">
+              <select value={modelKey} onChange={(e) => onModelChange(e.target.value)} title="Model">
                 {models.map((item) => (
-                  <option value={item.id} key={`${item.providerId}:${item.id}`}>
+                  <option value={`${item.providerId}::${item.id}`} key={`${item.providerId}:${item.id}`}>
                     {item.label} ({item.providerLabel})
                   </option>
                 ))}
@@ -890,6 +911,17 @@ export function App() {
                 </select>
                 <ChevronDownIcon />
               </div>
+            )}
+
+            {canUseWebTool && (
+              <label className="web-tool-toggle" title="Enable web search tool">
+                <input
+                  type="checkbox"
+                  checked={enableWebTool}
+                  onChange={(e) => setEnableWebTool(e.target.checked)}
+                />
+                <span>Web</span>
+              </label>
             )}
 
             {loading ? (

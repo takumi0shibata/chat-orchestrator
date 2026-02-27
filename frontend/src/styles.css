@@ -497,6 +497,19 @@ body {
   color: var(--muted);
 }
 
+.web-tool-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 0 4px;
+}
+
+.web-tool-toggle input {
+  margin: 0;
+}
+
 .hidden-file {
   display: none;
 }
