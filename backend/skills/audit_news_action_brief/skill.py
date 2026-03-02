@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import re
 import sys
 from datetime import UTC, datetime, timedelta
@@ -7,6 +8,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
+
+logger = logging.getLogger("audit_news")
 
 from app.model_catalog import get_model_capability
 from app.skills_runtime.base import Skill, SkillMetadata
@@ -235,6 +238,7 @@ class AuditNewsActionBriefSkill(Skill):
         model: str,
         prior_titles: list[str],
     ) -> list[NewsItemV3]:
+        logger.info("_search_category START: view=%s, client=%s", view, parsed.client_name)
         prompt = self._build_category_prompt(view=view, parsed=parsed, prior_titles=prior_titles)
         raw = await run_json_prompt_with_web(
             provider_id=provider_id,
@@ -243,8 +247,12 @@ class AuditNewsActionBriefSkill(Skill):
             max_output_tokens=2000,
             reasoning_effort="high",
         )
+        if not raw:
+            logger.warning("_search_category EMPTY response: view=%s", view)
+            return []
         rows = extract_json_array(raw)
         if rows is None:
+            logger.warning("_search_category JSON parse failed: view=%s, raw_len=%d, raw_preview=%.200s", view, len(raw), raw)
             return []
 
         out: list[NewsItemV3] = []
@@ -287,6 +295,7 @@ class AuditNewsActionBriefSkill(Skill):
                     view=view,
                 )
             )
+        logger.info("_search_category DONE: view=%s, items=%d", view, len(out))
         return out
 
     def _build_category_prompt(

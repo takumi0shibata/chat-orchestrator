@@ -1,10 +1,13 @@
 import json
 import asyncio
+import logging
 from time import monotonic
 from typing import Any
 
 from app.config import get_settings
 from app.openai_client import build_openai_client
+
+logger = logging.getLogger("audit_news")
 
 _SUPPORTED_PROVIDERS = {"openai", "azure_openai"}
 
@@ -65,15 +68,22 @@ async def run_json_prompt_with_web(
                     await asyncio.sleep(wait_sec)
                 response = await client.responses.create(**kwargs)
                 _LAST_REQUEST_TS = monotonic()
-            return getattr(response, "output_text", "") or ""
+            result = getattr(response, "output_text", "") or ""
+            logger.info("run_json_prompt_with_web OK: model=%s, response_len=%d", model, len(result))
+            return result
         except Exception as exc:
             status_code = getattr(exc, "status_code", None)
+            logger.warning(
+                "run_json_prompt_with_web error: model=%s, attempt=%d/%d, status=%s, error=%s",
+                model, attempt + 1, max_retries + 1, status_code, exc,
+            )
             if status_code == 429 and attempt < max_retries:
                 await asyncio.sleep(min(2 ** attempt, 8))
                 continue
             if isinstance(status_code, int) and status_code >= 500 and attempt < max_retries:
                 await asyncio.sleep(min(2 ** attempt, 8))
                 continue
+            logger.error("run_json_prompt_with_web giving up: model=%s, final_status=%s", model, status_code)
             return ""
     return ""
 
@@ -115,15 +125,22 @@ async def run_json_prompt(
                     await asyncio.sleep(wait_sec)
                 response = await client.responses.create(**kwargs)
                 _LAST_REQUEST_TS = monotonic()
-            return getattr(response, "output_text", "") or ""
+            result = getattr(response, "output_text", "") or ""
+            logger.info("run_json_prompt OK: model=%s, response_len=%d", model, len(result))
+            return result
         except Exception as exc:
             status_code = getattr(exc, "status_code", None)
+            logger.warning(
+                "run_json_prompt error: model=%s, attempt=%d/%d, status=%s, error=%s",
+                model, attempt + 1, max_retries + 1, status_code, exc,
+            )
             if status_code == 429 and attempt < max_retries:
                 await asyncio.sleep(min(2 ** attempt, 8))
                 continue
             if isinstance(status_code, int) and status_code >= 500 and attempt < max_retries:
                 await asyncio.sleep(min(2 ** attempt, 8))
                 continue
+            logger.error("run_json_prompt giving up: model=%s, final_status=%s", model, status_code)
             return ""
     return ""
 

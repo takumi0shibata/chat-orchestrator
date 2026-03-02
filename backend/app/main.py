@@ -123,7 +123,7 @@ def _extract_audit_news_payload(skill_output: str | None) -> dict | None:
     if not isinstance(parsed, dict):
         return None
     schema = parsed.get("schema")
-    if schema not in {"audit_news_action_brief/v1", "audit_news_action_brief/v2"}:
+    if schema not in {"audit_news_action_brief/v1", "audit_news_action_brief/v2", "audit_news_action_brief/v3"}:
         return None
     return parsed
 
@@ -150,7 +150,7 @@ def _register_audit_news_alerts(*, conversation_id: str, skill_id: str | None, s
             for row in alerts
             if isinstance(row, dict) and isinstance(row.get("alert_id"), str)
         ]
-    elif schema == "audit_news_action_brief/v2":
+    elif schema in {"audit_news_action_brief/v2", "audit_news_action_brief/v3"}:
         views = payload.get("views")
         if not isinstance(views, dict):
             return
@@ -254,13 +254,18 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         skill_output=skill_output,
     )
 
+    # Disable LLM's own web search when audit news skill already ran
+    effective_web_tool = payload.enable_web_tool
+    if payload.skill_id == "audit_news_action_brief":
+        effective_web_tool = False
+
     output = await provider.chat(
         model=payload.model,
         messages=prepared_messages,
         temperature=payload.temperature,
         max_tokens=payload.max_tokens,
         reasoning_effort=payload.reasoning_effort,
-        enable_web_tool=payload.enable_web_tool,
+        enable_web_tool=effective_web_tool,
     )
 
     state.store.ensure_title_from_user_input(conversation_id, user_input)
@@ -360,13 +365,19 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
                 yield json.dumps({"type": "skill_status", "status": "done", "skill_id": payload.skill_id}) + "\n"
                 await asyncio.sleep(5)
 
+            # Disable LLM's own web search when audit news skill already ran
+            # to prevent the LLM from compensating with its own search results
+            effective_web_tool = payload.enable_web_tool
+            if payload.skill_id == "audit_news_action_brief":
+                effective_web_tool = False
+
             async for chunk in provider.stream_chat(
                 model=payload.model,
                 messages=prepared_messages,
                 temperature=payload.temperature,
                 max_tokens=payload.max_tokens,
                 reasoning_effort=payload.reasoning_effort,
-                enable_web_tool=payload.enable_web_tool,
+                enable_web_tool=effective_web_tool,
             ):
                 accumulated += chunk
                 yield json.dumps({"type": "chunk", "delta": chunk}) + "\n"
