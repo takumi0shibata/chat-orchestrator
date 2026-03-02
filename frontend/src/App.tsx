@@ -939,7 +939,11 @@ export function App() {
                 ? `\`\`\`audit-news-json\n${JSON.stringify(auditParsed.payload)}\n\`\`\``
                 : (skillOutput.match(/```audit-news-json\s*\n[\s\S]*?```/)?.[0] ?? "");
               const auditText = auditParsed.contentWithoutAuditBlock.trim();
-              const merged = [next[lastIndex].content, auditText, auditBlock].filter((item) => item && item.trim()).join("\n\n");
+              const current = next[lastIndex].content || "";
+              const mergedParts = [current];
+              if (auditText && !current.includes(auditText)) mergedParts.push(auditText);
+              if (auditBlock && !current.includes(auditBlock)) mergedParts.push(auditBlock);
+              const merged = mergedParts.filter((item) => item && item.trim()).join("\n\n");
               next[lastIndex] = {
                 ...next[lastIndex],
                 content: merged

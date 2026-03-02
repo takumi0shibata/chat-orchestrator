@@ -361,7 +361,9 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
             # This skill already returns user-facing final output.
             # Skip post-skill assistant generation to reduce rate-limit failures.
             if payload.skill_id == "audit_news_action_brief":
-                accumulated = ""
+                accumulated = (skill_output or "").strip()
+                if accumulated:
+                    yield json.dumps({"type": "chunk", "delta": accumulated}) + "\n"
             else:
                 async for chunk in provider.stream_chat(
                     model=payload.model,
