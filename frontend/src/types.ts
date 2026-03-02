@@ -30,7 +30,7 @@ export interface SkillInfo {
 
 export type SkillFeedbackDecision = "acted" | "monitor" | "not_relevant";
 
-export interface AuditNewsAlert {
+export interface AuditNewsAlertV1 {
   alert_id: string;
   title: string;
   url: string;
@@ -43,7 +43,7 @@ export interface AuditNewsAlert {
   score: number;
 }
 
-export interface AuditNewsPayload {
+export interface AuditNewsPayloadV1 {
   schema: "audit_news_action_brief/v1";
   run_id: string;
   generated_at: string;
@@ -54,7 +54,40 @@ export interface AuditNewsPayload {
     focus_topics: string[];
     watch_competitors: string[];
   };
-  alerts: AuditNewsAlert[];
+  alerts: AuditNewsAlertV1[];
+}
+
+export interface AuditNewsViewItemV2 {
+  news_id: string;
+  title: string;
+  summary: string;
+  url: string;
+  one_liner_comment: string;
+  source: string;
+  published_at: string;
+  view: "self_company" | "peer_companies" | "macro";
+  propagation_note: string;
+  score: number;
+  macro_subtype?: "regulation" | "policy" | "market" | "commodity" | "fx" | "rates";
+}
+
+export interface AuditNewsPayloadV2 {
+  schema: "audit_news_action_brief/v2";
+  run_id: string;
+  generated_at: string;
+  client: {
+    name: string;
+    industry: string;
+    lookback_days: number;
+    focus_topics: string[];
+    watch_competitors: string[];
+    research_profile?: string;
+  };
+  views: {
+    self_company: AuditNewsViewItemV2[];
+    peer_companies: AuditNewsViewItemV2[];
+    macro: AuditNewsViewItemV2[];
+  };
 }
 
 export interface AuditNewsMetricsResponse {

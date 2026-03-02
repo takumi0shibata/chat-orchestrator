@@ -13,8 +13,10 @@ import {
   streamChat
 } from "./api";
 import type {
-  AuditNewsAlert,
-  AuditNewsPayload,
+  AuditNewsAlertV1,
+  AuditNewsPayloadV1,
+  AuditNewsPayloadV2,
+  AuditNewsViewItemV2,
   ChatMessage,
   ConversationSummary,
   ModelInfo,
@@ -51,7 +53,20 @@ type SkillChartPayload = {
 };
 
 const BOJ_CHART_SCHEMA = "boj_timeseries_chart/v1";
-const AUDIT_NEWS_SCHEMA = "audit_news_action_brief/v1";
+const AUDIT_NEWS_SCHEMA_V1 = "audit_news_action_brief/v1";
+const AUDIT_NEWS_SCHEMA_V2 = "audit_news_action_brief/v2";
+
+type NormalizedAuditNewsItem = {
+  item_id: string;
+  title: string;
+  source: string;
+  published_at: string;
+  score: number;
+  summary: string;
+  one_liner_comment: string;
+  propagation_note: string;
+  url: string;
+};
 
 function PlusIcon() {
   return (
@@ -337,7 +352,7 @@ function extractChartPayload(messageContent: string): { chart: SkillChartPayload
   };
 }
 
-function isAuditNewsAlert(node: unknown): node is AuditNewsAlert {
+function isAuditNewsAlertV1(node: unknown): node is AuditNewsAlertV1 {
   if (!node || typeof node !== "object") return false;
   const item = node as Record<string, unknown>;
   return (
@@ -354,25 +369,65 @@ function isAuditNewsAlert(node: unknown): node is AuditNewsAlert {
   );
 }
 
-function isAuditNewsPayload(node: unknown): node is AuditNewsPayload {
+function isAuditNewsPayloadV1(node: unknown): node is AuditNewsPayloadV1 {
   if (!node || typeof node !== "object") return false;
   const item = node as Record<string, unknown>;
   return (
-    item.schema === AUDIT_NEWS_SCHEMA &&
+    item.schema === AUDIT_NEWS_SCHEMA_V1 &&
     typeof item.run_id === "string" &&
     typeof item.generated_at === "string" &&
     Array.isArray(item.alerts) &&
-    item.alerts.every(isAuditNewsAlert)
+    item.alerts.every(isAuditNewsAlertV1)
+  );
+}
+
+function isAuditNewsViewItemV2(node: unknown): node is AuditNewsViewItemV2 {
+  if (!node || typeof node !== "object") return false;
+  const item = node as Record<string, unknown>;
+  return (
+    typeof item.news_id === "string" &&
+    typeof item.title === "string" &&
+    typeof item.summary === "string" &&
+    typeof item.url === "string" &&
+    typeof item.one_liner_comment === "string" &&
+    typeof item.source === "string" &&
+    typeof item.published_at === "string" &&
+    typeof item.view === "string" &&
+    typeof item.propagation_note === "string" &&
+    typeof item.score === "number"
+  );
+}
+
+function isAuditNewsPayloadV2(node: unknown): node is AuditNewsPayloadV2 {
+  if (!node || typeof node !== "object") return false;
+  const item = node as Record<string, unknown>;
+  if (
+    item.schema !== AUDIT_NEWS_SCHEMA_V2 ||
+    typeof item.run_id !== "string" ||
+    typeof item.generated_at !== "string" ||
+    !item.views ||
+    typeof item.views !== "object"
+  ) {
+    return false;
+  }
+  const views = item.views as Record<string, unknown>;
+  return (
+    Array.isArray(views.self_company) &&
+    Array.isArray(views.peer_companies) &&
+    Array.isArray(views.macro) &&
+    views.self_company.every(isAuditNewsViewItemV2) &&
+    views.peer_companies.every(isAuditNewsViewItemV2) &&
+    views.macro.every(isAuditNewsViewItemV2)
   );
 }
 
 function extractAuditNewsPayload(messageContent: string): {
-  payload: AuditNewsPayload | null;
+  payload: AuditNewsPayloadV1 | AuditNewsPayloadV2 | null;
   contentWithoutAuditBlock: string;
   hasAuditBlock: boolean;
   parseError: boolean;
 } {
-  let payload: AuditNewsPayload | null = null;
+  let payload: AuditNewsPayloadV1 | AuditNewsPayloadV2 | null = null;
   let hasAuditBlock = false;
   let parseError = false;
   const contentWithoutAuditBlock = messageContent.replace(/```audit-news-json\s*\n([\s\S]*?)```/g, (full, block) => {
@@ -380,7 +435,7 @@ function extractAuditNewsPayload(messageContent: string): {
     if (payload) return "";
     try {
       const parsed = JSON.parse(block) as unknown;
-      if (!isAuditNewsPayload(parsed)) {
+      if (!isAuditNewsPayloadV2(parsed) && !isAuditNewsPayloadV1(parsed)) {
         parseError = true;
         return full;
       }
@@ -397,6 +452,33 @@ function extractAuditNewsPayload(messageContent: string): {
     hasAuditBlock,
     parseError
   };
+}
+
+function normalizeAuditNewsItems(payload: AuditNewsPayloadV1 | AuditNewsPayloadV2): NormalizedAuditNewsItem[] {
+  if (payload.schema === AUDIT_NEWS_SCHEMA_V2) {
+    return [...payload.views.self_company, ...payload.views.peer_companies, ...payload.views.macro].map((item) => ({
+      item_id: item.news_id,
+      title: item.title,
+      source: item.source,
+      published_at: item.published_at,
+      score: item.score,
+      summary: item.summary,
+      one_liner_comment: item.one_liner_comment,
+      propagation_note: item.propagation_note,
+      url: item.url
+    }));
+  }
+  return payload.alerts.map((item) => ({
+    item_id: item.alert_id,
+    title: item.title,
+    source: item.source,
+    published_at: item.published_at,
+    score: item.score,
+    summary: item.impact_hypothesis,
+    one_liner_comment: item.recommended_audit_action,
+    propagation_note: item.impact_hypothesis,
+    url: item.url
+  }));
 }
 
 function buildPolyline(points: SkillChartPoint[], width: number, height: number, padding: number): string {
@@ -465,10 +547,10 @@ function SkillChartCard({ chart }: { chart: SkillChartPayload }) {
 
 function AuditNewsCard(props: {
   runId: string;
-  alert: AuditNewsAlert;
+  alert: NormalizedAuditNewsItem;
   selectedDecision: SkillFeedbackDecision | undefined;
   disabled: boolean;
-  onSubmitDecision: (decision: SkillFeedbackDecision, alert: AuditNewsAlert) => void;
+  onSubmitDecision: (decision: SkillFeedbackDecision, alert: NormalizedAuditNewsItem) => void;
 }) {
   const { runId, alert, selectedDecision, disabled, onSubmitDecision } = props;
   const actions: { label: string; value: SkillFeedbackDecision }[] = [
@@ -478,19 +560,22 @@ function AuditNewsCard(props: {
   ];
 
   return (
-    <section className="audit-news-card" data-run-id={runId} data-alert-id={alert.alert_id}>
+    <section className="audit-news-card" data-run-id={runId} data-alert-id={alert.item_id}>
       <header className="audit-news-card-header">
         <h4>{alert.title}</h4>
-        <span className={`priority-chip ${alert.priority}`}>{alert.priority.toUpperCase()}</span>
+        <span className="priority-chip medium">NEWS</span>
       </header>
       <p className="audit-news-meta">
         {alert.source} • {alert.published_at} • score={alert.score}
       </p>
       <p className="audit-news-line">
-        <strong>想定影響:</strong> {alert.impact_hypothesis}
+        <strong>概要:</strong> {alert.summary}
       </p>
       <p className="audit-news-line">
-        <strong>推奨監査アクション:</strong> {alert.recommended_audit_action}
+        <strong>一言コメント:</strong> {alert.one_liner_comment}
+      </p>
+      <p className="audit-news-line">
+        <strong>波及メモ:</strong> {alert.propagation_note}
       </p>
       <p className="audit-news-link">
         <a href={alert.url} target="_blank" rel="noreferrer">
@@ -748,18 +833,18 @@ export function App() {
 
   const onSubmitAuditDecision = async (
     runId: string,
-    alert: AuditNewsAlert,
+    alert: NormalizedAuditNewsItem,
     decision: SkillFeedbackDecision
   ) => {
     if (!conversationId) return;
-    const key = `${runId}:${alert.alert_id}`;
+    const key = `${runId}:${alert.item_id}`;
     if (auditFeedback[key]) return;
 
     try {
       await submitAuditNewsFeedback({
         conversationId,
         runId,
-        alertId: alert.alert_id,
+        alertId: alert.item_id,
         decision
       });
       setAuditFeedback((prev) => ({ ...prev, [key]: decision }));
@@ -989,7 +1074,8 @@ export function App() {
                         }
                         return null;
                       }
-                      if (payload.alerts.length === 0) {
+                      const items = normalizeAuditNewsItems(payload);
+                      if (items.length === 0) {
                         return (
                           <section className="audit-news-card audit-news-empty-card">
                             <header className="audit-news-card-header">
@@ -1002,8 +1088,8 @@ export function App() {
                           </section>
                         );
                       }
-                      return payload.alerts.map((alert) => {
-                        const key = `${payload.run_id}:${alert.alert_id}`;
+                      return items.map((alert) => {
+                        const key = `${payload.run_id}:${alert.item_id}`;
                         return (
                           <AuditNewsCard
                             key={key}

@@ -265,14 +265,15 @@ BOJ_STAT_CACHE_TTL_HOURS=24
 
 ## Audit News Action Brief Skill
 
-`backend/skills/audit_news_action_brief/skill.py` は、監査クライアント情報をもとに直近ニュース（競合・マクロ・規制）を探索し、監査アクション優先度付きの候補を返すスキルです。
+`backend/skills/audit_news_action_brief/skill.py` は、監査クライアント情報をもとに仮説先行でニュース探索を行い、`自社 / 他社 / マクロ` の3視点で候補を返すスキルです。
 
 主な仕様:
 
 - OpenAI Responses API モデル（Web検索）必須
-- 既定期間は直近7日（入力で変更可）
-- 出力は人間可読セクション + `audit-news-json` ブロック
-- `audit-news-json` の `alerts` をもとに、UI から `対応する / 様子見 / 対象外` を記録可能
+- 既定期間は直近7日（入力で変更可、最大30日）
+- 出力は人間可読セクション + `audit-news-json` ブロック（`schema: audit_news_action_brief/v2`）
+- `audit-news-json` の `views.*[].news_id` をもとに、UI から `対応する / 様子見 / 対象外` を記録可能
+- 規制・政策ニュースは `マクロ` 視点に統合
 
 KPI計測:
 

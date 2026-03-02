@@ -16,6 +16,7 @@ async def run_json_prompt_with_web(
     model: str,
     prompt: str,
     max_output_tokens: int = 1200,
+    reasoning_effort: str | None = "high",
 ) -> str:
     if provider_id != "openai":
         return ""
@@ -26,12 +27,15 @@ async def run_json_prompt_with_web(
         return ""
 
     client = build_openai_client(settings=settings, api_key=api_key)
-    response = await client.responses.create(
-        model=model,
-        input=[{"role": "user", "content": prompt}],
-        tools=[_WEB_SEARCH_TOOL],
-        max_output_tokens=max_output_tokens,
-    )
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "input": [{"role": "user", "content": prompt}],
+        "tools": [_WEB_SEARCH_TOOL],
+        "max_output_tokens": max_output_tokens,
+    }
+    if reasoning_effort:
+        kwargs["reasoning"] = {"effort": reasoning_effort}
+    response = await client.responses.create(**kwargs)
     return getattr(response, "output_text", "") or ""
 
 

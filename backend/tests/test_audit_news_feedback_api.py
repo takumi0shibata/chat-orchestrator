@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.main import app, state
+from app.main import _register_audit_news_alerts, app, state
 from app.storage import ChatStore
 
 
@@ -82,3 +82,34 @@ def test_metrics_api_returns_expected_aggregates() -> None:
             assert payload["total_feedback"] == 2
             assert payload["acted_count"] == 1
             assert abs(payload["action_rate"] - (1 / 3)) < 1e-3
+
+
+def test_registers_v2_news_ids_for_metrics() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with TestClient(app):
+            _set_temp_store(Path(tmp))
+            conversation_id = state.store.create_conversation()
+            skill_output = (
+                "監査アクションニュースブリーフ\\n"
+                "```audit-news-json\\n"
+                "{"
+                "\"schema\":\"audit_news_action_brief/v2\","
+                "\"run_id\":\"run-v2\","
+                "\"generated_at\":\"2026-01-01T00:00:00+00:00\","
+                "\"client\":{\"name\":\"A食品\",\"industry\":\"食品\",\"lookback_days\":7,\"focus_topics\":[],\"watch_competitors\":[]},"
+                "\"views\":{"
+                "\"self_company\":[{\"news_id\":\"n1\",\"title\":\"t1\",\"summary\":\"s\",\"url\":\"u\",\"one_liner_comment\":\"c\",\"source\":\"x\",\"published_at\":\"2026-01-01T00:00:00+00:00\",\"view\":\"self_company\",\"propagation_note\":\"p\",\"score\":80}],"
+                "\"peer_companies\":[{\"news_id\":\"n2\",\"title\":\"t2\",\"summary\":\"s\",\"url\":\"u2\",\"one_liner_comment\":\"c\",\"source\":\"x\",\"published_at\":\"2026-01-01T00:00:00+00:00\",\"view\":\"peer_companies\",\"propagation_note\":\"p\",\"score\":70}],"
+                "\"macro\":[]"
+                "}"
+                "}"
+                "\\n```"
+            )
+            _register_audit_news_alerts(
+                conversation_id=conversation_id,
+                skill_id="audit_news_action_brief",
+                skill_output=skill_output,
+            )
+
+            metrics = state.store.audit_news_metrics(date_from=None, date_to=None)
+            assert metrics["total_alerts"] == 2

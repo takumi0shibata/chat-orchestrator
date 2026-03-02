@@ -121,7 +121,8 @@ def _extract_audit_news_payload(skill_output: str | None) -> dict | None:
         return None
     if not isinstance(parsed, dict):
         return None
-    if parsed.get("schema") != "audit_news_action_brief/v1":
+    schema = parsed.get("schema")
+    if schema not in {"audit_news_action_brief/v1", "audit_news_action_brief/v2"}:
         return None
     return parsed
 
@@ -134,14 +135,32 @@ def _register_audit_news_alerts(*, conversation_id: str, skill_id: str | None, s
         return
 
     run_id = payload.get("run_id")
-    alerts = payload.get("alerts")
-    if not isinstance(run_id, str) or not isinstance(alerts, list):
+    if not isinstance(run_id, str):
         return
-    alert_ids = [
-        str(row.get("alert_id"))
-        for row in alerts
-        if isinstance(row, dict) and isinstance(row.get("alert_id"), str)
-    ]
+
+    schema = payload.get("schema")
+    alert_ids: list[str] = []
+    if schema == "audit_news_action_brief/v1":
+        alerts = payload.get("alerts")
+        if not isinstance(alerts, list):
+            return
+        alert_ids = [
+            str(row.get("alert_id"))
+            for row in alerts
+            if isinstance(row, dict) and isinstance(row.get("alert_id"), str)
+        ]
+    elif schema == "audit_news_action_brief/v2":
+        views = payload.get("views")
+        if not isinstance(views, dict):
+            return
+        for key in ("self_company", "peer_companies", "macro"):
+            rows = views.get(key)
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, dict) and isinstance(row.get("news_id"), str):
+                    alert_ids.append(str(row.get("news_id")))
+
     if not alert_ids:
         return
     state.store.record_skill_alerts(conversation_id=conversation_id, run_id=run_id, alert_ids=alert_ids)
