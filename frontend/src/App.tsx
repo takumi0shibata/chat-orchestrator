@@ -1048,7 +1048,11 @@ export function App() {
           const lastIndex = next.length - 1;
           if (lastIndex >= 0 && next[lastIndex].role === "assistant") {
             if (requestedSkillId === AUDIT_NEWS_SKILL_ID) {
-              const merged = [next[lastIndex].content, skillOutput].filter((item) => item && item.trim()).join("\n\n");
+              const llmContent = next[lastIndex].content
+                .replace(/```audit-news-json\s*\n[\s\S]*?```/g, "")
+                .replace(/\n{3,}/g, "\n\n")
+                .trim();
+              const merged = [llmContent, skillOutput].filter((item) => item && item.trim()).join("\n\n");
               next[lastIndex] = {
                 ...next[lastIndex],
                 content: merged
