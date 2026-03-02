@@ -18,6 +18,7 @@ _WEB_SEARCH_TOOL = {
 _REQUEST_LOCK = asyncio.Lock()
 _LAST_REQUEST_TS = 0.0
 _MIN_REQUEST_INTERVAL_SEC = 3.0
+_NON_OUTPUT_ITEM_TYPES = {"web_search_call", "function_call", "file_search_call", "computer_call", "reasoning"}
 
 
 def _resolve_credentials(provider_id: str) -> tuple[str, str | None]:
@@ -69,28 +70,54 @@ def _summarize_output_types(payload: dict[str, Any]) -> list[str]:
     return out[:8]
 
 
-def _extract_response_text(response: Any) -> tuple[str, list[str]]:
+def _extract_response_text(response: Any) -> tuple[str, dict[str, Any]]:
     direct = getattr(response, "output_text", None)
     payload = _to_jsonable(response)
     if not isinstance(payload, dict):
-        return (direct if isinstance(direct, str) else ""), []
+        return (direct if isinstance(direct, str) else ""), {
+            "response_status": None,
+            "incomplete_reason": None,
+            "output_items": 0,
+            "output_types": [],
+            "content_types": [],
+            "included_text_segments": 0,
+            "blocked_text_segments": 0,
+            "direct_output_text_len": len(direct) if isinstance(direct, str) else 0,
+        }
 
     output_types = _summarize_output_types(payload)
+    diag: dict[str, Any] = {
+        "response_status": payload.get("status"),
+        "incomplete_reason": payload.get("incomplete_details", {}).get("reason")
+        if isinstance(payload.get("incomplete_details"), dict) else None,
+        "output_items": 0,
+        "output_types": output_types,
+        "content_types": [],
+        "included_text_segments": 0,
+        "blocked_text_segments": 0,
+        "direct_output_text_len": len(direct) if isinstance(direct, str) else 0,
+    }
     if isinstance(direct, str) and direct.strip():
-        return direct, output_types
+        return direct, diag
 
     segments: list[str] = []
+    content_types_seen: list[str] = []
     output = payload.get("output")
     if isinstance(output, list):
+        diag["output_items"] = len(output)
         for item in output:
             if not isinstance(item, dict):
                 continue
             item_type = item.get("type")
-            if item_type in (None, "message", "output_text", "text"):
+            is_item_non_output = isinstance(item_type, str) and item_type in _NON_OUTPUT_ITEM_TYPES
+            if not is_item_non_output:
                 for key in ("output_text", "text"):
                     text = _coerce_text_value(item.get(key))
                     if isinstance(text, str) and text.strip():
                         segments.append(text)
+                        diag["included_text_segments"] = int(diag["included_text_segments"]) + 1
+                    elif text:
+                        diag["blocked_text_segments"] = int(diag["blocked_text_segments"]) + 1
 
             content = item.get("content")
             if not isinstance(content, list):
@@ -99,15 +126,23 @@ def _extract_response_text(response: Any) -> tuple[str, list[str]]:
                 if not isinstance(content_item, dict):
                     continue
                 content_type = content_item.get("type")
-                if content_type not in (None, "output_text", "text"):
-                    continue
+                if isinstance(content_type, str) and content_type not in content_types_seen:
+                    content_types_seen.append(content_type)
+                is_blocked_content = isinstance(content_type, str) and content_type.startswith("input_")
                 for key in ("output_text", "text"):
                     text = _coerce_text_value(content_item.get(key))
+                    if not isinstance(text, str) or not text.strip():
+                        continue
+                    if is_item_non_output or is_blocked_content:
+                        diag["blocked_text_segments"] = int(diag["blocked_text_segments"]) + 1
+                        continue
                     if isinstance(text, str) and text.strip():
                         segments.append(text)
+                        diag["included_text_segments"] = int(diag["included_text_segments"]) + 1
 
+    diag["content_types"] = content_types_seen[:12]
     fallback_text = "\n".join(segments).strip()
-    return fallback_text, output_types
+    return fallback_text, diag
 
 
 async def run_json_prompt_with_web(
@@ -137,6 +172,8 @@ async def run_json_prompt_with_web(
     if reasoning_effort:
         kwargs["reasoning"] = {"effort": reasoning_effort}
 
+    did_empty_retry = False
+    current_max_output_tokens = max_output_tokens
     global _LAST_REQUEST_TS
     for attempt in range(max_retries + 1):
         try:
@@ -147,12 +184,28 @@ async def run_json_prompt_with_web(
                     await asyncio.sleep(wait_sec)
                 response = await client.responses.create(**kwargs)
                 _LAST_REQUEST_TS = monotonic()
-            result, output_types = _extract_response_text(response)
+            result, diagnostics = _extract_response_text(response)
             if not result:
                 logger.warning(
-                    "run_json_prompt_with_web empty text: provider=%s, model=%s, output_types=%s",
-                    provider_id, model, ",".join(output_types) if output_types else "none",
+                    "run_json_prompt_with_web empty text: provider=%s, model=%s, diagnostics=%s",
+                    provider_id, model, json.dumps(diagnostics, ensure_ascii=False, separators=(",", ":")),
                 )
+                if not did_empty_retry:
+                    did_empty_retry = True
+                    incomplete_reason = diagnostics.get("incomplete_reason")
+                    if incomplete_reason == "max_output_tokens" and current_max_output_tokens < 4000:
+                        current_max_output_tokens = min(4000, max(current_max_output_tokens + 1000, current_max_output_tokens * 2))
+                        kwargs["max_output_tokens"] = current_max_output_tokens
+                        logger.warning(
+                            "run_json_prompt_with_web empty text retry: provider=%s, model=%s, reason=%s, max_output_tokens=%d",
+                            provider_id, model, incomplete_reason, current_max_output_tokens,
+                        )
+                    else:
+                        logger.warning(
+                            "run_json_prompt_with_web empty text retry: provider=%s, model=%s, reason=%s",
+                            provider_id, model, incomplete_reason or "unknown",
+                        )
+                    continue
             logger.info("run_json_prompt_with_web OK: provider=%s, model=%s, response_len=%d", provider_id, model, len(result))
             return result
         except Exception as exc:
@@ -199,6 +252,8 @@ async def run_json_prompt(
     if reasoning_effort:
         kwargs["reasoning"] = {"effort": reasoning_effort}
 
+    did_empty_retry = False
+    current_max_output_tokens = max_output_tokens
     global _LAST_REQUEST_TS
     for attempt in range(max_retries + 1):
         try:
@@ -209,12 +264,28 @@ async def run_json_prompt(
                     await asyncio.sleep(wait_sec)
                 response = await client.responses.create(**kwargs)
                 _LAST_REQUEST_TS = monotonic()
-            result, output_types = _extract_response_text(response)
+            result, diagnostics = _extract_response_text(response)
             if not result:
                 logger.warning(
-                    "run_json_prompt empty text: provider=%s, model=%s, output_types=%s",
-                    provider_id, model, ",".join(output_types) if output_types else "none",
+                    "run_json_prompt empty text: provider=%s, model=%s, diagnostics=%s",
+                    provider_id, model, json.dumps(diagnostics, ensure_ascii=False, separators=(",", ":")),
                 )
+                if not did_empty_retry:
+                    did_empty_retry = True
+                    incomplete_reason = diagnostics.get("incomplete_reason")
+                    if incomplete_reason == "max_output_tokens" and current_max_output_tokens < 2000:
+                        current_max_output_tokens = min(2000, max(current_max_output_tokens + 400, current_max_output_tokens * 2))
+                        kwargs["max_output_tokens"] = current_max_output_tokens
+                        logger.warning(
+                            "run_json_prompt empty text retry: provider=%s, model=%s, reason=%s, max_output_tokens=%d",
+                            provider_id, model, incomplete_reason, current_max_output_tokens,
+                        )
+                    else:
+                        logger.warning(
+                            "run_json_prompt empty text retry: provider=%s, model=%s, reason=%s",
+                            provider_id, model, incomplete_reason or "unknown",
+                        )
+                    continue
             logger.info("run_json_prompt OK: provider=%s, model=%s, response_len=%d", provider_id, model, len(result))
             return result
         except Exception as exc:

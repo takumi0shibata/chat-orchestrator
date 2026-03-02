@@ -36,17 +36,23 @@ class FakeResponse:
 
 
 class FakeResponsesAPI:
-    def __init__(self, response: FakeResponse) -> None:
-        self.response = response
+    def __init__(self, responses: list[FakeResponse]) -> None:
+        self.responses = responses
         self.calls: list[dict[str, Any]] = []
+        self._index = 0
 
     async def create(self, **kwargs: Any) -> FakeResponse:
         self.calls.append(kwargs)
-        return self.response
+        if self._index >= len(self.responses):
+            return self.responses[-1]
+        response = self.responses[self._index]
+        self._index += 1
+        return response
 
 
-def _set_up_fakes(monkeypatch, *, response: FakeResponse) -> FakeResponsesAPI:
-    fake_responses = FakeResponsesAPI(response=response)
+def _set_up_fakes(monkeypatch, *, response: FakeResponse | list[FakeResponse]) -> FakeResponsesAPI:
+    responses = response if isinstance(response, list) else [response]
+    fake_responses = FakeResponsesAPI(responses=responses)
     fake_client = types.SimpleNamespace(responses=fake_responses)
     fake_settings = types.SimpleNamespace(
         openai_api_key="openai-test-key",
@@ -151,4 +157,45 @@ def test_run_json_prompt_with_web_logs_empty_text_diagnostics(monkeypatch, caplo
     assert "run_json_prompt_with_web empty text" in caplog.text
     assert "provider=azure_openai" in caplog.text
     assert "model=gpt-5.2-2025-12-11" in caplog.text
-    assert "output_types=web_search_call" in caplog.text
+    assert '"output_types":["web_search_call"]' in caplog.text
+    assert '"content_types":["input_text"]' in caplog.text
+
+
+def test_run_json_prompt_with_web_empty_retry_recovers(monkeypatch) -> None:
+    first = FakeResponse(
+        output_text="",
+        payload={
+            "status": "completed",
+            "output": [
+                {
+                    "type": "web_search_call",
+                    "content": [{"type": "input_text", "text": "query only"}],
+                }
+            ],
+        },
+    )
+    second = FakeResponse(
+        output_text='[{"title":"retry-recovered"}]',
+        payload={
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": '[{"title":"retry-recovered"}]'}],
+                }
+            ],
+        },
+    )
+    fake_responses = _set_up_fakes(monkeypatch, response=[first, second])
+
+    result = asyncio.run(
+        llm_client.run_json_prompt_with_web(
+            provider_id="azure_openai",
+            model="gpt-5.2-2025-12-11",
+            prompt="test prompt",
+            max_retries=1,
+        )
+    )
+
+    assert result == '[{"title":"retry-recovered"}]'
+    assert len(fake_responses.calls) == 2
