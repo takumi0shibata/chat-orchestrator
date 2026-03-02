@@ -518,6 +518,24 @@ def test_output_marks_absence_for_peer_and_macro_with_search_summary() -> None:
 
     assert "## 他社" in output
     assert "## マクロ" in output
+    assert "該当ニュースは見つかりませんでした（探索結果: 0件）。" in output
     assert "他社" in output and "探索クエリ2本（primary 1本, supplemental 1本）を実行" in output
     assert "マクロ" in output and "探索クエリ2本（primary 1本, supplemental 1本）を実行" in output
+    assert "クエリ: peer-q / peer-sup" in output
+    assert "クエリ: macro-q / macro-sup" in output
     assert "## 探索戦略（デバッグ）" in output
+
+
+def test_build_search_absence_summary_includes_query_details() -> None:
+    skill = AuditNewsActionBriefSkill()
+    summary = skill._build_search_absence_summary(
+        query_logs=[
+            {"stage": "primary", "query": "peer primary q", "hits": 0},
+            {"stage": "supplemental", "query": "peer supplemental q", "hits": 0},
+            {"stage": "supplemental", "query": "peer extra q", "hits": 0},
+        ],
+        view_label="peer_companies",
+    )
+    assert summary is not None
+    assert "探索クエリ3本（primary 1本, supplemental 2本）を実行" in summary
+    assert "クエリ: peer primary q / peer supplemental q / ...(+1)" in summary

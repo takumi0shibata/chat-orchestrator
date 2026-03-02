@@ -69,11 +69,26 @@ type NormalizedAuditNewsItem = {
   url: string;
 };
 
+type AuditViewKey = "self_company" | "peer_companies" | "macro";
+type AuditQueryLogRow = {
+  stage: string;
+  query: string;
+  hits: number | null;
+};
+
+const AUDIT_VIEW_KEYS: AuditViewKey[] = ["self_company", "peer_companies", "macro"];
+
 function auditViewLabel(view: NormalizedAuditNewsItem["view"]): string {
   if (view === "self_company") return "自社";
   if (view === "peer_companies") return "他社";
   if (view === "macro") return "マクロ";
   return "legacy";
+}
+
+function auditSectionLabel(view: AuditViewKey): string {
+  if (view === "self_company") return "自社";
+  if (view === "peer_companies") return "他社";
+  return "マクロ";
 }
 
 function PlusIcon() {
@@ -489,6 +504,53 @@ function normalizeAuditNewsItems(payload: AuditNewsPayloadV1 | AuditNewsPayloadV
     propagation_note: item.impact_hypothesis,
     url: item.url
   }));
+}
+
+function normalizeAuditNewsItemV2(item: AuditNewsViewItemV2): NormalizedAuditNewsItem {
+  return {
+    item_id: item.news_id,
+    title: item.title,
+    source: item.source,
+    published_at: item.published_at,
+    score: item.score,
+    view: item.view,
+    summary: item.summary,
+    one_liner_comment: item.one_liner_comment,
+    propagation_note: item.propagation_note,
+    url: item.url
+  };
+}
+
+function extractAuditQueryLogs(payload: AuditNewsPayloadV2, view: AuditViewKey): AuditQueryLogRow[] {
+  const logs = payload.debug_stats?.query_logs_by_view?.[view];
+  if (!Array.isArray(logs)) return [];
+  return logs
+    .map((row) => {
+      return {
+        stage: typeof row.stage === "string" && row.stage.trim() ? row.stage.trim() : "unknown",
+        query: typeof row.query === "string" ? row.query.trim() : "",
+        hits: typeof row.hits === "number" && Number.isFinite(row.hits) ? row.hits : null
+      };
+    })
+    .filter((row) => row.query.length > 0 || row.stage !== "unknown" || row.hits !== null);
+}
+
+function buildAuditSearchSummary(logs: AuditQueryLogRow[]): string {
+  if (logs.length === 0) return "探索ログなし（クエリ未記録）";
+  let primaryCount = 0;
+  let supplementalCount = 0;
+  const queries: string[] = [];
+  for (const row of logs) {
+    if (row.stage === "primary") primaryCount += 1;
+    else if (row.stage === "supplemental") supplementalCount += 1;
+    if (row.query) queries.push(row.query);
+  }
+  const total = primaryCount + supplementalCount;
+  const queryPreview = queries.slice(0, 2).join(" / ");
+  const remaining = Math.max(0, queries.length - 2);
+  const queryText =
+    queryPreview.length > 0 ? (remaining > 0 ? `${queryPreview} / ...(+${remaining})` : queryPreview) : "クエリ不明";
+  return `探索クエリ${total}本（primary ${primaryCount}本, supplemental ${supplementalCount}本）を実行。クエリ: ${queryText}`;
 }
 
 function buildPolyline(points: SkillChartPoint[], width: number, height: number, padding: number): string {
@@ -1085,6 +1147,72 @@ export function App() {
                           );
                         }
                         return null;
+                      }
+                      if (payload.schema === AUDIT_NEWS_SCHEMA_V2) {
+                        return AUDIT_VIEW_KEYS.map((view) => {
+                          const alerts = payload.views[view].map(normalizeAuditNewsItemV2);
+                          const searchLogs = extractAuditQueryLogs(payload, view);
+                          const searchSummary = view === "self_company" ? null : buildAuditSearchSummary(searchLogs);
+
+                          return (
+                            <section className="audit-news-view-section" key={`${payload.run_id}:${view}`}>
+                              <header className="audit-news-view-header">
+                                <h4>{auditSectionLabel(view)}</h4>
+                                <span className={`priority-chip ${alerts.length > 0 ? "medium" : "low"}`}>
+                                  {alerts.length}件
+                                </span>
+                              </header>
+                              {searchSummary && <p className="audit-news-view-summary">{searchSummary}</p>}
+                              {alerts.length > 0 ? (
+                                alerts.map((alert) => {
+                                  const key = `${payload.run_id}:${alert.item_id}`;
+                                  return (
+                                    <AuditNewsCard
+                                      key={key}
+                                      runId={payload.run_id}
+                                      alert={alert}
+                                      selectedDecision={auditFeedback[key]}
+                                      disabled={Boolean(auditFeedback[key])}
+                                      onSubmitDecision={(decision, currentAlert) => {
+                                        void onSubmitAuditDecision(payload.run_id, currentAlert, decision);
+                                      }}
+                                    />
+                                  );
+                                })
+                              ) : (
+                                <section className="audit-news-card audit-news-empty-card">
+                                  <header className="audit-news-card-header">
+                                    <h4>{auditSectionLabel(view)}: 該当ニュースなし</h4>
+                                    <span className="priority-chip low">NO NEWS</span>
+                                  </header>
+                                  <p className="audit-news-line">探索結果は0件でした。</p>
+                                  {view !== "self_company" && (
+                                    <p className="audit-news-line">
+                                      <strong>探索サマリ:</strong> {searchSummary ?? "探索ログなし（クエリ未記録）"}
+                                    </p>
+                                  )}
+                                  {view !== "self_company" && (
+                                    <div className="audit-news-strategy">
+                                      <strong>探索戦略:</strong>
+                                      {searchLogs.length === 0 ? (
+                                        <p className="audit-news-line">実行ログなし（探索未実施または取得失敗）</p>
+                                      ) : (
+                                        <ul>
+                                          {searchLogs.map((row, rowIndex) => (
+                                            <li key={`${payload.run_id}:${view}:query:${rowIndex}`}>
+                                              [{row.stage}] {row.query || "(queryなし)"} - 取得{" "}
+                                              {typeof row.hits === "number" ? `${row.hits}件` : "不明"}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                    </div>
+                                  )}
+                                </section>
+                              )}
+                            </section>
+                          );
+                        });
                       }
                       const items = normalizeAuditNewsItems(payload);
                       if (items.length === 0) {

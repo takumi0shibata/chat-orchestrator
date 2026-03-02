@@ -71,6 +71,24 @@ export interface AuditNewsViewItemV2 {
   macro_subtype?: "regulation" | "policy" | "market" | "commodity" | "fx" | "rates";
 }
 
+export interface AuditNewsQueryLogV2 {
+  stage: string;
+  query: string;
+  hits: number;
+}
+
+export interface AuditNewsDebugStatsV2 {
+  raw_counts_by_view?: Record<string, number>;
+  deduped_counts_by_view?: Record<string, number>;
+  supplemental_runs_by_view?: Record<string, number>;
+  dropped_duplicates_by_view?: Record<string, number>;
+  query_logs_by_view?: {
+    self_company?: AuditNewsQueryLogV2[];
+    peer_companies?: AuditNewsQueryLogV2[];
+    macro?: AuditNewsQueryLogV2[];
+  };
+}
+
 export interface AuditNewsPayloadV2 {
   schema: "audit_news_action_brief/v2";
   run_id: string;
@@ -88,6 +106,7 @@ export interface AuditNewsPayloadV2 {
     peer_companies: AuditNewsViewItemV2[];
     macro: AuditNewsViewItemV2[];
   };
+  debug_stats?: AuditNewsDebugStatsV2;
 }
 
 export interface AuditNewsMetricsResponse {

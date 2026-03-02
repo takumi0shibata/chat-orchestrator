@@ -339,6 +339,36 @@ body {
   padding: 10px;
 }
 
+.audit-news-view-section {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #2a3242;
+}
+
+.audit-news-view-section:first-of-type {
+  margin-top: 10px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.audit-news-view-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.audit-news-view-header h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.audit-news-view-summary {
+  margin: 6px 0 0;
+  color: #aab5ca;
+  font-size: 12px;
+}
+
 .audit-news-card {
   margin-top: 10px;
   border: 1px solid #394258;
@@ -415,6 +445,21 @@ body {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.audit-news-strategy {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #d0d8ea;
+}
+
+.audit-news-strategy ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.audit-news-strategy li {
+  margin: 3px 0;
 }
 
 .audit-action-btn {

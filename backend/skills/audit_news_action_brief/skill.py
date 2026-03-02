@@ -618,7 +618,10 @@ class AuditNewsActionBriefSkill(Skill):
     ) -> list[str]:
         if not items:
             if search_summary and view_label in {"peer_companies", "macro"}:
-                return [f"- 該当ニュースは見つかりませんでした（{search_summary}）。"]
+                return [
+                    "- 該当ニュースは見つかりませんでした（探索結果: 0件）。",
+                    f"- 探索ログ: {search_summary}。",
+                ]
             return ["- 該当ニュースは見つかりませんでした。"]
         lines: list[str] = []
         for idx, row in enumerate(items, start=1):
@@ -640,9 +643,10 @@ class AuditNewsActionBriefSkill(Skill):
         if view_label not in {"peer_companies", "macro"}:
             return None
         if not isinstance(query_logs, list):
-            return "探索ログなし"
+            return "探索ログなし（クエリ未記録）"
         primary_count = 0
         supplemental_count = 0
+        query_texts: list[str] = []
         for row in query_logs:
             if not isinstance(row, dict):
                 continue
@@ -651,8 +655,19 @@ class AuditNewsActionBriefSkill(Skill):
                 primary_count += 1
             elif stage == "supplemental":
                 supplemental_count += 1
+            query = str(row.get("query") or "").strip()
+            if query:
+                query_texts.append(query)
         total = primary_count + supplemental_count
-        return f"探索クエリ{total}本（primary {primary_count}本, supplemental {supplemental_count}本）を実行"
+        summary = f"探索クエリ{total}本（primary {primary_count}本, supplemental {supplemental_count}本）を実行"
+        if query_texts:
+            shown = query_texts[:2]
+            rendered = " / ".join(shown)
+            remain = len(query_texts) - len(shown)
+            if remain > 0:
+                rendered = f"{rendered} / ...(+{remain})"
+            summary = f"{summary}。クエリ: {rendered}"
+        return summary
 
     def _render_search_strategy(self, *, query_logs_by_view: Any) -> list[str]:
         labels = {
@@ -665,9 +680,10 @@ class AuditNewsActionBriefSkill(Skill):
             label = labels[view]
             logs = query_logs_by_view.get(view) if isinstance(query_logs_by_view, dict) else None
             if not isinstance(logs, list) or not logs:
-                lines.append(f"- {label}: 実行ログなし")
+                lines.append(f"- {label}: 実行ログなし（探索未実施または取得失敗）")
                 continue
             lines.append(f"- {label}:")
+            rendered = 0
             for idx, row in enumerate(logs, start=1):
                 if not isinstance(row, dict):
                     continue
@@ -676,6 +692,9 @@ class AuditNewsActionBriefSkill(Skill):
                 hits = row.get("hits")
                 hits_text = f"{hits}件" if isinstance(hits, int) else "不明"
                 lines.append(f"  {idx}. [{stage}] {query} -> 取得 {hits_text}")
+                rendered += 1
+            if rendered == 0:
+                lines.append("  - 有効な探索ログなし")
         return lines
 
     def _build_news_id(self, *, item: NewsCandidate) -> str:
