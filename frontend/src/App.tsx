@@ -55,6 +55,7 @@ type SkillChartPayload = {
 const BOJ_CHART_SCHEMA = "boj_timeseries_chart/v1";
 const AUDIT_NEWS_SCHEMA_V1 = "audit_news_action_brief/v1";
 const AUDIT_NEWS_SCHEMA_V2 = "audit_news_action_brief/v2";
+const AUDIT_NEWS_SKILL_ID = "audit_news_action_brief";
 
 type NormalizedAuditNewsItem = {
   item_id: string;
@@ -934,6 +935,7 @@ export function App() {
       setError(`${selectedModel.providerLabel} のAPIキーが設定されていません`);
       return;
     }
+    const requestedSkillId = skillId || "";
 
     setLoading(true);
     setError("");
@@ -987,6 +989,15 @@ export function App() {
           const next = [...prev];
           const lastIndex = next.length - 1;
           if (lastIndex >= 0 && next[lastIndex].role === "assistant") {
+            if (requestedSkillId === AUDIT_NEWS_SKILL_ID) {
+              const merged = [next[lastIndex].content, skillOutput].filter((item) => item && item.trim()).join("\n\n");
+              next[lastIndex] = {
+                ...next[lastIndex],
+                content: merged
+              };
+              return next;
+            }
+
             const chartParsed = extractChartPayload(skillOutput);
             if (chartParsed.chart) {
               next[lastIndex] = {
@@ -1008,7 +1019,7 @@ export function App() {
               };
             }
             // Default behavior: do not render raw skill output in chat UI.
-            // Exception skills can enrich message content above (e.g., chart block injection).
+            // Exception skills can enrich message content above.
           }
           return next;
         });
