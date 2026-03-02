@@ -62,11 +62,19 @@ type NormalizedAuditNewsItem = {
   source: string;
   published_at: string;
   score: number;
+  view: "self_company" | "peer_companies" | "macro" | "legacy";
   summary: string;
   one_liner_comment: string;
   propagation_note: string;
   url: string;
 };
+
+function auditViewLabel(view: NormalizedAuditNewsItem["view"]): string {
+  if (view === "self_company") return "自社";
+  if (view === "peer_companies") return "他社";
+  if (view === "macro") return "マクロ";
+  return "legacy";
+}
 
 function PlusIcon() {
   return (
@@ -462,6 +470,7 @@ function normalizeAuditNewsItems(payload: AuditNewsPayloadV1 | AuditNewsPayloadV
       source: item.source,
       published_at: item.published_at,
       score: item.score,
+      view: item.view,
       summary: item.summary,
       one_liner_comment: item.one_liner_comment,
       propagation_note: item.propagation_note,
@@ -474,6 +483,7 @@ function normalizeAuditNewsItems(payload: AuditNewsPayloadV1 | AuditNewsPayloadV
     source: item.source,
     published_at: item.published_at,
     score: item.score,
+    view: "legacy",
     summary: item.impact_hypothesis,
     one_liner_comment: item.recommended_audit_action,
     propagation_note: item.impact_hypothesis,
@@ -563,7 +573,7 @@ function AuditNewsCard(props: {
     <section className="audit-news-card" data-run-id={runId} data-alert-id={alert.item_id}>
       <header className="audit-news-card-header">
         <h4>{alert.title}</h4>
-        <span className="priority-chip medium">NEWS</span>
+        <span className="priority-chip medium">{auditViewLabel(alert.view)}</span>
       </header>
       <p className="audit-news-meta">
         {alert.source} • {alert.published_at} • score={alert.score}
@@ -928,9 +938,11 @@ export function App() {
               const auditBlock = auditParsed.payload
                 ? `\`\`\`audit-news-json\n${JSON.stringify(auditParsed.payload)}\n\`\`\``
                 : (skillOutput.match(/```audit-news-json\s*\n[\s\S]*?```/)?.[0] ?? "");
+              const auditText = auditParsed.contentWithoutAuditBlock.trim();
+              const merged = [next[lastIndex].content, auditText, auditBlock].filter((item) => item && item.trim()).join("\n\n");
               next[lastIndex] = {
                 ...next[lastIndex],
-                content: `${next[lastIndex].content}\n\n${auditBlock}`
+                content: merged
               };
             }
             // Default behavior: do not render raw skill output in chat UI.
