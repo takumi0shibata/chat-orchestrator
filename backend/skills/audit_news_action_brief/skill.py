@@ -254,6 +254,9 @@ class AuditNewsActionBriefSkill(Skill):
         if rows is None:
             logger.warning("_search_category JSON parse failed: view=%s, raw_len=%d, raw_preview=%.200s", view, len(raw), raw)
             return []
+        if not rows:
+            logger.warning("_search_category EMPTY array: view=%s", view)
+            return []
 
         out: list[NewsItemV3] = []
         seen_urls: set[str] = set()

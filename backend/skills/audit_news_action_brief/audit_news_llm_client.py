@@ -31,6 +31,85 @@ def _resolve_credentials(provider_id: str) -> tuple[str, str | None]:
     return api_key, None
 
 
+def _to_jsonable(node: Any) -> Any:
+    if hasattr(node, "model_dump"):
+        try:
+            return _to_jsonable(node.model_dump())
+        except Exception:
+            return node
+    if isinstance(node, dict):
+        return {str(key): _to_jsonable(value) for key, value in node.items()}
+    if isinstance(node, (list, tuple)):
+        return [_to_jsonable(item) for item in node]
+    return node
+
+
+def _coerce_text_value(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("value", "text", "output_text"):
+            nested = value.get(key)
+            if isinstance(nested, str):
+                return nested
+    return None
+
+
+def _summarize_output_types(payload: dict[str, Any]) -> list[str]:
+    output = payload.get("output")
+    if not isinstance(output, list):
+        return []
+    out: list[str] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        output_type = item.get("type")
+        if isinstance(output_type, str) and output_type not in out:
+            out.append(output_type)
+    return out[:8]
+
+
+def _extract_response_text(response: Any) -> tuple[str, list[str]]:
+    direct = getattr(response, "output_text", None)
+    payload = _to_jsonable(response)
+    if not isinstance(payload, dict):
+        return (direct if isinstance(direct, str) else ""), []
+
+    output_types = _summarize_output_types(payload)
+    if isinstance(direct, str) and direct.strip():
+        return direct, output_types
+
+    segments: list[str] = []
+    output = payload.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type in (None, "message", "output_text", "text"):
+                for key in ("output_text", "text"):
+                    text = _coerce_text_value(item.get(key))
+                    if isinstance(text, str) and text.strip():
+                        segments.append(text)
+
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            for content_item in content:
+                if not isinstance(content_item, dict):
+                    continue
+                content_type = content_item.get("type")
+                if content_type not in (None, "output_text", "text"):
+                    continue
+                for key in ("output_text", "text"):
+                    text = _coerce_text_value(content_item.get(key))
+                    if isinstance(text, str) and text.strip():
+                        segments.append(text)
+
+    fallback_text = "\n".join(segments).strip()
+    return fallback_text, output_types
+
+
 async def run_json_prompt_with_web(
     *,
     provider_id: str,
@@ -68,8 +147,13 @@ async def run_json_prompt_with_web(
                     await asyncio.sleep(wait_sec)
                 response = await client.responses.create(**kwargs)
                 _LAST_REQUEST_TS = monotonic()
-            result = getattr(response, "output_text", "") or ""
-            logger.info("run_json_prompt_with_web OK: model=%s, response_len=%d", model, len(result))
+            result, output_types = _extract_response_text(response)
+            if not result:
+                logger.warning(
+                    "run_json_prompt_with_web empty text: provider=%s, model=%s, output_types=%s",
+                    provider_id, model, ",".join(output_types) if output_types else "none",
+                )
+            logger.info("run_json_prompt_with_web OK: provider=%s, model=%s, response_len=%d", provider_id, model, len(result))
             return result
         except Exception as exc:
             status_code = getattr(exc, "status_code", None)
@@ -125,8 +209,13 @@ async def run_json_prompt(
                     await asyncio.sleep(wait_sec)
                 response = await client.responses.create(**kwargs)
                 _LAST_REQUEST_TS = monotonic()
-            result = getattr(response, "output_text", "") or ""
-            logger.info("run_json_prompt OK: model=%s, response_len=%d", model, len(result))
+            result, output_types = _extract_response_text(response)
+            if not result:
+                logger.warning(
+                    "run_json_prompt empty text: provider=%s, model=%s, output_types=%s",
+                    provider_id, model, ",".join(output_types) if output_types else "none",
+                )
+            logger.info("run_json_prompt OK: provider=%s, model=%s, response_len=%d", provider_id, model, len(result))
             return result
         except Exception as exc:
             status_code = getattr(exc, "status_code", None)
