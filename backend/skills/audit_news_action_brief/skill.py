@@ -158,8 +158,13 @@ class AuditNewsActionBriefSkill(Skill):
                 "deduped_counts_by_view": deduped_counts,
                 "supplemental_runs_by_view": collect_stats["supplemental_runs_by_view"],
                 "dropped_duplicates_by_view": dropped_dup_by_view,
+                "query_logs_by_view": collect_stats.get(
+                    "query_logs_by_view",
+                    {"self_company": [], "peer_companies": [], "macro": []},
+                ),
             },
         }
+        query_logs_by_view = payload["debug_stats"]["query_logs_by_view"]
 
         lines = [
             "監査アクションニュースブリーフ v2",
@@ -176,9 +181,29 @@ class AuditNewsActionBriefSkill(Skill):
         ]
         lines.extend(self._render_view_items(view_items["self_company"], view_label="self_company"))
         lines.extend(["", "## 他社"])
-        lines.extend(self._render_view_items(view_items["peer_companies"], view_label="peer_companies"))
+        lines.extend(
+            self._render_view_items(
+                view_items["peer_companies"],
+                view_label="peer_companies",
+                search_summary=self._build_search_absence_summary(
+                    query_logs=query_logs_by_view.get("peer_companies"),
+                    view_label="peer_companies",
+                ),
+            )
+        )
         lines.extend(["", "## マクロ"])
-        lines.extend(self._render_view_items(view_items["macro"], view_label="macro"))
+        lines.extend(
+            self._render_view_items(
+                view_items["macro"],
+                view_label="macro",
+                search_summary=self._build_search_absence_summary(
+                    query_logs=query_logs_by_view.get("macro"),
+                    view_label="macro",
+                ),
+            )
+        )
+        lines.extend(["", "## 探索戦略（デバッグ）"])
+        lines.extend(self._render_search_strategy(query_logs_by_view=query_logs_by_view))
 
         total_after_filter = sum(len(rows) for rows in view_items.values())
         lines.extend(
@@ -278,18 +303,19 @@ class AuditNewsActionBriefSkill(Skill):
 
         gathered: list[NewsCandidate] = []
         supplemental_runs = {"self_company": 0, "peer_companies": 0, "macro": 0}
+        query_logs: dict[str, list[dict[str, Any]]] = {"self_company": [], "peer_companies": [], "macro": []}
         for view, queries in primary_queries.items():
             for query in queries[: self._PRIMARY_QUERIES_PER_VIEW]:
-                gathered.extend(
-                    await self._search_view_news(
-                        view=view,
-                        query=query,
-                        parsed=parsed,
-                        provider_id=provider_id,
-                        model=model,
-                        max_items=self._MAX_ITEMS_PER_QUERY,
-                    )
+                rows = await self._search_view_news(
+                    view=view,
+                    query=query,
+                    parsed=parsed,
+                    provider_id=provider_id,
+                    model=model,
+                    max_items=self._MAX_ITEMS_PER_QUERY,
                 )
+                query_logs[view].append({"stage": "primary", "query": query, "hits": len(rows)})
+                gathered.extend(rows)
 
         filtered, _, _, _ = self._filter_and_dedupe(candidates=gathered, cutoff=cutoff)
         counts = self._count_per_view(filtered)
@@ -300,16 +326,16 @@ class AuditNewsActionBriefSkill(Skill):
             supplemental_queries = self._build_supplemental_queries(parsed=parsed, hypotheses=hypotheses, view=view)
             for query in supplemental_queries[: self._SUPPLEMENTAL_QUERIES_PER_VIEW]:
                 supplemental_runs[view] += 1
-                gathered.extend(
-                    await self._search_view_news(
-                        view=view,
-                        query=query,
-                        parsed=parsed,
-                        provider_id=provider_id,
-                        model=model,
-                        max_items=self._MAX_ITEMS_PER_QUERY,
-                    )
+                rows = await self._search_view_news(
+                    view=view,
+                    query=query,
+                    parsed=parsed,
+                    provider_id=provider_id,
+                    model=model,
+                    max_items=self._MAX_ITEMS_PER_QUERY,
                 )
+                query_logs[view].append({"stage": "supplemental", "query": query, "hits": len(rows)})
+                gathered.extend(rows)
                 filtered, _, _, _ = self._filter_and_dedupe(candidates=gathered, cutoff=cutoff)
                 counts = self._count_per_view(filtered)
                 if counts.get(view, 0) >= self._MIN_ITEMS_PER_VIEW:
@@ -318,6 +344,7 @@ class AuditNewsActionBriefSkill(Skill):
         return gathered, {
             "raw_counts_by_view": self._count_per_view(gathered),
             "supplemental_runs_by_view": supplemental_runs,
+            "query_logs_by_view": query_logs,
         }
 
     async def _search_view_news(
@@ -582,8 +609,16 @@ class AuditNewsActionBriefSkill(Skill):
 
         return view_items
 
-    def _render_view_items(self, items: list[dict[str, Any]], *, view_label: str) -> list[str]:
+    def _render_view_items(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        view_label: str,
+        search_summary: str | None = None,
+    ) -> list[str]:
         if not items:
+            if search_summary and view_label in {"peer_companies", "macro"}:
+                return [f"- 該当ニュースは見つかりませんでした（{search_summary}）。"]
             return ["- 該当ニュースは見つかりませんでした。"]
         lines: list[str] = []
         for idx, row in enumerate(items, start=1):
@@ -599,6 +634,48 @@ class AuditNewsActionBriefSkill(Skill):
                     f"- 波及メモ: {row.get('propagation_note', '')}",
                 ]
             )
+        return lines
+
+    def _build_search_absence_summary(self, *, query_logs: Any, view_label: str) -> str | None:
+        if view_label not in {"peer_companies", "macro"}:
+            return None
+        if not isinstance(query_logs, list):
+            return "探索ログなし"
+        primary_count = 0
+        supplemental_count = 0
+        for row in query_logs:
+            if not isinstance(row, dict):
+                continue
+            stage = str(row.get("stage") or "")
+            if stage == "primary":
+                primary_count += 1
+            elif stage == "supplemental":
+                supplemental_count += 1
+        total = primary_count + supplemental_count
+        return f"探索クエリ{total}本（primary {primary_count}本, supplemental {supplemental_count}本）を実行"
+
+    def _render_search_strategy(self, *, query_logs_by_view: Any) -> list[str]:
+        labels = {
+            "self_company": "自社",
+            "peer_companies": "他社",
+            "macro": "マクロ",
+        }
+        lines: list[str] = []
+        for view in ("self_company", "peer_companies", "macro"):
+            label = labels[view]
+            logs = query_logs_by_view.get(view) if isinstance(query_logs_by_view, dict) else None
+            if not isinstance(logs, list) or not logs:
+                lines.append(f"- {label}: 実行ログなし")
+                continue
+            lines.append(f"- {label}:")
+            for idx, row in enumerate(logs, start=1):
+                if not isinstance(row, dict):
+                    continue
+                stage = str(row.get("stage") or "unknown")
+                query = str(row.get("query") or "").strip()
+                hits = row.get("hits")
+                hits_text = f"{hits}件" if isinstance(hits, int) else "不明"
+                lines.append(f"  {idx}. [{stage}] {query} -> 取得 {hits_text}")
         return lines
 
     def _build_news_id(self, *, item: NewsCandidate) -> str:

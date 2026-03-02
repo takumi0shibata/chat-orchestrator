@@ -37,8 +37,8 @@ async def _fake_generate_hypotheses(self, *, parsed, provider_id, model):
     }
 
 
-async def _fake_collect_with_noise(self, *, parsed, hypotheses, provider_id, model):
-    del self, parsed, hypotheses, provider_id, model
+async def _fake_collect_with_noise(self, *, parsed, hypotheses, provider_id, model, cutoff):
+    del self, parsed, hypotheses, provider_id, model, cutoff
     now = datetime.now(UTC)
     rows = [
         NewsCandidate(
@@ -111,11 +111,19 @@ async def _fake_collect_with_noise(self, *, parsed, hypotheses, provider_id, mod
     return rows, {
         "raw_counts_by_view": {"self_company": 1, "peer_companies": 2, "macro": 3},
         "supplemental_runs_by_view": {"self_company": 0, "peer_companies": 1, "macro": 0},
+        "query_logs_by_view": {
+            "self_company": [{"stage": "primary", "query": "self-q", "hits": 1}],
+            "peer_companies": [
+                {"stage": "primary", "query": "peer-q", "hits": 2},
+                {"stage": "supplemental", "query": "peer-sup", "hits": 0},
+            ],
+            "macro": [{"stage": "primary", "query": "macro-q", "hits": 3}],
+        },
     }
 
 
-async def _fake_collect_many(self, *, parsed, hypotheses, provider_id, model):
-    del self, parsed, hypotheses, provider_id, model
+async def _fake_collect_many(self, *, parsed, hypotheses, provider_id, model, cutoff):
+    del self, parsed, hypotheses, provider_id, model, cutoff
     now = datetime.now(UTC)
     rows: list[NewsCandidate] = []
     for i in range(10):
@@ -161,6 +169,11 @@ async def _fake_collect_many(self, *, parsed, hypotheses, provider_id, model):
     return rows, {
         "raw_counts_by_view": {"self_company": 10, "peer_companies": 10, "macro": 10},
         "supplemental_runs_by_view": {"self_company": 0, "peer_companies": 0, "macro": 0},
+        "query_logs_by_view": {
+            "self_company": [{"stage": "primary", "query": "self-q", "hits": 10}],
+            "peer_companies": [{"stage": "primary", "query": "peer-q", "hits": 10}],
+            "macro": [{"stage": "primary", "query": "macro-q", "hits": 10}],
+        },
     }
 
 
@@ -231,6 +244,7 @@ def test_skill_outputs_v2_views_and_filters_noise() -> None:
         "deduped_counts_by_view",
         "supplemental_runs_by_view",
         "dropped_duplicates_by_view",
+        "query_logs_by_view",
     }
 
     total = sum(len(payload["views"][key]) for key in ("self_company", "peer_companies", "macro"))
@@ -442,3 +456,68 @@ def test_macro_and_peer_queries_do_not_embed_client_name() -> None:
     )
     assert all(parsed.client_name not in q for q in queries["peer_companies"])
     assert all(parsed.client_name not in q for q in queries["macro"])
+
+
+def test_output_marks_absence_for_peer_and_macro_with_search_summary() -> None:
+    skill = AuditNewsActionBriefSkill()
+    skill._parse_request = types.MethodType(_fake_parse_ok, skill)
+    skill._generate_hypotheses = types.MethodType(_fake_generate_hypotheses, skill)
+
+    async def _fake_collect_only_self(self, *, parsed, hypotheses, provider_id, model, cutoff):
+        del self, parsed, hypotheses, provider_id, model, cutoff
+        now = datetime.now(UTC)
+        rows = [
+            NewsCandidate(
+                title="A食品、価格改定を発表",
+                url="https://example.com/self-only",
+                source="Example",
+                published_at=now - timedelta(days=1),
+                summary="自社関連のみ。",
+                one_liner_comment="コメント。",
+                propagation_note="波及。",
+                view="self_company",
+                macro_subtype=None,
+            ),
+            NewsCandidate(
+                title="A食品、在庫戦略を更新",
+                url="https://example.com/self-only-2",
+                source="Example",
+                published_at=now - timedelta(days=2),
+                summary="自社関連のみ。",
+                one_liner_comment="コメント。",
+                propagation_note="波及。",
+                view="self_company",
+                macro_subtype=None,
+            ),
+        ]
+        return rows, {
+            "raw_counts_by_view": {"self_company": 2, "peer_companies": 0, "macro": 0},
+            "supplemental_runs_by_view": {"self_company": 0, "peer_companies": 1, "macro": 1},
+            "query_logs_by_view": {
+                "self_company": [{"stage": "primary", "query": "self-q", "hits": 2}],
+                "peer_companies": [
+                    {"stage": "primary", "query": "peer-q", "hits": 0},
+                    {"stage": "supplemental", "query": "peer-sup", "hits": 0},
+                ],
+                "macro": [
+                    {"stage": "primary", "query": "macro-q", "hits": 0},
+                    {"stage": "supplemental", "query": "macro-sup", "hits": 0},
+                ],
+            },
+        }
+
+    skill._collect_news_candidates = types.MethodType(_fake_collect_only_self, skill)
+
+    output = asyncio.run(
+        skill.run(
+            user_text="A食品株式会社の監査ニュース",
+            history=[],
+            skill_context={"provider_id": "openai", "model": "gpt-5.2-2025-12-11"},
+        )
+    )
+
+    assert "## 他社" in output
+    assert "## マクロ" in output
+    assert "他社" in output and "探索クエリ2本（primary 1本, supplemental 1本）を実行" in output
+    assert "マクロ" in output and "探索クエリ2本（primary 1本, supplemental 1本）を実行" in output
+    assert "## 探索戦略（デバッグ）" in output
