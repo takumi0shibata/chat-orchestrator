@@ -74,7 +74,7 @@ class AuditNewsActionBriefSkill(Skill):
     _PRIMARY_QUERIES_PER_VIEW = 2
     _SUPPLEMENTAL_QUERIES_PER_VIEW = 1
     _MAX_ITEMS_PER_QUERY = 4
-    _MIN_ITEMS_PER_VIEW = 4
+    _MIN_ITEMS_PER_VIEW = 2
     _MAX_ITEMS_PER_VIEW_OUTPUT = 8
     _MAX_LOOKBACK_DAYS = 30
     _MAX_TOTAL_TARGET = 24
@@ -123,41 +123,22 @@ class AuditNewsActionBriefSkill(Skill):
         run_id = str(uuid4())
 
         hypotheses = await self._generate_hypotheses(parsed=parsed, provider_id=provider_id, model=model)
-        candidates = await self._collect_news_candidates(
+        candidates, collect_stats = await self._collect_news_candidates(
             parsed=parsed,
             hypotheses=hypotheses,
             provider_id=provider_id,
             model=model,
+            cutoff=cutoff,
         )
 
-        filtered, dropped_old, dropped_dup = self._filter_and_dedupe(candidates=candidates, cutoff=cutoff)
+        filtered, dropped_old, dropped_dup, dropped_dup_by_view = self._filter_and_dedupe(candidates=candidates, cutoff=cutoff)
+        deduped_counts = self._count_per_view(filtered)
 
         scored: list[dict[str, Any]] = []
         for item in filtered:
             scored.append(self._build_news_item(item=item, parsed=parsed))
 
-        view_items = {
-            "self_company": [],
-            "peer_companies": [],
-            "macro": [],
-        }
-        scored.sort(key=lambda row: int(row.get("score", 0)), reverse=True)
-        for row in scored:
-            view = str(row.get("view") or "")
-            if view not in view_items:
-                continue
-            if len(view_items[view]) >= self._MAX_ITEMS_PER_VIEW_OUTPUT:
-                continue
-            view_items[view].append(row)
-
-        # Keep result size centered around the deep-standard target range.
-        total_count = sum(len(rows) for rows in view_items.values())
-        if total_count > self._MAX_TOTAL_TARGET:
-            merged = [*view_items["self_company"], *view_items["peer_companies"], *view_items["macro"]]
-            merged.sort(key=lambda row: int(row.get("score", 0)), reverse=True)
-            keep_ids = {row["news_id"] for row in merged[: self._MAX_TOTAL_TARGET] if isinstance(row.get("news_id"), str)}
-            for view in view_items:
-                view_items[view] = [row for row in view_items[view] if row.get("news_id") in keep_ids]
+        view_items = self._build_view_items(scored)
 
         payload = {
             "schema": "audit_news_action_brief/v2",
@@ -172,6 +153,12 @@ class AuditNewsActionBriefSkill(Skill):
                 "research_profile": self._RESEARCH_PROFILE,
             },
             "views": view_items,
+            "debug_stats": {
+                "raw_counts_by_view": collect_stats["raw_counts_by_view"],
+                "deduped_counts_by_view": deduped_counts,
+                "supplemental_runs_by_view": collect_stats["supplemental_runs_by_view"],
+                "dropped_duplicates_by_view": dropped_dup_by_view,
+            },
         }
 
         lines = [
@@ -285,10 +272,12 @@ class AuditNewsActionBriefSkill(Skill):
         hypotheses: dict[str, list[str]],
         provider_id: str,
         model: str,
-    ) -> list[NewsCandidate]:
+        cutoff: datetime,
+    ) -> tuple[list[NewsCandidate], dict[str, Any]]:
         primary_queries = self._build_primary_queries(parsed=parsed, hypotheses=hypotheses)
 
         gathered: list[NewsCandidate] = []
+        supplemental_runs = {"self_company": 0, "peer_companies": 0, "macro": 0}
         for view, queries in primary_queries.items():
             for query in queries[: self._PRIMARY_QUERIES_PER_VIEW]:
                 gathered.extend(
@@ -302,8 +291,7 @@ class AuditNewsActionBriefSkill(Skill):
                     )
                 )
 
-        cutoff = datetime.now(UTC) - timedelta(days=max(1, min(parsed.lookback_days, self._MAX_LOOKBACK_DAYS)))
-        filtered, _, _ = self._filter_and_dedupe(candidates=gathered, cutoff=cutoff)
+        filtered, _, _, _ = self._filter_and_dedupe(candidates=gathered, cutoff=cutoff)
         counts = self._count_per_view(filtered)
 
         for view in ("self_company", "peer_companies", "macro"):
@@ -311,6 +299,7 @@ class AuditNewsActionBriefSkill(Skill):
                 continue
             supplemental_queries = self._build_supplemental_queries(parsed=parsed, hypotheses=hypotheses, view=view)
             for query in supplemental_queries[: self._SUPPLEMENTAL_QUERIES_PER_VIEW]:
+                supplemental_runs[view] += 1
                 gathered.extend(
                     await self._search_view_news(
                         view=view,
@@ -321,8 +310,15 @@ class AuditNewsActionBriefSkill(Skill):
                         max_items=self._MAX_ITEMS_PER_QUERY,
                     )
                 )
+                filtered, _, _, _ = self._filter_and_dedupe(candidates=gathered, cutoff=cutoff)
+                counts = self._count_per_view(filtered)
+                if counts.get(view, 0) >= self._MIN_ITEMS_PER_VIEW:
+                    break
 
-        return gathered
+        return gathered, {
+            "raw_counts_by_view": self._count_per_view(gathered),
+            "supplemental_runs_by_view": supplemental_runs,
+        }
 
     async def _search_view_news(
         self,
@@ -425,7 +421,7 @@ class AuditNewsActionBriefSkill(Skill):
                 f"{parsed.client_industry} 市況 シェア 価格改定 競争環境",
             ],
             "macro": [
-                f"{parsed.client_industry} 金利 為替 原材料価格 関税 景気 指標 {parsed.client_name} 影響",
+                f"{parsed.client_industry} 金利 為替 原材料価格 関税 景気 指標 企業業績 監査",
                 f"{parsed.client_industry} 政策変更 規制変更 会計基準 開示制度 金融庁",
                 f"{parsed.client_industry} 需給 物流 エネルギーコスト インフレ",
             ],
@@ -464,8 +460,8 @@ class AuditNewsActionBriefSkill(Skill):
                 f"{parsed.client_industry} 競合 監査 注目 開示 リスク {hint_text}",
             ]
         return [
-            f"{parsed.client_industry} 規制 政策 速報 {parsed.client_name} 影響 監査 {hint_text}",
-            f"{parsed.client_industry} マクロ 指標 為替 金利 原料 市況 {parsed.client_name}",
+            f"{parsed.client_industry} 規制 政策 速報 監査 開示 影響 {hint_text}",
+            f"{parsed.client_industry} マクロ 指標 為替 金利 原料 市況 企業影響",
         ]
 
     def _count_per_view(self, candidates: list[NewsCandidate]) -> dict[str, int]:
@@ -480,29 +476,32 @@ class AuditNewsActionBriefSkill(Skill):
         *,
         candidates: list[NewsCandidate],
         cutoff: datetime,
-    ) -> tuple[list[NewsCandidate], int, int]:
+    ) -> tuple[list[NewsCandidate], int, int, dict[str, int]]:
         dropped_old = 0
         dropped_dup = 0
+        dropped_dup_by_view = {"self_company": 0, "peer_companies": 0, "macro": 0}
         out: list[NewsCandidate] = []
-        seen_urls: set[str] = set()
-        seen_titles: set[str] = set()
+        seen_urls = {"self_company": set(), "peer_companies": set(), "macro": set()}
+        seen_titles = {"self_company": set(), "peer_companies": set(), "macro": set()}
 
         for row in candidates:
             if row.published_at is not None and row.published_at < cutoff:
                 dropped_old += 1
                 continue
 
+            view = row.view if row.view in seen_urls else "self_company"
             normalized_url = self._normalize_url(row.url)
             normalized_title = self._normalize_title(row.title)
-            if normalized_url in seen_urls or normalized_title in seen_titles:
+            if normalized_url in seen_urls[view] or normalized_title in seen_titles[view]:
                 dropped_dup += 1
+                dropped_dup_by_view[view] += 1
                 continue
 
-            seen_urls.add(normalized_url)
-            seen_titles.add(normalized_title)
+            seen_urls[view].add(normalized_url)
+            seen_titles[view].add(normalized_title)
             out.append(row)
 
-        return out, dropped_old, dropped_dup
+        return out, dropped_old, dropped_dup, dropped_dup_by_view
 
     def _build_news_item(self, *, item: NewsCandidate, parsed: ParsedRequest) -> dict[str, Any]:
         days_old = 4
@@ -510,12 +509,7 @@ class AuditNewsActionBriefSkill(Skill):
             days_old = max(0, (datetime.now(UTC) - item.published_at).days)
 
         score = 42 + max(0, 18 - min(days_old, 18))
-        if item.view == "macro":
-            score += 12
-        elif item.view == "peer_companies":
-            score += 10
-        else:
-            score += 8
+        score += 9
 
         if self._is_trusted_source(item.url):
             score += 8
@@ -547,6 +541,46 @@ class AuditNewsActionBriefSkill(Skill):
         if item.view == "macro" and item.macro_subtype:
             output["macro_subtype"] = item.macro_subtype
         return output
+
+    def _build_view_items(self, scored: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+        buckets: dict[str, list[dict[str, Any]]] = {"self_company": [], "peer_companies": [], "macro": []}
+        for row in scored:
+            view = str(row.get("view") or "")
+            if view in buckets:
+                buckets[view].append(row)
+
+        for view in buckets:
+            buckets[view].sort(key=lambda row: int(row.get("score", 0)), reverse=True)
+
+        view_items: dict[str, list[dict[str, Any]]] = {"self_company": [], "peer_companies": [], "macro": []}
+        selected_ids: set[str] = set()
+        for view in ("self_company", "peer_companies", "macro"):
+            for row in buckets[view]:
+                if len(view_items[view]) >= self._MIN_ITEMS_PER_VIEW:
+                    break
+                news_id = row.get("news_id")
+                if not isinstance(news_id, str) or news_id in selected_ids:
+                    continue
+                view_items[view].append(row)
+                selected_ids.add(news_id)
+
+        merged = [*buckets["self_company"], *buckets["peer_companies"], *buckets["macro"]]
+        merged.sort(key=lambda row: int(row.get("score", 0)), reverse=True)
+        for row in merged:
+            news_id = row.get("news_id")
+            view = str(row.get("view") or "")
+            if view not in view_items:
+                continue
+            if not isinstance(news_id, str) or news_id in selected_ids:
+                continue
+            if len(view_items[view]) >= self._MAX_ITEMS_PER_VIEW_OUTPUT:
+                continue
+            if sum(len(rows) for rows in view_items.values()) >= self._MAX_TOTAL_TARGET:
+                break
+            view_items[view].append(row)
+            selected_ids.add(news_id)
+
+        return view_items
 
     def _render_view_items(self, items: list[dict[str, Any]], *, view_label: str) -> list[str]:
         if not items:

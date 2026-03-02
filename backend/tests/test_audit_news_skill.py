@@ -40,7 +40,7 @@ async def _fake_generate_hypotheses(self, *, parsed, provider_id, model):
 async def _fake_collect_with_noise(self, *, parsed, hypotheses, provider_id, model):
     del self, parsed, hypotheses, provider_id, model
     now = datetime.now(UTC)
-    return [
+    rows = [
         NewsCandidate(
             title="A食品、原材料高で通期見通しを下方修正",
             url="https://www.nikkei.com/article/afoods-forecast",
@@ -108,6 +108,10 @@ async def _fake_collect_with_noise(self, *, parsed, hypotheses, provider_id, mod
             macro_subtype="market",
         ),
     ]
+    return rows, {
+        "raw_counts_by_view": {"self_company": 1, "peer_companies": 2, "macro": 3},
+        "supplemental_runs_by_view": {"self_company": 0, "peer_companies": 1, "macro": 0},
+    }
 
 
 async def _fake_collect_many(self, *, parsed, hypotheses, provider_id, model):
@@ -154,7 +158,10 @@ async def _fake_collect_many(self, *, parsed, hypotheses, provider_id, model):
                 macro_subtype="market",
             )
         )
-    return rows
+    return rows, {
+        "raw_counts_by_view": {"self_company": 10, "peer_companies": 10, "macro": 10},
+        "supplemental_runs_by_view": {"self_company": 0, "peer_companies": 0, "macro": 0},
+    }
 
 
 def _extract_payload(output: str) -> dict:
@@ -218,6 +225,13 @@ def test_skill_outputs_v2_views_and_filters_noise() -> None:
     assert "## 他社" in output
     assert "## マクロ" in output
     assert "古いニュース" not in output
+    assert "debug_stats" in payload
+    assert set(payload["debug_stats"].keys()) == {
+        "raw_counts_by_view",
+        "deduped_counts_by_view",
+        "supplemental_runs_by_view",
+        "dropped_duplicates_by_view",
+    }
 
     total = sum(len(payload["views"][key]) for key in ("self_company", "peer_companies", "macro"))
     assert total >= 4
@@ -251,3 +265,180 @@ def test_skill_caps_total_items_near_target_range() -> None:
     payload = _extract_payload(output)
     total = sum(len(payload["views"][key]) for key in ("self_company", "peer_companies", "macro"))
     assert total <= 24
+    assert all(len(payload["views"][key]) >= 2 for key in ("self_company", "peer_companies", "macro"))
+
+
+def test_filter_dedupe_keeps_same_article_across_views() -> None:
+    skill = AuditNewsActionBriefSkill()
+    now = datetime.now(UTC)
+    rows = [
+        NewsCandidate(
+            title="同一ニュース",
+            url="https://example.com/shared",
+            source="Example",
+            published_at=now,
+            summary="s",
+            one_liner_comment="c",
+            propagation_note="p",
+            view="self_company",
+            macro_subtype=None,
+        ),
+        NewsCandidate(
+            title="同一ニュース",
+            url="https://example.com/shared",
+            source="Example",
+            published_at=now,
+            summary="s",
+            one_liner_comment="c",
+            propagation_note="p",
+            view="macro",
+            macro_subtype="market",
+        ),
+    ]
+    filtered, _, dropped_dup, dropped_dup_by_view = skill._filter_and_dedupe(
+        candidates=rows,
+        cutoff=now - timedelta(days=1),
+    )
+    assert len(filtered) == 2
+    assert dropped_dup == 0
+    assert dropped_dup_by_view == {"self_company": 0, "peer_companies": 0, "macro": 0}
+
+
+def test_collect_candidates_runs_supplemental_for_missing_view() -> None:
+    skill = AuditNewsActionBriefSkill()
+
+    def _fake_primary_queries(self, *, parsed, hypotheses):
+        del self, parsed, hypotheses
+        return {
+            "self_company": ["self-q"],
+            "peer_companies": ["peer-q"],
+            "macro": ["macro-q"],
+        }
+
+    def _fake_supplemental_queries(self, *, parsed, hypotheses, view):
+        del self, parsed, hypotheses
+        if view == "peer_companies":
+            return ["peer-sup"]
+        return [f"{view}-sup"]
+
+    async def _fake_search(self, *, view, query, parsed, provider_id, model, max_items):
+        del self, parsed, provider_id, model, max_items
+        now = datetime.now(UTC)
+        if query == "self-q":
+            return [
+                NewsCandidate(
+                    title="self-1",
+                    url="https://example.com/self-1",
+                    source="Example",
+                    published_at=now,
+                    summary="s",
+                    one_liner_comment="c",
+                    propagation_note="p",
+                    view=view,
+                    macro_subtype=None,
+                ),
+                NewsCandidate(
+                    title="self-2",
+                    url="https://example.com/self-2",
+                    source="Example",
+                    published_at=now,
+                    summary="s",
+                    one_liner_comment="c",
+                    propagation_note="p",
+                    view=view,
+                    macro_subtype=None,
+                ),
+            ]
+        if query == "macro-q":
+            return [
+                NewsCandidate(
+                    title="macro-1",
+                    url="https://example.com/macro-1",
+                    source="Example",
+                    published_at=now,
+                    summary="s",
+                    one_liner_comment="c",
+                    propagation_note="p",
+                    view=view,
+                    macro_subtype="market",
+                ),
+                NewsCandidate(
+                    title="macro-2",
+                    url="https://example.com/macro-2",
+                    source="Example",
+                    published_at=now,
+                    summary="s",
+                    one_liner_comment="c",
+                    propagation_note="p",
+                    view=view,
+                    macro_subtype="market",
+                ),
+            ]
+        if query == "peer-sup":
+            return [
+                NewsCandidate(
+                    title="peer-1",
+                    url="https://example.com/peer-1",
+                    source="Example",
+                    published_at=now,
+                    summary="s",
+                    one_liner_comment="c",
+                    propagation_note="p",
+                    view=view,
+                    macro_subtype=None,
+                ),
+                NewsCandidate(
+                    title="peer-2",
+                    url="https://example.com/peer-2",
+                    source="Example",
+                    published_at=now,
+                    summary="s",
+                    one_liner_comment="c",
+                    propagation_note="p",
+                    view=view,
+                    macro_subtype=None,
+                ),
+            ]
+        return []
+
+    skill._build_primary_queries = types.MethodType(_fake_primary_queries, skill)
+    skill._build_supplemental_queries = types.MethodType(_fake_supplemental_queries, skill)
+    skill._search_view_news = types.MethodType(_fake_search, skill)
+
+    parsed = ParsedRequest(
+        client_name="A食品株式会社",
+        client_industry="食品",
+        watch_competitors=["Bフーズ"],
+        lookback_days=7,
+        focus_topics=["原材料価格"],
+    )
+    rows, stats = asyncio.run(
+        skill._collect_news_candidates(
+            parsed=parsed,
+            hypotheses={"self_company": [], "peer_companies": [], "macro": []},
+            provider_id="openai",
+            model="gpt-5.2-2025-12-11",
+            cutoff=datetime.now(UTC) - timedelta(days=7),
+        )
+    )
+    filtered, _, _, _ = skill._filter_and_dedupe(candidates=rows, cutoff=datetime.now(UTC) - timedelta(days=7))
+    counts = skill._count_per_view(filtered)
+    assert counts["peer_companies"] >= 2
+    assert stats["supplemental_runs_by_view"]["peer_companies"] >= 1
+
+
+def test_macro_and_peer_queries_do_not_embed_client_name() -> None:
+    skill = AuditNewsActionBriefSkill()
+    parsed = ParsedRequest(
+        client_name="A食品株式会社",
+        client_industry="食品",
+        watch_competitors=["Bフーズ"],
+        lookback_days=7,
+        focus_topics=["原材料価格"],
+    )
+    queries = skill._build_primary_queries(
+        parsed=parsed,
+        hypotheses={"self_company": [], "peer_companies": [], "macro": []},
+    )
+    assert all(parsed.client_name not in q for q in queries["peer_companies"])
+    assert all(parsed.client_name not in q for q in queries["macro"])
