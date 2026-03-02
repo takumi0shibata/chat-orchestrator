@@ -16,7 +16,9 @@ import type {
   AuditNewsAlertV1,
   AuditNewsPayloadV1,
   AuditNewsPayloadV2,
+  AuditNewsPayloadV3,
   AuditNewsViewItemV2,
+  AuditNewsViewItemV3,
   ChatMessage,
   ConversationSummary,
   ModelInfo,
@@ -55,6 +57,7 @@ type SkillChartPayload = {
 const BOJ_CHART_SCHEMA = "boj_timeseries_chart/v1";
 const AUDIT_NEWS_SCHEMA_V1 = "audit_news_action_brief/v1";
 const AUDIT_NEWS_SCHEMA_V2 = "audit_news_action_brief/v2";
+const AUDIT_NEWS_SCHEMA_V3 = "audit_news_action_brief/v3";
 const AUDIT_NEWS_SKILL_ID = "audit_news_action_brief";
 
 type NormalizedAuditNewsItem = {
@@ -445,13 +448,51 @@ function isAuditNewsPayloadV2(node: unknown): node is AuditNewsPayloadV2 {
   );
 }
 
+function isAuditNewsViewItemV3(node: unknown): node is AuditNewsViewItemV3 {
+  if (!node || typeof node !== "object") return false;
+  const item = node as Record<string, unknown>;
+  return (
+    typeof item.news_id === "string" &&
+    typeof item.title === "string" &&
+    typeof item.summary === "string" &&
+    typeof item.url === "string" &&
+    typeof item.one_liner_comment === "string" &&
+    typeof item.source === "string" &&
+    typeof item.published_at === "string" &&
+    typeof item.view === "string"
+  );
+}
+
+function isAuditNewsPayloadV3(node: unknown): node is AuditNewsPayloadV3 {
+  if (!node || typeof node !== "object") return false;
+  const item = node as Record<string, unknown>;
+  if (
+    item.schema !== AUDIT_NEWS_SCHEMA_V3 ||
+    typeof item.run_id !== "string" ||
+    typeof item.generated_at !== "string" ||
+    !item.views ||
+    typeof item.views !== "object"
+  ) {
+    return false;
+  }
+  const views = item.views as Record<string, unknown>;
+  return (
+    Array.isArray(views.self_company) &&
+    Array.isArray(views.peer_companies) &&
+    Array.isArray(views.macro) &&
+    views.self_company.every(isAuditNewsViewItemV3) &&
+    views.peer_companies.every(isAuditNewsViewItemV3) &&
+    views.macro.every(isAuditNewsViewItemV3)
+  );
+}
+
 function extractAuditNewsPayload(messageContent: string): {
-  payload: AuditNewsPayloadV1 | AuditNewsPayloadV2 | null;
+  payload: AuditNewsPayloadV1 | AuditNewsPayloadV2 | AuditNewsPayloadV3 | null;
   contentWithoutAuditBlock: string;
   hasAuditBlock: boolean;
   parseError: boolean;
 } {
-  let payload: AuditNewsPayloadV1 | AuditNewsPayloadV2 | null = null;
+  let payload: AuditNewsPayloadV1 | AuditNewsPayloadV2 | AuditNewsPayloadV3 | null = null;
   let hasAuditBlock = false;
   let parseError = false;
   const contentWithoutAuditBlock = messageContent.replace(/```audit-news-json\s*\n([\s\S]*?)```/g, (full, block) => {
@@ -459,7 +500,7 @@ function extractAuditNewsPayload(messageContent: string): {
     if (payload) return "";
     try {
       const parsed = JSON.parse(block) as unknown;
-      if (!isAuditNewsPayloadV2(parsed) && !isAuditNewsPayloadV1(parsed)) {
+      if (!isAuditNewsPayloadV3(parsed) && !isAuditNewsPayloadV2(parsed) && !isAuditNewsPayloadV1(parsed)) {
         parseError = true;
         return full;
       }
@@ -518,6 +559,21 @@ function normalizeAuditNewsItemV2(item: AuditNewsViewItemV2): NormalizedAuditNew
     summary: item.summary,
     one_liner_comment: item.one_liner_comment,
     propagation_note: item.propagation_note,
+    url: item.url
+  };
+}
+
+function normalizeAuditNewsItemV3(item: AuditNewsViewItemV3): NormalizedAuditNewsItem {
+  return {
+    item_id: item.news_id,
+    title: item.title,
+    source: item.source,
+    published_at: item.published_at,
+    score: 0,
+    view: item.view,
+    summary: item.summary,
+    one_liner_comment: item.one_liner_comment,
+    propagation_note: "",
     url: item.url
   };
 }
@@ -639,7 +695,7 @@ function AuditNewsCard(props: {
         <span className="priority-chip medium">{auditViewLabel(alert.view)}</span>
       </header>
       <p className="audit-news-meta">
-        {alert.source} • {alert.published_at} • score={alert.score}
+        {alert.source} • {alert.published_at}{alert.score > 0 ? ` • score=${alert.score}` : ""}
       </p>
       <p className="audit-news-line">
         <strong>概要:</strong> {alert.summary}
@@ -647,9 +703,11 @@ function AuditNewsCard(props: {
       <p className="audit-news-line">
         <strong>一言コメント:</strong> {alert.one_liner_comment}
       </p>
-      <p className="audit-news-line">
-        <strong>波及メモ:</strong> {alert.propagation_note}
-      </p>
+      {alert.propagation_note && (
+        <p className="audit-news-line">
+          <strong>波及メモ:</strong> {alert.propagation_note}
+        </p>
+      )}
       <p className="audit-news-link">
         <a href={alert.url} target="_blank" rel="noreferrer">
           Source
@@ -1159,10 +1217,50 @@ export function App() {
                         }
                         return null;
                       }
+                      if (payload.schema === AUDIT_NEWS_SCHEMA_V3) {
+                        return AUDIT_VIEW_KEYS.map((view) => {
+                          const alerts = (payload as AuditNewsPayloadV3).views[view].map(normalizeAuditNewsItemV3);
+                          return (
+                            <section className="audit-news-view-section" key={`${payload.run_id}:${view}`}>
+                              <header className="audit-news-view-header">
+                                <h4>{auditSectionLabel(view)}</h4>
+                                <span className={`priority-chip ${alerts.length > 0 ? "medium" : "low"}`}>
+                                  {alerts.length}件
+                                </span>
+                              </header>
+                              {alerts.length > 0 ? (
+                                alerts.map((alert) => {
+                                  const key = `${payload.run_id}:${alert.item_id}`;
+                                  return (
+                                    <AuditNewsCard
+                                      key={key}
+                                      runId={payload.run_id}
+                                      alert={alert}
+                                      selectedDecision={auditFeedback[key]}
+                                      disabled={Boolean(auditFeedback[key])}
+                                      onSubmitDecision={(decision, currentAlert) => {
+                                        void onSubmitAuditDecision(payload.run_id, currentAlert, decision);
+                                      }}
+                                    />
+                                  );
+                                })
+                              ) : (
+                                <section className="audit-news-card audit-news-empty-card">
+                                  <header className="audit-news-card-header">
+                                    <h4>{auditSectionLabel(view)}: 該当ニュースなし</h4>
+                                    <span className="priority-chip low">NO NEWS</span>
+                                  </header>
+                                  <p className="audit-news-line">探索結果は0件でした。</p>
+                                </section>
+                              )}
+                            </section>
+                          );
+                        });
+                      }
                       if (payload.schema === AUDIT_NEWS_SCHEMA_V2) {
                         return AUDIT_VIEW_KEYS.map((view) => {
-                          const alerts = payload.views[view].map(normalizeAuditNewsItemV2);
-                          const searchLogs = extractAuditQueryLogs(payload, view);
+                          const alerts = (payload as AuditNewsPayloadV2).views[view].map(normalizeAuditNewsItemV2);
+                          const searchLogs = extractAuditQueryLogs(payload as AuditNewsPayloadV2, view);
                           const searchSummary = view === "self_company" ? null : buildAuditSearchSummary(searchLogs);
 
                           return (

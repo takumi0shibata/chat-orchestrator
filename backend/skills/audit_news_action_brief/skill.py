@@ -15,7 +15,7 @@ _SKILL_DIR = Path(__file__).resolve().parent
 if str(_SKILL_DIR) not in sys.path:
     sys.path.insert(0, str(_SKILL_DIR))
 
-from audit_news_llm_client import extract_json_array, extract_json_object, run_json_prompt_with_web  # noqa: E402
+from audit_news_llm_client import extract_json_array, extract_json_object, run_json_prompt, run_json_prompt_with_web  # noqa: E402
 
 
 class ParsedRequest:
@@ -35,29 +35,25 @@ class ParsedRequest:
         self.focus_topics = focus_topics
 
 
-class NewsCandidate:
+class NewsItemV3:
     def __init__(
         self,
         *,
         title: str,
-        url: str,
-        source: str,
-        published_at: datetime | None,
         summary: str,
+        url: str,
         one_liner_comment: str,
-        propagation_note: str,
+        source: str,
+        published_at: str,
         view: str,
-        macro_subtype: str | None,
     ) -> None:
         self.title = title
+        self.summary = summary
         self.url = url
+        self.one_liner_comment = one_liner_comment
         self.source = source
         self.published_at = published_at
-        self.summary = summary
-        self.one_liner_comment = one_liner_comment
-        self.propagation_note = propagation_note
         self.view = view
-        self.macro_subtype = macro_subtype
 
 
 class AuditNewsActionBriefSkill(Skill):
@@ -65,19 +61,12 @@ class AuditNewsActionBriefSkill(Skill):
         id="audit_news_action_brief",
         name="Audit News Action Brief",
         description=(
-            "監査クライアントの業種・競合・マクロニュースを仮説先行で深く探索し、"
-            "自社・他社・マクロの3視点で監査アクション候補を返します。"
+            "監査クライアントの自社・他社・マクロニュースを戦略的に探索し、"
+            "監査上有益なニュースをカテゴリ別に提示します。"
         ),
     )
 
-    _RESEARCH_PROFILE = "deep_standard"
-    _PRIMARY_QUERIES_PER_VIEW = 2
-    _SUPPLEMENTAL_QUERIES_PER_VIEW = 2
-    _MAX_ITEMS_PER_QUERY = 4
-    _MIN_ITEMS_PER_VIEW = 2
-    _MAX_ITEMS_PER_VIEW_OUTPUT = 8
     _MAX_LOOKBACK_DAYS = 30
-    _MAX_TOTAL_TARGET = 24
 
     async def run(
         self,
@@ -104,6 +93,7 @@ class AuditNewsActionBriefSkill(Skill):
                 f"現在のモデル `{model}` は `api_mode={capability.api_mode}` のため利用できません。"
             )
 
+        # Step 1: Parse request (no web search needed)
         parsed = await self._parse_request(user_text=user_text, provider_id=provider_id, model=model)
         missing = []
         if not parsed.client_name:
@@ -119,29 +109,38 @@ class AuditNewsActionBriefSkill(Skill):
             )
 
         lookback_days = max(1, min(parsed.lookback_days, self._MAX_LOOKBACK_DAYS))
-        cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
         run_id = str(uuid4())
 
-        hypotheses = await self._generate_hypotheses(parsed=parsed, provider_id=provider_id, model=model)
-        candidates, collect_stats = await self._collect_news_candidates(
+        # Step 2: Search self_company (serial)
+        self_items = await self._search_category(
+            view="self_company",
             parsed=parsed,
-            hypotheses=hypotheses,
             provider_id=provider_id,
             model=model,
-            cutoff=cutoff,
+            prior_titles=[],
         )
 
-        filtered, dropped_old, dropped_dup, dropped_dup_by_view = self._filter_and_dedupe(candidates=candidates, cutoff=cutoff)
-        deduped_counts = self._count_per_view(filtered)
+        # Step 3: Search peer_companies (serial)
+        peer_items = await self._search_category(
+            view="peer_companies",
+            parsed=parsed,
+            provider_id=provider_id,
+            model=model,
+            prior_titles=[item.title for item in self_items],
+        )
 
-        scored: list[dict[str, Any]] = []
-        for item in filtered:
-            scored.append(self._build_news_item(item=item, parsed=parsed))
+        # Step 4: Search macro (serial)
+        macro_items = await self._search_category(
+            view="macro",
+            parsed=parsed,
+            provider_id=provider_id,
+            model=model,
+            prior_titles=[item.title for item in self_items + peer_items],
+        )
 
-        view_items = self._build_view_items(scored)
-
+        # Build v3 payload
         payload = {
-            "schema": "audit_news_action_brief/v2",
+            "schema": "audit_news_action_brief/v3",
             "run_id": run_id,
             "generated_at": datetime.now(UTC).isoformat(),
             "client": {
@@ -150,24 +149,17 @@ class AuditNewsActionBriefSkill(Skill):
                 "lookback_days": lookback_days,
                 "focus_topics": parsed.focus_topics,
                 "watch_competitors": parsed.watch_competitors,
-                "research_profile": self._RESEARCH_PROFILE,
             },
-            "views": view_items,
-            "debug_stats": {
-                "raw_counts_by_view": collect_stats["raw_counts_by_view"],
-                "deduped_counts_by_view": deduped_counts,
-                "supplemental_runs_by_view": collect_stats["supplemental_runs_by_view"],
-                "dropped_duplicates_by_view": dropped_dup_by_view,
-                "query_logs_by_view": collect_stats.get(
-                    "query_logs_by_view",
-                    {"self_company": [], "peer_companies": [], "macro": []},
-                ),
+            "views": {
+                "self_company": [self._item_to_dict(item) for item in self_items],
+                "peer_companies": [self._item_to_dict(item) for item in peer_items],
+                "macro": [self._item_to_dict(item) for item in macro_items],
             },
         }
-        query_logs_by_view = payload["debug_stats"]["query_logs_by_view"]
 
+        # Build markdown output
         lines = [
-            "監査アクションニュースブリーフ v2",
+            "監査アクションニュースブリーフ v3",
             "",
             "## 今回の前提",
             f"- クライアント: {parsed.client_name}",
@@ -175,62 +167,36 @@ class AuditNewsActionBriefSkill(Skill):
             f"- 監視期間: 直近{lookback_days}日",
             f"- 競合監視: {', '.join(parsed.watch_competitors) if parsed.watch_competitors else '未指定'}",
             f"- 注力トピック: {', '.join(parsed.focus_topics) if parsed.focus_topics else '未指定'}",
-            f"- 調査プロファイル: {self._RESEARCH_PROFILE}",
             "",
             "## 自社",
         ]
-        lines.extend(self._render_view_items(view_items["self_company"], view_label="self_company"))
+        lines.extend(self._render_items(self_items))
         lines.extend(["", "## 他社"])
-        lines.extend(
-            self._render_view_items(
-                view_items["peer_companies"],
-                view_label="peer_companies",
-                search_summary=self._build_search_absence_summary(
-                    query_logs=query_logs_by_view.get("peer_companies"),
-                    view_label="peer_companies",
-                ),
-            )
-        )
+        lines.extend(self._render_items(peer_items))
         lines.extend(["", "## マクロ"])
-        lines.extend(
-            self._render_view_items(
-                view_items["macro"],
-                view_label="macro",
-                search_summary=self._build_search_absence_summary(
-                    query_logs=query_logs_by_view.get("macro"),
-                    view_label="macro",
-                ),
-            )
-        )
-        lines.extend(["", "## 探索戦略（デバッグ）"])
-        lines.extend(self._render_search_strategy(query_logs_by_view=query_logs_by_view))
-
-        total_after_filter = sum(len(rows) for rows in view_items.values())
-        lines.extend(
-            [
-                "",
-                "## 除外理由（ノイズ管理）",
-                f"- 期間外により除外: {dropped_old}件",
-                f"- 重複により除外: {dropped_dup}件",
-                f"- 最終採用件数: {total_after_filter}件",
-                "",
-                "```audit-news-json",
-                json.dumps(payload, ensure_ascii=False),
-                "```",
-            ]
-        )
+        lines.extend(self._render_items(macro_items))
+        lines.extend([
+            "",
+            "```audit-news-json",
+            json.dumps(payload, ensure_ascii=False),
+            "```",
+        ])
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Request parsing
+    # ------------------------------------------------------------------
 
     async def _parse_request(self, *, user_text: str, provider_id: str, model: str) -> ParsedRequest:
         prompt = (
             "ユーザー要求から監査ニュース探索条件を抽出してください。"
             "JSONオブジェクトのみを返し、形式は"
-            "{\"client_name\":string|null,\"client_industry\":string|null,"
-            "\"watch_competitors\":string[],\"lookback_days\":number|null,\"focus_topics\":string[]}。"
+            '{"client_name":string|null,"client_industry":string|null,'
+            '"watch_competitors":string[],"lookback_days":number|null,"focus_topics":string[]}。'
             "lookback_daysが無ければnull。\n"
             f"ユーザー要求: {user_text}"
         )
-        raw = await run_json_prompt_with_web(
+        raw = await run_json_prompt(
             provider_id=provider_id,
             model=model,
             prompt=prompt,
@@ -256,138 +222,35 @@ class AuditNewsActionBriefSkill(Skill):
             focus_topics=focus_topics,
         )
 
-    async def _generate_hypotheses(
-        self,
-        *,
-        parsed: ParsedRequest,
-        provider_id: str,
-        model: str,
-    ) -> dict[str, list[str]]:
-        prompt = (
-            "監査ニュース調査の事前仮説を作成してください。"
-            "当該企業への波及経路（要因→財務/内部統制影響→監査論点）を視点別に列挙します。"
-            "JSONオブジェクトのみを返し、形式は"
-            "{\"self_company\":string[],\"peer_companies\":string[],\"macro\":string[]}。"
-            "各配列は最大5件、短文。\n"
-            f"クライアント: {parsed.client_name}\n"
-            f"業種: {parsed.client_industry}\n"
-            f"競合: {', '.join(parsed.watch_competitors) if parsed.watch_competitors else '未指定'}\n"
-            f"注力トピック: {', '.join(parsed.focus_topics) if parsed.focus_topics else '未指定'}\n"
-            f"監視期間: 直近{parsed.lookback_days}日"
-        )
-        raw = await run_json_prompt_with_web(
-            provider_id=provider_id,
-            model=model,
-            prompt=prompt,
-            max_output_tokens=900,
-            reasoning_effort="high",
-        )
-        obj = extract_json_object(raw) or {}
-        hypotheses = {
-            "self_company": self._clean_str_list(obj.get("self_company")),
-            "peer_companies": self._clean_str_list(obj.get("peer_companies")),
-            "macro": self._clean_str_list(obj.get("macro")),
-        }
-        return hypotheses
+    # ------------------------------------------------------------------
+    # Category search
+    # ------------------------------------------------------------------
 
-    async def _collect_news_candidates(
-        self,
-        *,
-        parsed: ParsedRequest,
-        hypotheses: dict[str, list[str]],
-        provider_id: str,
-        model: str,
-        cutoff: datetime,
-    ) -> tuple[list[NewsCandidate], dict[str, Any]]:
-        primary_queries = self._build_primary_queries(parsed=parsed, hypotheses=hypotheses)
-
-        gathered: list[NewsCandidate] = []
-        supplemental_runs = {"self_company": 0, "peer_companies": 0, "macro": 0}
-        query_logs: dict[str, list[dict[str, Any]]] = {"self_company": [], "peer_companies": [], "macro": []}
-        for view, queries in primary_queries.items():
-            for query in queries[: self._PRIMARY_QUERIES_PER_VIEW]:
-                rows = await self._search_view_news(
-                    view=view,
-                    query=query,
-                    parsed=parsed,
-                    provider_id=provider_id,
-                    model=model,
-                    max_items=self._MAX_ITEMS_PER_QUERY,
-                )
-                query_logs[view].append({"stage": "primary", "query": query, "hits": len(rows)})
-                gathered.extend(rows)
-
-        filtered, _, _, _ = self._filter_and_dedupe(candidates=gathered, cutoff=cutoff)
-        counts = self._count_per_view(filtered)
-
-        for view in ("self_company", "peer_companies", "macro"):
-            if counts.get(view, 0) >= self._MIN_ITEMS_PER_VIEW:
-                continue
-            supplemental_queries = self._build_supplemental_queries(parsed=parsed, hypotheses=hypotheses, view=view)
-            for query in supplemental_queries[: self._SUPPLEMENTAL_QUERIES_PER_VIEW]:
-                supplemental_runs[view] += 1
-                rows = await self._search_view_news(
-                    view=view,
-                    query=query,
-                    parsed=parsed,
-                    provider_id=provider_id,
-                    model=model,
-                    max_items=self._MAX_ITEMS_PER_QUERY,
-                )
-                query_logs[view].append({"stage": "supplemental", "query": query, "hits": len(rows)})
-                gathered.extend(rows)
-                filtered, _, _, _ = self._filter_and_dedupe(candidates=gathered, cutoff=cutoff)
-                counts = self._count_per_view(filtered)
-                if counts.get(view, 0) >= self._MIN_ITEMS_PER_VIEW:
-                    break
-
-        return gathered, {
-            "raw_counts_by_view": self._count_per_view(gathered),
-            "supplemental_runs_by_view": supplemental_runs,
-            "query_logs_by_view": query_logs,
-        }
-
-    async def _search_view_news(
+    async def _search_category(
         self,
         *,
         view: str,
-        query: str,
         parsed: ParsedRequest,
         provider_id: str,
         model: str,
-        max_items: int,
-    ) -> list[NewsCandidate]:
-        prompt = (
-            "あなたは監査人向けニュースアナリストです。Web検索を使い、"
-            "日本語中心で直近ニュースを収集してください。"
-            "JSON配列のみを返し、各要素は"
-            "{"
-            "\"title\":string,\"url\":string,\"source\":string,\"published_at\":string,"
-            "\"summary\":string,\"one_liner_comment\":string,\"propagation_note\":string,"
-            "\"macro_subtype\":string|null"
-            "}。"
-            "macro_subtypeは view=macro の時のみ、"
-            "regulation/policy/market/commodity/fx/rates のいずれか。"
-            "published_atは可能ならISO-8601形式。"
-            f"最大{max_items}件。\n"
-            f"クライアント: {parsed.client_name}\n"
-            f"業種: {parsed.client_industry}\n"
-            f"視点: {view}\n"
-            f"検索クエリ: {query}\n"
-            f"期間条件: 直近{parsed.lookback_days}日を優先。"
-        )
+        prior_titles: list[str],
+    ) -> list[NewsItemV3]:
+        prompt = self._build_category_prompt(view=view, parsed=parsed, prior_titles=prior_titles)
         raw = await run_json_prompt_with_web(
             provider_id=provider_id,
             model=model,
             prompt=prompt,
-            max_output_tokens=1600,
+            max_output_tokens=2000,
             reasoning_effort="high",
         )
         rows = extract_json_array(raw)
         if rows is None:
             return []
 
-        out: list[NewsCandidate] = []
+        out: list[NewsItemV3] = []
+        seen_urls: set[str] = set()
+        seen_titles: set[str] = set()
+
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -397,330 +260,168 @@ class AuditNewsActionBriefSkill(Skill):
             if not title or not url:
                 continue
 
+            normalized_url = self._normalize_url(url)
+            normalized_title = self._normalize_title(title)
+            if normalized_url in seen_urls or normalized_title in seen_titles:
+                continue
+            seen_urls.add(normalized_url)
+            seen_titles.add(normalized_title)
+
             summary = self._clean_str(row.get("summary")) or ""
             one_liner_comment = self._clean_str(row.get("one_liner_comment")) or ""
-            propagation_note = self._clean_str(row.get("propagation_note")) or ""
             if not summary:
                 summary = one_liner_comment
             if not one_liner_comment:
                 one_liner_comment = summary
-            if not propagation_note:
-                propagation_note = f"{parsed.client_name} への波及可能性は継続確認が必要です。"
 
-            macro_subtype = None
-            if view == "macro":
-                candidate_subtype = self._clean_str(row.get("macro_subtype"))
-                if candidate_subtype in {"regulation", "policy", "market", "commodity", "fx", "rates"}:
-                    macro_subtype = candidate_subtype
+            published_at = self._clean_str(row.get("published_at")) or "unknown"
 
             out.append(
-                NewsCandidate(
+                NewsItemV3(
                     title=title,
-                    url=url,
-                    source=self._clean_str(row.get("source")) or self._source_from_url(url),
-                    published_at=self._parse_datetime(self._clean_str(row.get("published_at")) or ""),
                     summary=summary,
+                    url=url,
                     one_liner_comment=one_liner_comment,
-                    propagation_note=propagation_note,
+                    source=self._clean_str(row.get("source")) or self._source_from_url(url),
+                    published_at=published_at,
                     view=view,
-                    macro_subtype=macro_subtype,
                 )
             )
         return out
 
-    def _build_primary_queries(self, *, parsed: ParsedRequest, hypotheses: dict[str, list[str]]) -> dict[str, list[str]]:
-        competitors = " ".join(parsed.watch_competitors) if parsed.watch_competitors else "主要競合"
-        topics = " ".join(parsed.focus_topics) if parsed.focus_topics else "会計見積り"
-
-        self_h = hypotheses.get("self_company") or []
-        peer_h = hypotheses.get("peer_companies") or []
-        macro_h = hypotheses.get("macro") or []
-
-        out = {
-            "self_company": [
-                f"{parsed.client_name} {parsed.client_industry} 業績 見通し 開示 リスク 監査 {topics}",
-                f"{parsed.client_name} 原価 在庫 減損 引当 継続企業 監査",
-                f"{parsed.client_name} サプライチェーン 障害 訴訟 リコール 影響",
-            ],
-            "peer_companies": [
-                f"{parsed.client_industry} 競合 {competitors} 業績 下方修正 生産停止 監査影響",
-                f"{parsed.client_industry} 同業 リコール 訴訟 不正 開示",
-                f"{parsed.client_industry} 市況 シェア 価格改定 競争環境",
-            ],
-            "macro": [
-                f"{parsed.client_industry} 金利 為替 原材料価格 関税 景気 指標 企業業績 監査",
-                f"{parsed.client_industry} 政策変更 規制変更 会計基準 開示制度 金融庁",
-                f"{parsed.client_industry} 需給 物流 エネルギーコスト インフレ",
-            ],
-        }
-
-        if self_h:
-            out["self_company"][0] = f"{out['self_company'][0]} {' '.join(self_h[:2])}"
-            out["self_company"][1] = f"{out['self_company'][1]} {' '.join(self_h[2:4])}"
-        if peer_h:
-            out["peer_companies"][0] = f"{out['peer_companies'][0]} {' '.join(peer_h[:2])}"
-            out["peer_companies"][1] = f"{out['peer_companies'][1]} {' '.join(peer_h[2:4])}"
-        if macro_h:
-            out["macro"][0] = f"{out['macro'][0]} {' '.join(macro_h[:2])}"
-            out["macro"][1] = f"{out['macro'][1]} {' '.join(macro_h[2:4])}"
-
-        return out
-
-    def _build_supplemental_queries(
+    def _build_category_prompt(
         self,
         *,
-        parsed: ParsedRequest,
-        hypotheses: dict[str, list[str]],
         view: str,
-    ) -> list[str]:
-        hints = hypotheses.get(view) or []
-        hint_text = " ".join(hints[:3]) if hints else ""
+        parsed: ParsedRequest,
+        prior_titles: list[str],
+    ) -> str:
+        competitors = ", ".join(parsed.watch_competitors) if parsed.watch_competitors else "未指定"
+        focus_topics = ", ".join(parsed.focus_topics) if parsed.focus_topics else "未指定"
+
+        shared = (
+            "あなたは日本の公認会計士向けのニュースアナリストです。\n"
+            "監査クライアントに関連するニュースをWeb検索で収集し、"
+            "監査上の示唆があるものだけを厳選してください。\n\n"
+            "## 監査クライアント情報\n"
+            f"- 企業名: {parsed.client_name}\n"
+            f"- 業種: {parsed.client_industry}\n"
+            f"- 競合企業: {competitors}\n"
+            f"- 注力トピック: {focus_topics}\n"
+            f"- 対象期間: 直近{parsed.lookback_days}日\n\n"
+            "## 検索の基本方針\n"
+            "- 網羅的に検索するのではなく、監査上意味のある情報を戦略的に探してください\n"
+            "- 日本語ソースを優先しますが、重要な英語ソースも含めてください\n"
+            "- 信頼性の高いソース（日経、ロイター、Bloomberg、官公庁等）を優先してください\n"
+            "- ニュースが見つからない場合は、空配列[]を返してください。無理に件数を増やさないこと\n\n"
+        )
+
         if view == "self_company":
-            return [
-                f"{parsed.client_name} 最新 監査論点 収益性 資金繰り {hint_text}",
-                f"{parsed.client_name} IR 開示 重要事象 リスク {hint_text}",
-            ]
-        if view == "peer_companies":
-            competitors = " ".join(parsed.watch_competitors) if parsed.watch_competitors else "同業"
-            return [
-                f"{parsed.client_industry} {competitors} 最新 トラブル 供給 価格 影響 {hint_text}",
-                f"{parsed.client_industry} 競合 監査 注目 開示 リスク {hint_text}",
-            ]
-        return [
-            f"{parsed.client_industry} 規制 政策 速報 監査 開示 影響 {hint_text}",
-            f"{parsed.client_industry} マクロ 指標 為替 金利 原料 市況 企業影響",
-        ]
+            view_prompt = (
+                f"## 今回の検索カテゴリ: 自社（{parsed.client_name}）\n\n"
+                f"{parsed.client_name}に直接関連する最新ニュースを**2〜3件**探してください。\n\n"
+                "### 注意点\n"
+                "- 監査人はクライアントのことをよく知っています。単なる日常的なプレスリリースではなく、\n"
+                "  監査上のリスク判断に影響しうるニュースのみを選んでください\n"
+                "- 例: 業績下方修正、減損リスク、訴訟、リコール、規制対応、重要な開示変更\n"
+                "- 既知の情報より、新しい展開や想定外の事象を重視してください\n"
+            )
+        elif view == "peer_companies":
+            view_prompt = (
+                f"## 今回の検索カテゴリ: 他社（同業・競合企業）\n\n"
+                f"{parsed.client_name}の競合企業や同業他社に関するニュースで、"
+                f"{parsed.client_name}の**財務諸表や監査判断に影響しうるもの**を**3〜5件**探してください。\n\n"
+                "### 注意点\n"
+                f"- 単なる競合の業績ニュースではなく、{parsed.client_name}に波及する可能性があるものだけを選んでください\n"
+                "- 例: 業界全体のリコール問題、競合の大幅な価格改定、同業での不正会計発覚、\n"
+                "  競合の倒産・撤退による市場環境変化\n"
+                f"- 「この他社ニュースが{parsed.client_name}の監査にどう影響するか」を常に考えてください\n"
+            )
+        else:
+            view_prompt = (
+                f"## 今回の検索カテゴリ: マクロ経済\n\n"
+                f"{parsed.client_name}（{parsed.client_industry}）の"
+                "**財務諸表に影響しうるマクロ経済ニュース**を**3〜5件**探してください。\n\n"
+                "### 注意点\n"
+                f"- 一般的なマクロニュースではなく、{parsed.client_industry}に具体的に影響するものだけを選んでください\n"
+                "- 例: 為替の急変動（輸出入企業の場合）、金利変動（有利子負債が大きい企業）、\n"
+                "  原材料価格変動、関税政策変更、会計基準改正、規制変更\n"
+                f"- 「このマクロ変化が{parsed.client_name}の財務諸表のどの項目に影響するか」を考えてください\n"
+            )
 
-    def _count_per_view(self, candidates: list[NewsCandidate]) -> dict[str, int]:
-        counts = {"self_company": 0, "peer_companies": 0, "macro": 0}
-        for item in candidates:
-            if item.view in counts:
-                counts[item.view] += 1
-        return counts
+        dedup_section = ""
+        if prior_titles:
+            titles_json = json.dumps(prior_titles, ensure_ascii=False)
+            dedup_section = (
+                "\n### 既に収集済みのニュース（重複回避のため）\n"
+                f"{titles_json}\n"
+            )
 
-    def _filter_and_dedupe(
-        self,
-        *,
-        candidates: list[NewsCandidate],
-        cutoff: datetime,
-    ) -> tuple[list[NewsCandidate], int, int, dict[str, int]]:
-        dropped_old = 0
-        dropped_dup = 0
-        dropped_dup_by_view = {"self_company": 0, "peer_companies": 0, "macro": 0}
-        out: list[NewsCandidate] = []
-        seen_urls = {"self_company": set(), "peer_companies": set(), "macro": set()}
-        seen_titles = {"self_company": set(), "peer_companies": set(), "macro": set()}
+        output_format = (
+            "\n### 出力形式\n"
+            "JSON配列のみを返してください。各要素:\n"
+            "{\n"
+            '  "title": "ニュースのタイトル",\n'
+            '  "summary": "2〜3文の概要（監査上の意味を含める）",\n'
+            '  "url": "ソースURL",\n'
+            '  "one_liner_comment": "監査人への一言コメント",\n'
+            '  "source": "ソース名（例: 日経新聞）",\n'
+            '  "published_at": "公開日（ISO-8601形式、不明なら unknown）"\n'
+            "}\n"
+        )
 
-        for row in candidates:
-            if row.published_at is not None and row.published_at < cutoff:
-                dropped_old += 1
-                continue
+        return shared + view_prompt + dedup_section + output_format
 
-            view = row.view if row.view in seen_urls else "self_company"
-            normalized_url = self._normalize_url(row.url)
-            normalized_title = self._normalize_title(row.title)
-            if normalized_url in seen_urls[view] or normalized_title in seen_titles[view]:
-                dropped_dup += 1
-                dropped_dup_by_view[view] += 1
-                continue
+    # ------------------------------------------------------------------
+    # Output helpers
+    # ------------------------------------------------------------------
 
-            seen_urls[view].add(normalized_url)
-            seen_titles[view].add(normalized_title)
-            out.append(row)
-
-        return out, dropped_old, dropped_dup, dropped_dup_by_view
-
-    def _build_news_item(self, *, item: NewsCandidate, parsed: ParsedRequest) -> dict[str, Any]:
-        days_old = 4
-        if item.published_at is not None:
-            days_old = max(0, (datetime.now(UTC) - item.published_at).days)
-
-        score = 42 + max(0, 18 - min(days_old, 18))
-        score += 9
-
-        if self._is_trusted_source(item.url):
-            score += 8
-
-        if parsed.client_name and parsed.client_name in item.title and item.view == "self_company":
-            score += 3
-
-        if len(item.summary) < 30:
-            score -= 8
-        if len(item.propagation_note) < 24:
-            score -= 6
-
-        score = max(0, min(100, score))
-
-        published = item.published_at.isoformat() if item.published_at else "unknown"
-        news_id = self._build_news_id(item=item)
-        output: dict[str, Any] = {
+    def _item_to_dict(self, item: NewsItemV3) -> dict[str, Any]:
+        news_id = self._build_news_id(url=item.url, title=item.title, view=item.view)
+        return {
             "news_id": news_id,
             "title": item.title,
             "summary": item.summary,
             "url": item.url,
             "one_liner_comment": item.one_liner_comment,
             "source": item.source,
-            "published_at": published,
+            "published_at": item.published_at,
             "view": item.view,
-            "propagation_note": item.propagation_note,
-            "score": score,
         }
-        if item.view == "macro" and item.macro_subtype:
-            output["macro_subtype"] = item.macro_subtype
-        return output
 
-    def _build_view_items(self, scored: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-        buckets: dict[str, list[dict[str, Any]]] = {"self_company": [], "peer_companies": [], "macro": []}
-        for row in scored:
-            view = str(row.get("view") or "")
-            if view in buckets:
-                buckets[view].append(row)
-
-        for view in buckets:
-            buckets[view].sort(key=lambda row: int(row.get("score", 0)), reverse=True)
-
-        view_items: dict[str, list[dict[str, Any]]] = {"self_company": [], "peer_companies": [], "macro": []}
-        selected_ids: set[str] = set()
-        for view in ("self_company", "peer_companies", "macro"):
-            for row in buckets[view]:
-                if len(view_items[view]) >= self._MIN_ITEMS_PER_VIEW:
-                    break
-                news_id = row.get("news_id")
-                if not isinstance(news_id, str) or news_id in selected_ids:
-                    continue
-                view_items[view].append(row)
-                selected_ids.add(news_id)
-
-        merged = [*buckets["self_company"], *buckets["peer_companies"], *buckets["macro"]]
-        merged.sort(key=lambda row: int(row.get("score", 0)), reverse=True)
-        for row in merged:
-            news_id = row.get("news_id")
-            view = str(row.get("view") or "")
-            if view not in view_items:
-                continue
-            if not isinstance(news_id, str) or news_id in selected_ids:
-                continue
-            if len(view_items[view]) >= self._MAX_ITEMS_PER_VIEW_OUTPUT:
-                continue
-            if sum(len(rows) for rows in view_items.values()) >= self._MAX_TOTAL_TARGET:
-                break
-            view_items[view].append(row)
-            selected_ids.add(news_id)
-
-        return view_items
-
-    def _render_view_items(
-        self,
-        items: list[dict[str, Any]],
-        *,
-        view_label: str,
-        search_summary: str | None = None,
-    ) -> list[str]:
+    def _render_items(self, items: list[NewsItemV3]) -> list[str]:
         if not items:
-            if search_summary and view_label in {"peer_companies", "macro"}:
-                return [
-                    "- 該当ニュースは見つかりませんでした（探索結果: 0件）。",
-                    f"- 探索ログ: {search_summary}。",
-                ]
             return ["- 該当ニュースは見つかりませんでした。"]
         lines: list[str] = []
-        for idx, row in enumerate(items, start=1):
-            subtype = ""
-            if view_label == "macro" and isinstance(row.get("macro_subtype"), str):
-                subtype = f" ({row['macro_subtype']})"
-            lines.extend(
-                [
-                    f"{idx}. {row.get('title', 'untitled')}{subtype}",
-                    f"- 概要: {row.get('summary', '')}",
-                    f"- URL: {row.get('url', '')}",
-                    f"- 一言コメント: {row.get('one_liner_comment', '')}",
-                    f"- 波及メモ: {row.get('propagation_note', '')}",
-                ]
-            )
+        for idx, item in enumerate(items, start=1):
+            lines.extend([
+                f"{idx}. {item.title}",
+                f"- 概要: {item.summary}",
+                f"- URL: {item.url}",
+                f"- 一言コメント: {item.one_liner_comment}",
+            ])
         return lines
 
-    def _build_search_absence_summary(self, *, query_logs: Any, view_label: str) -> str | None:
-        if view_label not in {"peer_companies", "macro"}:
-            return None
-        if not isinstance(query_logs, list):
-            return "探索ログなし（クエリ未記録）"
-        primary_count = 0
-        supplemental_count = 0
-        query_texts: list[str] = []
-        for row in query_logs:
-            if not isinstance(row, dict):
-                continue
-            stage = str(row.get("stage") or "")
-            if stage == "primary":
-                primary_count += 1
-            elif stage == "supplemental":
-                supplemental_count += 1
-            query = str(row.get("query") or "").strip()
-            if query:
-                query_texts.append(query)
-        total = primary_count + supplemental_count
-        summary = f"探索クエリ{total}本（primary {primary_count}本, supplemental {supplemental_count}本）を実行"
-        if query_texts:
-            shown = query_texts[:2]
-            rendered = " / ".join(shown)
-            remain = len(query_texts) - len(shown)
-            if remain > 0:
-                rendered = f"{rendered} / ...(+{remain})"
-            summary = f"{summary}。クエリ: {rendered}"
-        return summary
+    # ------------------------------------------------------------------
+    # Utilities
+    # ------------------------------------------------------------------
 
-    def _render_search_strategy(self, *, query_logs_by_view: Any) -> list[str]:
-        labels = {
-            "self_company": "自社",
-            "peer_companies": "他社",
-            "macro": "マクロ",
-        }
-        lines: list[str] = []
-        for view in ("self_company", "peer_companies", "macro"):
-            label = labels[view]
-            logs = query_logs_by_view.get(view) if isinstance(query_logs_by_view, dict) else None
-            if not isinstance(logs, list) or not logs:
-                lines.append(f"- {label}: 実行ログなし（探索未実施または取得失敗）")
-                continue
-            lines.append(f"- {label}:")
-            rendered = 0
-            for idx, row in enumerate(logs, start=1):
-                if not isinstance(row, dict):
-                    continue
-                stage = str(row.get("stage") or "unknown")
-                query = str(row.get("query") or "").strip()
-                hits = row.get("hits")
-                hits_text = f"{hits}件" if isinstance(hits, int) else "不明"
-                lines.append(f"  {idx}. [{stage}] {query} -> 取得 {hits_text}")
-                rendered += 1
-            if rendered == 0:
-                lines.append("  - 有効な探索ログなし")
-        return lines
-
-    def _build_news_id(self, *, item: NewsCandidate) -> str:
-        key = f"{self._normalize_url(item.url)}|{self._normalize_title(item.title)}|{item.view}"
+    def _build_news_id(self, *, url: str, title: str, view: str) -> str:
+        key = f"{self._normalize_url(url)}|{self._normalize_title(title)}|{view}"
         return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
 
-    def _parse_datetime(self, text: str) -> datetime | None:
-        raw = text.strip()
-        if not raw:
-            return None
+    def _normalize_url(self, raw_url: str) -> str:
+        parsed = urlparse(raw_url)
+        host = parsed.netloc.lower()
+        path = parsed.path.rstrip("/")
+        return f"{host}{path}"
 
-        normalized = raw.replace("Z", "+00:00")
-        try:
-            dt = datetime.fromisoformat(normalized)
-            if dt.tzinfo is None:
-                return dt.replace(tzinfo=UTC)
-            return dt.astimezone(UTC)
-        except ValueError:
-            pass
+    def _normalize_title(self, title: str) -> str:
+        return re.sub(r"\s+", "", title.lower())
 
-        match = re.search(r"(20\d{2})[-/年](\d{1,2})[-/月](\d{1,2})", raw)
-        if match:
-            year, month, day = map(int, match.groups())
-            return datetime(year, month, day, tzinfo=UTC)
-
-        return None
+    def _source_from_url(self, raw_url: str) -> str:
+        parsed = urlparse(raw_url)
+        return parsed.netloc or "unknown"
 
     def _fallback_client_name(self, user_text: str) -> str | None:
         match = re.search(r"([\w\u4e00-\u9fff\u3040-\u30ff・&\-]+)社", user_text)
@@ -749,32 +450,6 @@ class AuditNewsActionBriefSkill(Skill):
             if text:
                 out.append(text)
         return out
-
-    def _normalize_url(self, raw_url: str) -> str:
-        parsed = urlparse(raw_url)
-        host = parsed.netloc.lower()
-        path = parsed.path.rstrip("/")
-        return f"{host}{path}"
-
-    def _normalize_title(self, title: str) -> str:
-        return re.sub(r"\s+", "", title.lower())
-
-    def _source_from_url(self, raw_url: str) -> str:
-        parsed = urlparse(raw_url)
-        return parsed.netloc or "unknown"
-
-    def _is_trusted_source(self, raw_url: str) -> bool:
-        host = (urlparse(raw_url).netloc or "").lower()
-        trusted = (
-            "nikkei.com",
-            "reuters.com",
-            "bloomberg.com",
-            "jpx.co.jp",
-            "fsa.go.jp",
-            "boj.or.jp",
-            "meti.go.jp",
-        )
-        return any(host.endswith(domain) for domain in trusted)
 
 
 def build_skill() -> Skill:

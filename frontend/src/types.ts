@@ -109,6 +109,35 @@ export interface AuditNewsPayloadV2 {
   debug_stats?: AuditNewsDebugStatsV2;
 }
 
+export interface AuditNewsViewItemV3 {
+  news_id: string;
+  title: string;
+  summary: string;
+  url: string;
+  one_liner_comment: string;
+  source: string;
+  published_at: string;
+  view: "self_company" | "peer_companies" | "macro";
+}
+
+export interface AuditNewsPayloadV3 {
+  schema: "audit_news_action_brief/v3";
+  run_id: string;
+  generated_at: string;
+  client: {
+    name: string;
+    industry: string;
+    lookback_days: number;
+    focus_topics: string[];
+    watch_competitors: string[];
+  };
+  views: {
+    self_company: AuditNewsViewItemV3[];
+    peer_companies: AuditNewsViewItemV3[];
+    macro: AuditNewsViewItemV3[];
+  };
+}
+
 export interface AuditNewsMetricsResponse {
   total_alerts: number;
   total_feedback: number;
