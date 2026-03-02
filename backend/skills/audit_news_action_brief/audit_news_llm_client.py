@@ -12,7 +12,7 @@ _WEB_SEARCH_TOOL = {
 }
 _REQUEST_LOCK = asyncio.Lock()
 _LAST_REQUEST_TS = 0.0
-_MIN_REQUEST_INTERVAL_SEC = 1.0
+_MIN_REQUEST_INTERVAL_SEC = 3.0
 
 
 async def run_json_prompt_with_web(

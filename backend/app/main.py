@@ -1,3 +1,4 @@
+import asyncio
 import json
 import inspect
 import re
@@ -357,6 +358,7 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
 
             if payload.skill_id:
                 yield json.dumps({"type": "skill_status", "status": "done", "skill_id": payload.skill_id}) + "\n"
+                await asyncio.sleep(5)
 
             async for chunk in provider.stream_chat(
                 model=payload.model,
