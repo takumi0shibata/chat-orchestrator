@@ -199,3 +199,47 @@ def test_run_json_prompt_with_web_empty_retry_recovers(monkeypatch) -> None:
 
     assert result == '[{"title":"retry-recovered"}]'
     assert len(fake_responses.calls) == 2
+
+
+def test_run_json_prompt_with_web_expands_max_output_tokens_on_incomplete_reason(monkeypatch) -> None:
+    first = FakeResponse(
+        output_text="",
+        payload={
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": ""}],
+                }
+            ],
+        },
+    )
+    second = FakeResponse(
+        output_text='[{"title":"expanded"}]',
+        payload={
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": '[{"title":"expanded"}]'}],
+                }
+            ],
+        },
+    )
+    fake_responses = _set_up_fakes(monkeypatch, response=[first, second])
+
+    result = asyncio.run(
+        llm_client.run_json_prompt_with_web(
+            provider_id="azure_openai",
+            model="gpt-5.2-2025-12-11",
+            prompt="test prompt",
+            max_output_tokens=3000,
+            max_retries=1,
+        )
+    )
+
+    assert result == '[{"title":"expanded"}]'
+    assert len(fake_responses.calls) == 2
+    assert fake_responses.calls[0]["max_output_tokens"] == 3000
+    assert fake_responses.calls[1]["max_output_tokens"] == 6000

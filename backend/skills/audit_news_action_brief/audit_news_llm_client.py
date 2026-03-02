@@ -19,6 +19,9 @@ _REQUEST_LOCK = asyncio.Lock()
 _LAST_REQUEST_TS = 0.0
 _MIN_REQUEST_INTERVAL_SEC = 3.0
 _NON_OUTPUT_ITEM_TYPES = {"web_search_call", "function_call", "file_search_call", "computer_call", "reasoning"}
+_WEB_DEFAULT_MAX_OUTPUT_TOKENS = 4000
+_WEB_EMPTY_RETRY_TOKEN_CAP = 12000
+_WEB_EMPTY_RETRY_MAX_ATTEMPTS = 2
 
 
 def _resolve_credentials(provider_id: str) -> tuple[str, str | None]:
@@ -150,7 +153,7 @@ async def run_json_prompt_with_web(
     provider_id: str,
     model: str,
     prompt: str,
-    max_output_tokens: int = 1200,
+    max_output_tokens: int = _WEB_DEFAULT_MAX_OUTPUT_TOKENS,
     reasoning_effort: str | None = "high",
     max_retries: int = 4,
 ) -> str:
@@ -172,7 +175,7 @@ async def run_json_prompt_with_web(
     if reasoning_effort:
         kwargs["reasoning"] = {"effort": reasoning_effort}
 
-    did_empty_retry = False
+    empty_retry_count = 0
     current_max_output_tokens = max_output_tokens
     global _LAST_REQUEST_TS
     for attempt in range(max_retries + 1):
@@ -190,20 +193,23 @@ async def run_json_prompt_with_web(
                     "run_json_prompt_with_web empty text: provider=%s, model=%s, diagnostics=%s",
                     provider_id, model, json.dumps(diagnostics, ensure_ascii=False, separators=(",", ":")),
                 )
-                if not did_empty_retry:
-                    did_empty_retry = True
+                if empty_retry_count < _WEB_EMPTY_RETRY_MAX_ATTEMPTS:
+                    empty_retry_count += 1
                     incomplete_reason = diagnostics.get("incomplete_reason")
-                    if incomplete_reason == "max_output_tokens" and current_max_output_tokens < 4000:
-                        current_max_output_tokens = min(4000, max(current_max_output_tokens + 1000, current_max_output_tokens * 2))
+                    if incomplete_reason == "max_output_tokens" and current_max_output_tokens < _WEB_EMPTY_RETRY_TOKEN_CAP:
+                        current_max_output_tokens = min(
+                            _WEB_EMPTY_RETRY_TOKEN_CAP,
+                            max(current_max_output_tokens + 2000, current_max_output_tokens * 2),
+                        )
                         kwargs["max_output_tokens"] = current_max_output_tokens
                         logger.warning(
-                            "run_json_prompt_with_web empty text retry: provider=%s, model=%s, reason=%s, max_output_tokens=%d",
-                            provider_id, model, incomplete_reason, current_max_output_tokens,
+                            "run_json_prompt_with_web empty text retry: provider=%s, model=%s, reason=%s, retry=%d/%d, max_output_tokens=%d",
+                            provider_id, model, incomplete_reason, empty_retry_count, _WEB_EMPTY_RETRY_MAX_ATTEMPTS, current_max_output_tokens,
                         )
                     else:
                         logger.warning(
-                            "run_json_prompt_with_web empty text retry: provider=%s, model=%s, reason=%s",
-                            provider_id, model, incomplete_reason or "unknown",
+                            "run_json_prompt_with_web empty text retry: provider=%s, model=%s, reason=%s, retry=%d/%d",
+                            provider_id, model, incomplete_reason or "unknown", empty_retry_count, _WEB_EMPTY_RETRY_MAX_ATTEMPTS,
                         )
                     continue
             logger.info("run_json_prompt_with_web OK: provider=%s, model=%s, response_len=%d", provider_id, model, len(result))

@@ -244,7 +244,7 @@ class AuditNewsActionBriefSkill(Skill):
             provider_id=provider_id,
             model=model,
             prompt=prompt,
-            max_output_tokens=2000,
+            max_output_tokens=6000,
             reasoning_effort="high",
         )
         if not raw:
