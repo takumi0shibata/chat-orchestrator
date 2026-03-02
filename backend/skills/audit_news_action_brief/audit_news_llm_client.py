@@ -1,6 +1,5 @@
 import json
 import asyncio
-import random
 from time import monotonic
 from typing import Any
 
@@ -13,33 +12,7 @@ _WEB_SEARCH_TOOL = {
 }
 _REQUEST_LOCK = asyncio.Lock()
 _LAST_REQUEST_TS = 0.0
-_MIN_REQUEST_INTERVAL_SEC = 1.5
-
-
-def _retry_after_seconds(exc: Exception) -> float | None:
-    response = getattr(exc, "response", None)
-    headers = getattr(response, "headers", None)
-    if not headers:
-        return None
-    raw = headers.get("retry-after") or headers.get("Retry-After")
-    if not raw:
-        return None
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return None
-    if value <= 0:
-        return None
-    return value
-
-
-def _backoff_seconds(exc: Exception, attempt: int) -> float:
-    retry_after = _retry_after_seconds(exc)
-    if retry_after is not None:
-        return min(retry_after, 20.0)
-    base = min(2 ** attempt, 12)
-    jitter = random.uniform(0.0, 0.8)
-    return base + jitter
+_MIN_REQUEST_INTERVAL_SEC = 1.0
 
 
 async def run_json_prompt_with_web(
@@ -49,7 +22,7 @@ async def run_json_prompt_with_web(
     prompt: str,
     max_output_tokens: int = 1200,
     reasoning_effort: str | None = "high",
-    max_retries: int = 6,
+    max_retries: int = 4,
 ) -> str:
     if provider_id != "openai":
         return ""
@@ -83,10 +56,10 @@ async def run_json_prompt_with_web(
         except Exception as exc:
             status_code = getattr(exc, "status_code", None)
             if status_code == 429 and attempt < max_retries:
-                await asyncio.sleep(_backoff_seconds(exc, attempt))
+                await asyncio.sleep(min(2 ** attempt, 8))
                 continue
             if isinstance(status_code, int) and status_code >= 500 and attempt < max_retries:
-                await asyncio.sleep(_backoff_seconds(exc, attempt))
+                await asyncio.sleep(min(2 ** attempt, 8))
                 continue
             return ""
     return ""
