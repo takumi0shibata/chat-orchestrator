@@ -358,16 +358,21 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
             if payload.skill_id:
                 yield json.dumps({"type": "skill_status", "status": "done", "skill_id": payload.skill_id}) + "\n"
 
-            async for chunk in provider.stream_chat(
-                model=payload.model,
-                messages=prepared_messages,
-                temperature=payload.temperature,
-                max_tokens=payload.max_tokens,
-                reasoning_effort=payload.reasoning_effort,
-                enable_web_tool=payload.enable_web_tool,
-            ):
-                accumulated += chunk
-                yield json.dumps({"type": "chunk", "delta": chunk}) + "\n"
+            # This skill already returns user-facing final output.
+            # Skip post-skill assistant generation to reduce rate-limit failures.
+            if payload.skill_id == "audit_news_action_brief":
+                accumulated = ""
+            else:
+                async for chunk in provider.stream_chat(
+                    model=payload.model,
+                    messages=prepared_messages,
+                    temperature=payload.temperature,
+                    max_tokens=payload.max_tokens,
+                    reasoning_effort=payload.reasoning_effort,
+                    enable_web_tool=payload.enable_web_tool,
+                ):
+                    accumulated += chunk
+                    yield json.dumps({"type": "chunk", "delta": chunk}) + "\n"
 
             state.store.add_message(conversation_id, ChatMessage(role="assistant", content=accumulated))
             yield json.dumps(
