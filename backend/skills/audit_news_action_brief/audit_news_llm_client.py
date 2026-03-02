@@ -1,4 +1,6 @@
 import json
+import asyncio
+from time import monotonic
 from typing import Any
 
 from app.config import get_settings
@@ -8,6 +10,9 @@ _WEB_SEARCH_TOOL = {
     "type": "web_search_preview",
     "user_location": {"type": "approximate", "country": "JP"},
 }
+_REQUEST_LOCK = asyncio.Lock()
+_LAST_REQUEST_TS = 0.0
+_MIN_REQUEST_INTERVAL_SEC = 1.0
 
 
 async def run_json_prompt_with_web(
@@ -17,6 +22,7 @@ async def run_json_prompt_with_web(
     prompt: str,
     max_output_tokens: int = 1200,
     reasoning_effort: str | None = "high",
+    max_retries: int = 4,
 ) -> str:
     if provider_id != "openai":
         return ""
@@ -35,8 +41,28 @@ async def run_json_prompt_with_web(
     }
     if reasoning_effort:
         kwargs["reasoning"] = {"effort": reasoning_effort}
-    response = await client.responses.create(**kwargs)
-    return getattr(response, "output_text", "") or ""
+
+    global _LAST_REQUEST_TS
+    for attempt in range(max_retries + 1):
+        try:
+            async with _REQUEST_LOCK:
+                now = monotonic()
+                wait_sec = _MIN_REQUEST_INTERVAL_SEC - (now - _LAST_REQUEST_TS)
+                if wait_sec > 0:
+                    await asyncio.sleep(wait_sec)
+                response = await client.responses.create(**kwargs)
+                _LAST_REQUEST_TS = monotonic()
+            return getattr(response, "output_text", "") or ""
+        except Exception as exc:
+            status_code = getattr(exc, "status_code", None)
+            if status_code == 429 and attempt < max_retries:
+                await asyncio.sleep(min(2 ** attempt, 8))
+                continue
+            if isinstance(status_code, int) and status_code >= 500 and attempt < max_retries:
+                await asyncio.sleep(min(2 ** attempt, 8))
+                continue
+            return ""
+    return ""
 
 
 def extract_json_object(text: str) -> dict[str, Any] | None:
