@@ -80,10 +80,10 @@ class AuditNewsActionBriefSkill(Skill):
         provider_id = str(context.get("provider_id") or "")
         model = str(context.get("model") or "").strip()
 
-        if provider_id != "openai" or not model:
+        if provider_id not in ("openai", "azure_openai") or not model:
             return (
-                "このSkillは OpenAI Responses API モデル（Web検索有効）専用です。"
-                "`provider_id=openai` と `gpt-5.2-2025-12-11` などのResponsesモデルを指定してください。"
+                "このSkillは OpenAI または Azure OpenAI の Responses API モデル（Web検索有効）専用です。"
+                "対応プロバイダーを選択し、`gpt-5.2-2025-12-11` などのResponsesモデルを指定してください。"
             )
 
         capability = get_model_capability(provider_id, model)
