@@ -1,7 +1,7 @@
-import { ChangeEvent, FormEvent, useRef } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ModelInfo, SkillInfo } from "../types";
-import { ChevronDownIcon, PlusIcon, SendIcon, StopIcon } from "./Icons";
+import { AttachmentIcon, CheckIcon, ChevronDownIcon, SendIcon, SettingsIcon, StopIcon } from "./Icons";
 
 type Attachment = {
   id: string;
@@ -14,6 +14,14 @@ type RichModel = ModelInfo & {
   providerLabel: string;
   providerEnabled: boolean;
 };
+
+type ComposerMenu = "model" | "skill" | "settings" | null;
+
+function reasoningLabel(value: "low" | "medium" | "high") {
+  if (value === "low") return "Low";
+  if (value === "high") return "High";
+  return "Medium";
+}
 
 export function Composer(props: {
   input: string;
@@ -66,13 +74,47 @@ export function Composer(props: {
     onCancelStreaming
   } = props;
 
+  const [activeMenu, setActiveMenu] = useState<ComposerMenu>(null);
+
+  const rootRef = useRef<HTMLFormElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const selectedSkill = useMemo(() => skills.find((skill) => skill.id === skillId), [skillId, skills]);
+  const modelLabel = selectedModel?.label || "Select model";
+  const skillLabel = selectedSkill?.name || "No skill";
 
   const resizeTextarea = () => {
     if (!textareaRef.current) return;
     textareaRef.current.style.height = "auto";
     textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`;
+  };
+
+  useEffect(() => {
+    resizeTextarea();
+  }, [input]);
+
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      if (!rootRef.current) return;
+      if (rootRef.current.contains(event.target as Node)) return;
+      setActiveMenu(null);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setActiveMenu(null);
+    };
+
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+
+  const toggleMenu = (menu: Exclude<ComposerMenu, null>) => {
+    setActiveMenu((current) => (current === menu ? null : menu));
   };
 
   const onFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -82,110 +124,253 @@ export function Composer(props: {
   };
 
   return (
-    <form className="composer" onSubmit={onSubmit}>
+    <form ref={rootRef} className="composer" onSubmit={onSubmit}>
       {attachments.length > 0 && (
         <div className="attachment-row">
           {attachments.map((file) => (
             <span className="attachment-chip" key={file.id}>
               {file.name}
-              <button type="button" onClick={() => onRemoveAttachment(file.id)}>
-                x
+              <button type="button" aria-label={`Remove ${file.name}`} onClick={() => onRemoveAttachment(file.id)}>
+                ×
               </button>
             </span>
           ))}
         </div>
       )}
 
-      <textarea
-        ref={textareaRef}
-        value={input}
-        onChange={(event) => {
-          onInputChange(event.target.value);
-          resizeTextarea();
-        }}
-        onKeyDown={(event) => {
-          if (event.metaKey && event.key === "Enter") {
-            event.preventDefault();
-            event.currentTarget.form?.requestSubmit();
-          }
-        }}
-        rows={2}
-        placeholder="Message Orchestrator..."
-      />
-
-      <div className="composer-tools">
-        <button className="icon-btn" type="button" title="Attach files" onClick={() => fileInputRef.current?.click()}>
-          <PlusIcon />
+      <div className="composer-input-row">
+        <button
+          className="composer-attach-btn"
+          type="button"
+          title="Attach files"
+          aria-label="Attach files"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <AttachmentIcon />
         </button>
         <input ref={fileInputRef} type="file" multiple className="hidden-file" onChange={onFileChange} />
 
-        <div className="select-wrap">
-          <select value={modelKey} onChange={(event) => onModelChange(event.target.value)} title="Model">
-            {models.map((item) => (
-              <option value={`${item.providerId}::${item.id}`} key={`${item.providerId}:${item.id}`}>
-                {item.label} ({item.providerLabel})
-              </option>
-            ))}
-          </select>
-          <ChevronDownIcon />
-        </div>
-
-        <div className="select-wrap">
-          <select value={skillId} onChange={(event) => onSkillChange(event.target.value)} title="Skill">
-            <option value="">No skill</option>
-            {skills.map((skill) => (
-              <option value={skill.id} key={skill.id}>
-                {skill.name}
-              </option>
-            ))}
-          </select>
-          <ChevronDownIcon />
-        </div>
-
-        {selectedModel?.supports_temperature && (
-          <input
-            className="mini-input"
-            type="number"
-            value={temperature ?? 0.3}
-            step={0.1}
-            min={0}
-            max={2}
-            onChange={(event) => onTemperatureChange(Number(event.target.value))}
-            title="Temperature"
-          />
-        )}
-
-        {selectedModel?.supports_reasoning_effort && (
-          <div className="select-wrap">
-            <select
-              value={reasoningEffort ?? "medium"}
-              onChange={(event) => onReasoningEffortChange(event.target.value as "low" | "medium" | "high")}
-              title="Reasoning"
-            >
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-            </select>
-            <ChevronDownIcon />
-          </div>
-        )}
-
-        {canUseWebTool && (
-          <label className="web-tool-toggle" title="Enable web search tool">
-            <input type="checkbox" checked={enableWebTool} onChange={(event) => onEnableWebToolChange(event.target.checked)} />
-            <span>Web</span>
-          </label>
-        )}
+        <textarea
+          ref={textareaRef}
+          value={input}
+          onChange={(event) => {
+            onInputChange(event.target.value);
+            resizeTextarea();
+          }}
+          onKeyDown={(event) => {
+            if (event.metaKey && event.key === "Enter") {
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }
+          }}
+          rows={1}
+          placeholder="Ask anything"
+          aria-label="Message input"
+        />
 
         {loading ? (
-          <button className="send-btn stop-btn" type="button" onClick={onCancelStreaming} title="Cancel generation">
+          <button
+            className="send-btn stop-btn"
+            type="button"
+            onClick={onCancelStreaming}
+            title="Cancel generation"
+            aria-label="Cancel generation"
+          >
             <StopIcon />
           </button>
         ) : (
-          <button className="send-btn" type="submit" disabled={!conversationId || !selectedModel}>
+          <button
+            className="send-btn"
+            type="submit"
+            disabled={!conversationId || !selectedModel}
+            aria-label="Send message"
+          >
             <SendIcon />
           </button>
         )}
+      </div>
+
+      <div className="composer-footer">
+        <div className="composer-control">
+          <button
+            className={`composer-trigger ${activeMenu === "model" ? "active" : ""}`}
+            type="button"
+            aria-label="Select model"
+            aria-expanded={activeMenu === "model"}
+            onClick={() => toggleMenu("model")}
+          >
+            <span className="composer-trigger-text">{modelLabel}</span>
+            <ChevronDownIcon />
+          </button>
+          {activeMenu === "model" && (
+            <div className="composer-menu" role="dialog" aria-label="Select model">
+              <div className="composer-menu-header">
+                <h3>Select model</h3>
+              </div>
+              <div className="composer-menu-list">
+                {models.map((item) => {
+                  const isSelected = `${item.providerId}::${item.id}` === modelKey;
+                  return (
+                    <button
+                      className={`composer-menu-item ${isSelected ? "active" : ""}`}
+                      key={`${item.providerId}:${item.id}`}
+                      type="button"
+                      onClick={() => {
+                        onModelChange(`${item.providerId}::${item.id}`);
+                        setActiveMenu(null);
+                      }}
+                    >
+                      <span className="composer-menu-item-copy">
+                        <strong>{item.label}</strong>
+                        <span>{item.providerLabel}</span>
+                      </span>
+                      {isSelected && <CheckIcon />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="composer-control">
+          <button
+            className={`composer-trigger ${activeMenu === "skill" ? "active" : ""}`}
+            type="button"
+            aria-label="Select skill"
+            aria-expanded={activeMenu === "skill"}
+            onClick={() => toggleMenu("skill")}
+          >
+            <span className="composer-trigger-text">{skillLabel}</span>
+            <ChevronDownIcon />
+          </button>
+          {activeMenu === "skill" && (
+            <div className="composer-menu" role="dialog" aria-label="Select skill">
+              <div className="composer-menu-header">
+                <h3>Select skill</h3>
+              </div>
+              <div className="composer-menu-list">
+                <button
+                  className={`composer-menu-item ${skillId ? "" : "active"}`}
+                  type="button"
+                  onClick={() => {
+                    onSkillChange("");
+                    setActiveMenu(null);
+                  }}
+                >
+                  <span className="composer-menu-item-copy">
+                    <strong>No skill</strong>
+                    <span>Use the selected model directly</span>
+                  </span>
+                  {!skillId && <CheckIcon />}
+                </button>
+                {skills.map((skill) => {
+                  const isSelected = skill.id === skillId;
+                  return (
+                    <button
+                      className={`composer-menu-item ${isSelected ? "active" : ""}`}
+                      key={skill.id}
+                      type="button"
+                      onClick={() => {
+                        onSkillChange(skill.id);
+                        setActiveMenu(null);
+                      }}
+                    >
+                      <span className="composer-menu-item-copy">
+                        <strong>{skill.name}</strong>
+                        <span>{skill.description}</span>
+                      </span>
+                      {isSelected && <CheckIcon />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="composer-control composer-control-right">
+          <button
+            className={`composer-trigger composer-trigger-icon ${activeMenu === "settings" ? "active" : ""}`}
+            type="button"
+            aria-label="Open chat settings"
+            aria-expanded={activeMenu === "settings"}
+            onClick={() => toggleMenu("settings")}
+          >
+            <SettingsIcon />
+            <span className="composer-trigger-text">Settings</span>
+          </button>
+          {activeMenu === "settings" && (
+            <div className="composer-menu composer-menu-right" role="dialog" aria-label="Chat settings">
+              <div className="composer-menu-header">
+                <h3>Chat settings</h3>
+              </div>
+
+              <div className="composer-settings-stack">
+                {selectedModel?.supports_temperature && (
+                  <section className="composer-settings-section">
+                    <p>Temperature</p>
+                    <label className="composer-number-row">
+                      <span>Creativity</span>
+                      <input
+                        className="composer-number-input"
+                        type="number"
+                        value={temperature ?? 0.3}
+                        step={0.1}
+                        min={0}
+                        max={2}
+                        onChange={(event) => onTemperatureChange(Number(event.target.value))}
+                        aria-label="Temperature"
+                      />
+                    </label>
+                  </section>
+                )}
+
+                {selectedModel?.supports_reasoning_effort && (
+                  <section className="composer-settings-section">
+                    <p>Reasoning</p>
+                    <div className="composer-choice-group">
+                      {(["low", "medium", "high"] as const).map((value) => (
+                        <button
+                          className={`composer-choice ${value === (reasoningEffort ?? "medium") ? "active" : ""}`}
+                          key={value}
+                          type="button"
+                          onClick={() => onReasoningEffortChange(value)}
+                        >
+                          {reasoningLabel(value)}
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {canUseWebTool && (
+                  <section className="composer-settings-section">
+                    <p>Tools</p>
+                    <button
+                      className={`composer-toggle-row ${enableWebTool ? "enabled" : ""}`}
+                      type="button"
+                      aria-pressed={enableWebTool}
+                      onClick={() => onEnableWebToolChange(!enableWebTool)}
+                    >
+                      <span className="composer-toggle-copy">
+                        <strong>Web search</strong>
+                        <span>Enable the built-in web tool for this chat</span>
+                      </span>
+                      <span className="composer-switch" aria-hidden="true" />
+                    </button>
+                  </section>
+                )}
+
+                {!selectedModel?.supports_temperature &&
+                  !selectedModel?.supports_reasoning_effort &&
+                  !canUseWebTool && <p className="composer-settings-empty">No additional settings available.</p>}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <p className="composer-hint">Cmd + Enter to send</p>
       </div>
     </form>
   );

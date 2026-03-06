@@ -116,4 +116,38 @@ describe("SkillBlockRenderer", () => {
 
     expect(screen.getByRole("button", { name: "対応する" })).toBeDisabled();
   });
+
+  it("keeps audit news badges present even when the title is long", () => {
+    render(
+      <SkillBlockRenderer
+        blocks={[
+          {
+            type: "card_list",
+            sections: [
+              {
+                id: "self_company",
+                title: "自社",
+                items: [
+                  {
+                    id: "news-long",
+                    title:
+                      "Memory chipmaker Kioxia, retail operator Pan Pacific to be added to Nikkei index and this headline is intentionally long to stress the layout",
+                    badge: { label: "自社", tone: "medium" },
+                    metadata: [],
+                    lines: [],
+                    links: [],
+                    actions: []
+                  }
+                ]
+              }
+            ]
+          }
+        ]}
+      />
+    );
+
+    const chips = screen.getAllByText("自社");
+    expect(chips).toHaveLength(2);
+    expect(chips[1]).toHaveClass("priority-chip", "medium");
+  });
 });
