@@ -1,6 +1,6 @@
 from typing import Any
 
-from app.skills_runtime.base import Skill, SkillExecutionResult, SkillMetadata, context_only_result
+from app.skills_runtime.base import Skill, SkillCategory, SkillExecutionResult, SkillMetadata, context_only_result
 
 
 class ContextSummarizerSkill(Skill):
@@ -8,6 +8,8 @@ class ContextSummarizerSkill(Skill):
         id="context_summarizer",
         name="Context Summarizer",
         description="会話履歴を短く要約して、モデルへ補助コンテキストとして渡します。",
+        primary_category=SkillCategory(id="general", label="General"),
+        tags=["general", "summarization", "context"],
     )
 
     async def run(

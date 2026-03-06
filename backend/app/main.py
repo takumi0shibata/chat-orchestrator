@@ -95,6 +95,11 @@ def list_skills() -> list[SkillInfo]:
             id=skill.metadata.id,
             name=skill.metadata.name,
             description=skill.metadata.description,
+            primary_category={
+                "id": skill.metadata.primary_category.id,
+                "label": skill.metadata.primary_category.label,
+            },
+            tags=list(skill.metadata.tags),
         )
         for skill in state.skills.list_skills()
     ]

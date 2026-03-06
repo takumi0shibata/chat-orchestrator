@@ -91,3 +91,19 @@ export function ChevronDownIcon() {
     </svg>
   );
 }
+
+export function ChevronLeftIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m14 7-5 5 5 5" {...strokeProps} />
+    </svg>
+  );
+}
+
+export function ChevronRightIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m10 7 5 5-5 5" {...strokeProps} />
+    </svg>
+  );
+}

@@ -36,7 +36,13 @@ const { controller } = vi.hoisted(() => ({
       providerLabel: "OpenAI",
       providerEnabled: true
     },
-    selectedSkill: { id: "audit", name: "Audit brief", description: "desc" },
+    selectedSkill: {
+      id: "audit",
+      name: "Audit brief",
+      description: "desc",
+      primary_category: { id: "audit", label: "Audit" },
+      tags: ["audit", "monitoring"]
+    },
     canUseWebTool: true,
     setInput: vi.fn(),
     setSkillId: vi.fn(),

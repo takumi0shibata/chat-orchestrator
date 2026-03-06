@@ -42,8 +42,20 @@ describe("Composer", () => {
       modelKey: "openai::gpt-5.2",
       onModelChange: vi.fn(),
       skills: [
-        { id: "audit", name: "Audit brief", description: "Create action-oriented monitoring notes" },
-        { id: "edinet", name: "EDINET Annual Report QA", description: "Answer questions against the filing" }
+        {
+          id: "audit",
+          name: "Audit brief",
+          description: "Create action-oriented monitoring notes",
+          primary_category: { id: "audit", label: "Audit" },
+          tags: ["audit", "monitoring"]
+        },
+        {
+          id: "edinet",
+          name: "EDINET Annual Report QA",
+          description: "Answer questions against the filing",
+          primary_category: { id: "finance", label: "Finance" },
+          tags: ["finance", "edinet"]
+        }
       ],
       skillId: "audit",
       onSkillChange: vi.fn(),
@@ -72,7 +84,7 @@ describe("Composer", () => {
     };
   }
 
-  it("renders compact triggers and opens the model, skill, and settings popovers", async () => {
+  it("renders compact triggers and navigates skill categories", async () => {
     const user = userEvent.setup();
     const props = createProps();
 
@@ -91,10 +103,33 @@ describe("Composer", () => {
     await user.click(screen.getByRole("button", { name: "Select skill" }));
     expect(screen.getByRole("dialog", { name: "Select skill" })).toBeInTheDocument();
     expect(screen.getByText("No skill")).toBeInTheDocument();
+    expect(screen.getByText("Audit")).toBeInTheDocument();
+    expect(screen.getByText("Finance")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Audit/i }));
+    expect(screen.getByText("Create action-oriented monitoring notes")).toBeInTheDocument();
+    expect(screen.getByText("monitoring")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Back to skill categories" }));
+    expect(screen.getByText("Finance")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Open chat settings" }));
     expect(screen.getByRole("dialog", { name: "Chat settings" })).toBeInTheDocument();
     expect(screen.getByLabelText("Temperature")).toBeInTheDocument();
+  });
+
+  it("selects a skill from a category and closes the menu", async () => {
+    const user = userEvent.setup();
+    const props = createProps();
+
+    render(<Composer {...props} />);
+
+    await user.click(screen.getByRole("button", { name: "Select skill" }));
+    await user.click(screen.getByRole("button", { name: /Finance/i }));
+    await user.click(screen.getByRole("button", { name: /EDINET Annual Report QA/i }));
+
+    expect(props.onSkillChange).toHaveBeenCalledWith("edinet");
+    expect(screen.queryByRole("dialog", { name: "Select skill" })).not.toBeInTheDocument();
   });
 
   it("shows the cancel action while streaming", () => {

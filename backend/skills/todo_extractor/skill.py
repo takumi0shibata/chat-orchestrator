@@ -1,7 +1,7 @@
 import re
 from typing import Any
 
-from app.skills_runtime.base import Skill, SkillExecutionResult, SkillMetadata, context_only_result
+from app.skills_runtime.base import Skill, SkillCategory, SkillExecutionResult, SkillMetadata, context_only_result
 
 
 class TodoExtractorSkill(Skill):
@@ -9,6 +9,8 @@ class TodoExtractorSkill(Skill):
         id="todo_extractor",
         name="TODO Extractor",
         description="入力文から行動可能なTODOを抽出して箇条書き化します。",
+        primary_category=SkillCategory(id="general", label="General"),
+        tags=["general", "todo", "productivity"],
     )
 
     async def run(

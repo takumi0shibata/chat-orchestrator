@@ -666,6 +666,13 @@ a {
   gap: 10px;
 }
 
+.composer-menu-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
 .composer-menu-right {
   left: auto;
   right: 0;
@@ -678,6 +685,30 @@ a {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.composer-menu-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-soft);
+}
+
+.composer-menu-back {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.composer-menu-back svg {
+  width: 14px;
+  height: 14px;
 }
 
 .composer-menu-list,
@@ -716,6 +747,10 @@ a {
   flex-shrink: 0;
 }
 
+.composer-menu-item-branch svg {
+  color: var(--text-faint);
+}
+
 .composer-menu-item-copy {
   min-width: 0;
   display: grid;
@@ -735,6 +770,26 @@ a {
   color: var(--text-faint);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.composer-skill-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.composer-skill-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--surface-tint);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .composer-settings-section {

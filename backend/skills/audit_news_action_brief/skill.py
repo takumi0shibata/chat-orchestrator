@@ -25,6 +25,7 @@ from app.skills_runtime.base import (
     MarkdownBlock,
     MetadataItem,
     Skill,
+    SkillCategory,
     SkillExecutionOptions,
     SkillExecutionResult,
     SkillMetadata,
@@ -83,6 +84,8 @@ class AuditNewsActionBriefSkill(Skill):
             "監査クライアントの自社・他社・マクロニュースを戦略的に探索し、"
             "監査上有益なニュースをカテゴリ別に提示します。"
         ),
+        primary_category=SkillCategory(id="audit", label="Audit"),
+        tags=["audit", "news", "monitoring"],
     )
 
     _MAX_LOOKBACK_DAYS = 30

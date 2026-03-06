@@ -8,10 +8,49 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 
 @dataclass
+class SkillCategory:
+    id: str
+    label: str
+
+
+@dataclass
 class SkillMetadata:
     id: str
     name: str
     description: str
+    primary_category: SkillCategory
+    tags: list[str]
+
+    def __post_init__(self) -> None:
+        self.id = self.id.strip()
+        self.name = self.name.strip()
+        self.description = self.description.strip()
+        self.primary_category = SkillCategory(
+            id=self.primary_category.id.strip(),
+            label=self.primary_category.label.strip(),
+        )
+
+        if not self.id:
+            raise ValueError("SkillMetadata.id cannot be empty")
+        if not self.name:
+            raise ValueError("SkillMetadata.name cannot be empty")
+        if not self.description:
+            raise ValueError("SkillMetadata.description cannot be empty")
+        if not self.primary_category.id.strip():
+            raise ValueError("SkillMetadata.primary_category.id cannot be empty")
+        if not self.primary_category.label.strip():
+            raise ValueError("SkillMetadata.primary_category.label cannot be empty")
+        if not self.tags:
+            raise ValueError("SkillMetadata.tags cannot be empty")
+
+        deduped_tags: list[str] = []
+        for tag in self.tags:
+            normalized = tag.strip()
+            if not normalized:
+                raise ValueError("SkillMetadata.tags cannot contain empty values")
+            if normalized not in deduped_tags:
+                deduped_tags.append(normalized)
+        self.tags = deduped_tags
 
 
 class SkillModel(BaseModel):
