@@ -1,8 +1,8 @@
 import type { FeedbackAction, FeedbackChoice, LineChartBlock, LineChartPoint, UiBlock } from "../types";
 import { MarkdownContent } from "./MarkdownContent";
 
-function buildPolyline(points: LineChartPoint[], width: number, height: number, padding: number): string {
-  if (points.length === 0) return "";
+function buildChartCoordinates(points: LineChartPoint[], width: number, height: number, padding: number) {
+  if (points.length === 0) return [];
   const innerWidth = width - padding * 2;
   const innerHeight = height - padding * 2;
   const values = points.map((item) => item.value);
@@ -10,13 +10,29 @@ function buildPolyline(points: LineChartPoint[], width: number, height: number, 
   const maxValue = Math.max(...values);
   const span = maxValue - minValue || Math.max(Math.abs(maxValue), 1) * 0.05;
 
-  const coords = points.map((point, index) => {
+  return points.map((point, index) => {
     const x = points.length <= 1 ? width / 2 : padding + (innerWidth * index) / (points.length - 1);
     const ratio = (point.value - minValue) / span;
     const y = padding + innerHeight - ratio * innerHeight;
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
+    return { x, y };
   });
-  return coords.join(" ");
+}
+
+function buildPolyline(points: LineChartPoint[], width: number, height: number, padding: number): string {
+  return buildChartCoordinates(points, width, height, padding)
+    .map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`)
+    .join(" ");
+}
+
+function buildAreaPath(points: LineChartPoint[], width: number, height: number, padding: number): string {
+  const coords = buildChartCoordinates(points, width, height, padding);
+  if (coords.length === 0) return "";
+  const first = coords[0];
+  const last = coords[coords.length - 1];
+  const middle = coords.map((point) => `L ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ");
+  return `M ${first.x.toFixed(2)} ${(height - padding).toFixed(2)} ${middle} L ${last.x.toFixed(
+    2
+  )} ${(height - padding).toFixed(2)} Z`;
 }
 
 function formatChartValue(value: number): string {
@@ -38,6 +54,7 @@ function LineChartCard({ chart }: { chart: LineChartBlock }) {
   const height = 260;
   const padding = 28;
   const polyline = buildPolyline(chart.points, width, height, padding);
+  const areaPath = buildAreaPath(chart.points, width, height, padding);
   const values = chart.points.map((item) => item.value);
   const minValue = Math.min(...values);
   const maxValue = Math.max(...values);
@@ -46,12 +63,19 @@ function LineChartCard({ chart }: { chart: LineChartBlock }) {
   return (
     <section className="skill-chart-card">
       <div className="chart-label">
-        <span>{chart.title}</span>
-        <span>{frequencyLabel(chart.frequency)}</span>
+        <div>
+          <p className="chart-kicker">Time series insight</p>
+          <strong>{chart.title}</strong>
+        </div>
+        <span className="chart-frequency">{frequencyLabel(chart.frequency)}</span>
       </div>
       <svg className="skill-chart-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${chart.title} 時系列`}>
+        <line className="chart-grid" x1={padding} y1={padding} x2={width - padding} y2={padding} />
+        <line className="chart-grid" x1={padding} y1={height / 2} x2={width - padding} y2={height / 2} />
+        <line className="chart-grid" x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} />
         <line className="chart-axis" x1={padding} y1={padding} x2={padding} y2={height - padding} />
         <line className="chart-axis" x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} />
+        <path className="chart-area" d={areaPath} />
         <polyline className="chart-line" points={polyline} />
         <text className="chart-y-label" x={padding + 6} y={padding + 12}>
           max {formatChartValue(maxValue)}
@@ -94,7 +118,10 @@ export function SkillBlockRenderer(props: {
             {block.sections.map((section) => (
               <section className="audit-news-view-section" key={section.id}>
                 <header className="audit-news-view-header">
-                  <h4>{section.title}</h4>
+                  <div className="audit-news-view-title">
+                    <p className="artifact-section-kicker">Action brief</p>
+                    <h4>{section.title}</h4>
+                  </div>
                   {section.badge && <span className={`priority-chip ${section.badge.tone}`}>{section.badge.label}</span>}
                 </header>
                 {section.summary && <p className="audit-news-view-summary">{section.summary}</p>}
@@ -102,7 +129,7 @@ export function SkillBlockRenderer(props: {
                   section.items.map((item) => (
                     <section className="audit-news-card" key={item.id}>
                       <header className="audit-news-card-header">
-                        <h4>{item.title}</h4>
+                        <h4 className="audit-news-card-title">{item.title}</h4>
                         {item.badge && <span className={`priority-chip ${item.badge.tone}`}>{item.badge.label}</span>}
                       </header>
                       {item.metadata.length > 0 && (
