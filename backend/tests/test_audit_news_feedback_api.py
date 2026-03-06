@@ -3,26 +3,39 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.main import _register_audit_news_alerts, app, state
+from app.chat_service import ChatOrchestrator
+from app.main import app, state
+from app.schemas import ChatMessage
+from app.skills_runtime.base import CardItem, CardListBlock, CardSection, FeedbackAction, FeedbackChoice
 from app.storage import ChatStore
+
+
+class EmptySkills:
+    def get(self, skill_id: str):
+        del skill_id
+        return None
+
+    def list_skills(self):
+        return []
 
 
 def _set_temp_store(tmp_path: Path) -> None:
     state.store = ChatStore(db_path=tmp_path / "chat-test.db")
+    state.chat = ChatOrchestrator(store=state.store, skills=EmptySkills())
 
 
-def test_feedback_api_accepts_unknown_run_and_alert_if_conversation_exists() -> None:
+def test_generic_feedback_api_accepts_unknown_run_and_item_if_conversation_exists() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with TestClient(app) as client:
             _set_temp_store(Path(tmp))
             conversation_id = state.store.create_conversation()
 
             response = client.post(
-                "/api/skills/audit_news_action_brief/feedback",
+                "/api/skill-feedback",
                 json={
                     "conversation_id": conversation_id,
                     "run_id": "run-unknown",
-                    "alert_id": "alert-unknown",
+                    "item_id": "item-unknown",
                     "decision": "acted",
                     "note": "start review",
                 },
@@ -31,7 +44,7 @@ def test_feedback_api_accepts_unknown_run_and_alert_if_conversation_exists() -> 
             assert response.json() == {"ok": True}
 
 
-def test_feedback_api_rejects_invalid_decision() -> None:
+def test_audit_feedback_api_rejects_invalid_decision() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with TestClient(app) as client:
             _set_temp_store(Path(tmp))
@@ -55,22 +68,22 @@ def test_metrics_api_returns_expected_aggregates() -> None:
             _set_temp_store(Path(tmp))
             conversation_id = state.store.create_conversation()
 
-            state.store.record_skill_alerts(
+            state.store.record_feedback_targets(
                 conversation_id=conversation_id,
                 run_id="run-1",
-                alert_ids=["a1", "a2", "a3"],
+                item_ids=["a1", "a2", "a3"],
             )
-            state.store.add_skill_feedback(
+            state.store.add_feedback(
                 conversation_id=conversation_id,
                 run_id="run-1",
-                alert_id="a1",
+                item_id="a1",
                 decision="acted",
                 note=None,
             )
-            state.store.add_skill_feedback(
+            state.store.add_feedback(
                 conversation_id=conversation_id,
                 run_id="run-1",
-                alert_id="a2",
+                item_id="a2",
                 decision="monitor",
                 note=None,
             )
@@ -84,32 +97,51 @@ def test_metrics_api_returns_expected_aggregates() -> None:
             assert abs(payload["action_rate"] - (1 / 3)) < 1e-3
 
 
-def test_registers_v2_news_ids_for_metrics() -> None:
+def test_persisted_messages_restore_selected_feedback_state() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        with TestClient(app):
-            _set_temp_store(Path(tmp))
-            conversation_id = state.store.create_conversation()
-            skill_output = (
-                "監査アクションニュースブリーフ\\n"
-                "```audit-news-json\\n"
-                "{"
-                "\"schema\":\"audit_news_action_brief/v2\","
-                "\"run_id\":\"run-v2\","
-                "\"generated_at\":\"2026-01-01T00:00:00+00:00\","
-                "\"client\":{\"name\":\"A食品\",\"industry\":\"食品\",\"lookback_days\":7,\"focus_topics\":[],\"watch_competitors\":[]},"
-                "\"views\":{"
-                "\"self_company\":[{\"news_id\":\"n1\",\"title\":\"t1\",\"summary\":\"s\",\"url\":\"u\",\"one_liner_comment\":\"c\",\"source\":\"x\",\"published_at\":\"2026-01-01T00:00:00+00:00\",\"view\":\"self_company\",\"propagation_note\":\"p\",\"score\":80}],"
-                "\"peer_companies\":[{\"news_id\":\"n2\",\"title\":\"t2\",\"summary\":\"s\",\"url\":\"u2\",\"one_liner_comment\":\"c\",\"source\":\"x\",\"published_at\":\"2026-01-01T00:00:00+00:00\",\"view\":\"peer_companies\",\"propagation_note\":\"p\",\"score\":70}],"
-                "\"macro\":[]"
-                "}"
-                "}"
-                "\\n```"
-            )
-            _register_audit_news_alerts(
-                conversation_id=conversation_id,
-                skill_id="audit_news_action_brief",
-                skill_output=skill_output,
-            )
+        _set_temp_store(Path(tmp))
+        conversation_id = state.store.create_conversation()
 
-            metrics = state.store.audit_news_metrics(date_from=None, date_to=None)
-            assert metrics["total_alerts"] == 2
+        state.store.add_message(
+            conversation_id,
+            ChatMessage(
+                role="assistant",
+                content="feedback test",
+                skill_id="audit_news_action_brief",
+                artifacts=[
+                    CardListBlock(
+                        title="監査アクションニュース",
+                        sections=[
+                            CardSection(
+                                id="self_company",
+                                title="自社",
+                                items=[
+                                    CardItem(
+                                        id="item-1",
+                                        title="Item 1",
+                                        actions=[
+                                            FeedbackAction(
+                                                run_id="run-1",
+                                                item_id="item-1",
+                                                choices=[FeedbackChoice(value="acted", label="対応する")],
+                                            )
+                                        ],
+                                    )
+                                ],
+                            )
+                        ],
+                    )
+                ],
+            ),
+        )
+        state.store.add_feedback(
+            conversation_id=conversation_id,
+            run_id="run-1",
+            item_id="item-1",
+            decision="acted",
+            note=None,
+        )
+
+        messages = state.store.get_messages(conversation_id)
+        action = messages[0].artifacts[0].sections[0].items[0].actions[0]
+        assert action.selected == "acted"

@@ -1,7 +1,5 @@
 import asyncio
 import json
-import inspect
-import re
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
@@ -11,16 +9,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from app.attachments import extract_attachments
+from app.chat_service import ChatOrchestrator
 from app.config import Settings, get_settings
 from app.model_catalog import list_models, to_api
 from app.providers.registry import ProviderRegistry
 from app.schemas import (
+    AuditNewsFeedbackRequest,
+    AuditNewsMetricsResponse,
     ChatMessage,
     ChatRequest,
     ChatResponse,
     ConversationInfo,
     ConversationSummary,
-    AuditNewsMetricsResponse,
     ExtractAttachmentsResponse,
     ModelInfo,
     ProviderInfo,
@@ -37,10 +37,10 @@ class AppState:
     providers: ProviderRegistry
     skills: SkillManager
     store: ChatStore
+    chat: ChatOrchestrator
 
 
 state = AppState()
-_AUDIT_NEWS_JSON_BLOCK = re.compile(r"```audit-news-json\s*\n([\s\S]*?)```")
 _ALLOWED_FEEDBACK_DECISIONS = {"acted", "monitor", "not_relevant"}
 
 
@@ -57,6 +57,7 @@ async def lifespan(_: FastAPI):
 
     db_path = project_root / "data" / "chat.db"
     state.store = ChatStore(db_path=db_path)
+    state.chat = ChatOrchestrator(store=state.store, skills=state.skills)
     yield
 
 
@@ -70,101 +71,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-async def run_skill_if_needed(
-    *,
-    skill_id: str | None,
-    provider_id: str,
-    model: str,
-    user_input: str,
-    messages: list[ChatMessage],
-) -> tuple[list[ChatMessage], str | None]:
-    if not skill_id:
-        return messages, None
-
-    skill = state.skills.get(skill_id)
-    if not skill:
-        raise HTTPException(status_code=400, detail=f"Unknown skill: {skill_id}")
-
-    history = [m.model_dump() for m in messages]
-    run_params = inspect.signature(skill.run).parameters
-    if "skill_context" in run_params:
-        skill_output = await skill.run(
-            user_text=user_input,
-            history=history,
-            skill_context={"provider_id": provider_id, "model": model},
-        )
-    else:
-        skill_output = await skill.run(user_text=user_input, history=history)
-    messages = [
-        ChatMessage(
-            role="system",
-            content=(
-                "You have supplemental context from a local skill. Use it when relevant.\n"
-                f"[Skill:{skill_id}]\n{skill_output}"
-            ),
-        ),
-        *messages,
-    ]
-    return messages, skill_output
-
-
-def _extract_audit_news_payload(skill_output: str | None) -> dict | None:
-    if not skill_output:
-        return None
-    match = _AUDIT_NEWS_JSON_BLOCK.search(skill_output)
-    if not match:
-        return None
-    try:
-        parsed = json.loads(match.group(1))
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    schema = parsed.get("schema")
-    if schema not in {"audit_news_action_brief/v1", "audit_news_action_brief/v2", "audit_news_action_brief/v3"}:
-        return None
-    return parsed
-
-
-def _register_audit_news_alerts(*, conversation_id: str, skill_id: str | None, skill_output: str | None) -> None:
-    if skill_id != "audit_news_action_brief":
-        return
-    payload = _extract_audit_news_payload(skill_output)
-    if not payload:
-        return
-
-    run_id = payload.get("run_id")
-    if not isinstance(run_id, str):
-        return
-
-    schema = payload.get("schema")
-    alert_ids: list[str] = []
-    if schema == "audit_news_action_brief/v1":
-        alerts = payload.get("alerts")
-        if not isinstance(alerts, list):
-            return
-        alert_ids = [
-            str(row.get("alert_id"))
-            for row in alerts
-            if isinstance(row, dict) and isinstance(row.get("alert_id"), str)
-        ]
-    elif schema in {"audit_news_action_brief/v2", "audit_news_action_brief/v3"}:
-        views = payload.get("views")
-        if not isinstance(views, dict):
-            return
-        for key in ("self_company", "peer_companies", "macro"):
-            rows = views.get(key)
-            if not isinstance(rows, list):
-                continue
-            for row in rows:
-                if isinstance(row, dict) and isinstance(row.get("news_id"), str):
-                    alert_ids.append(str(row.get("news_id")))
-
-    if not alert_ids:
-        return
-    state.store.record_skill_alerts(conversation_id=conversation_id, run_id=run_id, alert_ids=alert_ids)
 
 
 @app.get("/health")
@@ -232,73 +138,74 @@ def get_conversation_messages(conversation_id: str) -> list[ChatMessage]:
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(payload: ChatRequest) -> ChatResponse:
-    if not payload.user_input.strip():
-        raise HTTPException(status_code=400, detail="user_input cannot be empty")
-
     provider = state.providers.get(payload.provider_id)
-    conversation_id = state.store.ensure_conversation(payload.conversation_id)
-    history = state.store.get_messages(conversation_id)
-
-    user_input = payload.user_input.strip()
-    messages = [*history, ChatMessage(role="user", content=user_input)]
-    prepared_messages, skill_output = await run_skill_if_needed(
-        skill_id=payload.skill_id,
-        provider_id=payload.provider_id,
-        model=payload.model,
-        user_input=user_input,
-        messages=messages,
-    )
-    _register_audit_news_alerts(
-        conversation_id=conversation_id,
-        skill_id=payload.skill_id,
-        skill_output=skill_output,
-    )
-
-    # Disable LLM's own web search when audit news skill already ran
-    effective_web_tool = payload.enable_web_tool
-    if payload.skill_id == "audit_news_action_brief":
-        effective_web_tool = False
+    prepared = await state.chat.prepare_turn(payload)
 
     output = await provider.chat(
         model=payload.model,
-        messages=prepared_messages,
+        messages=prepared.prepared_messages,
         temperature=payload.temperature,
         max_tokens=payload.max_tokens,
         reasoning_effort=payload.reasoning_effort,
-        enable_web_tool=effective_web_tool,
+        enable_web_tool=prepared.effective_web_tool,
     )
-
-    state.store.ensure_title_from_user_input(conversation_id, user_input)
-    state.store.add_message(conversation_id, ChatMessage(role="user", content=user_input))
-    state.store.add_message(conversation_id, ChatMessage(role="assistant", content=output))
-
+    assistant_message = state.chat.build_assistant_message(
+        content=output,
+        skill_id=payload.skill_id,
+        skill_result=prepared.skill_result,
+    )
+    state.chat.persist_user_message(
+        conversation_id=prepared.conversation_id,
+        user_input=prepared.user_input,
+    )
+    state.chat.persist_assistant_message(
+        conversation_id=prepared.conversation_id,
+        message=assistant_message,
+        skill_result=prepared.skill_result,
+    )
     return ChatResponse(
         provider_id=payload.provider_id,
         model=payload.model,
         output=output,
-        conversation_id=conversation_id,
-        skill_output=skill_output,
+        conversation_id=prepared.conversation_id,
+        message=assistant_message,
     )
+
+
+@app.post("/api/skill-feedback", response_model=SkillFeedbackResponse)
+def submit_skill_feedback(payload: SkillFeedbackRequest) -> SkillFeedbackResponse:
+    decision = payload.decision.strip()
+    if not decision:
+        raise HTTPException(status_code=400, detail="decision cannot be empty")
+    if not state.store.conversation_exists(payload.conversation_id):
+        raise HTTPException(status_code=400, detail=f"Unknown conversation_id: {payload.conversation_id}")
+
+    state.store.add_feedback(
+        conversation_id=payload.conversation_id,
+        run_id=payload.run_id,
+        item_id=payload.item_id,
+        decision=decision,
+        note=payload.note,
+    )
+    return SkillFeedbackResponse(ok=True)
 
 
 @app.post(
     "/api/skills/audit_news_action_brief/feedback",
     response_model=SkillFeedbackResponse,
 )
-def submit_audit_news_feedback(payload: SkillFeedbackRequest) -> SkillFeedbackResponse:
+def submit_audit_news_feedback(payload: AuditNewsFeedbackRequest) -> SkillFeedbackResponse:
     if payload.decision not in _ALLOWED_FEEDBACK_DECISIONS:
         raise HTTPException(status_code=400, detail="decision must be one of: acted, monitor, not_relevant")
-    if not state.store.conversation_exists(payload.conversation_id):
-        raise HTTPException(status_code=400, detail=f"Unknown conversation_id: {payload.conversation_id}")
-
-    state.store.add_skill_feedback(
-        conversation_id=payload.conversation_id,
-        run_id=payload.run_id,
-        alert_id=payload.alert_id,
-        decision=payload.decision,
-        note=payload.note,
+    return submit_skill_feedback(
+        SkillFeedbackRequest(
+            conversation_id=payload.conversation_id,
+            run_id=payload.run_id,
+            item_id=payload.alert_id,
+            decision=payload.decision,
+            note=payload.note,
+        )
     )
-    return SkillFeedbackResponse(ok=True)
 
 
 @app.get(
@@ -323,73 +230,54 @@ def audit_news_metrics(
 
 @app.post("/api/chat/stream")
 async def stream_chat(payload: ChatRequest) -> StreamingResponse:
-    if not payload.user_input.strip():
-        raise HTTPException(status_code=400, detail="user_input cannot be empty")
-
     provider = state.providers.get(payload.provider_id)
-    conversation_id = state.store.ensure_conversation(payload.conversation_id)
-    history = state.store.get_messages(conversation_id)
-    if payload.skill_id and not state.skills.get(payload.skill_id):
-        raise HTTPException(status_code=400, detail=f"Unknown skill: {payload.skill_id}")
-
-    user_input = payload.user_input.strip()
-    messages = [*history, ChatMessage(role="user", content=user_input)]
 
     async def generate():
-        state.store.ensure_title_from_user_input(conversation_id, user_input)
-        state.store.add_message(conversation_id, ChatMessage(role="user", content=user_input))
-        accumulated = ""
-        skill_output: str | None = None
-        prepared_messages = messages
-
         try:
             if payload.skill_id:
                 yield json.dumps(
                     {"type": "skill_status", "status": "running", "skill_id": payload.skill_id}
                 ) + "\n"
 
-            prepared_messages, skill_output = await run_skill_if_needed(
-                skill_id=payload.skill_id,
-                provider_id=payload.provider_id,
-                model=payload.model,
-                user_input=user_input,
-                messages=messages,
-            )
-            _register_audit_news_alerts(
-                conversation_id=conversation_id,
-                skill_id=payload.skill_id,
-                skill_output=skill_output,
+            prepared = await state.chat.prepare_turn(payload)
+            state.chat.persist_user_message(
+                conversation_id=prepared.conversation_id,
+                user_input=prepared.user_input,
             )
 
             if payload.skill_id:
                 yield json.dumps({"type": "skill_status", "status": "done", "skill_id": payload.skill_id}) + "\n"
                 await asyncio.sleep(5)
 
-            # Disable LLM's own web search when audit news skill already ran
-            # to prevent the LLM from compensating with its own search results
-            effective_web_tool = payload.enable_web_tool
-            if payload.skill_id == "audit_news_action_brief":
-                effective_web_tool = False
-
+            accumulated = ""
             async for chunk in provider.stream_chat(
                 model=payload.model,
-                messages=prepared_messages,
+                messages=prepared.prepared_messages,
                 temperature=payload.temperature,
                 max_tokens=payload.max_tokens,
                 reasoning_effort=payload.reasoning_effort,
-                enable_web_tool=effective_web_tool,
+                enable_web_tool=prepared.effective_web_tool,
             ):
                 accumulated += chunk
                 yield json.dumps({"type": "chunk", "delta": chunk}) + "\n"
 
-            state.store.add_message(conversation_id, ChatMessage(role="assistant", content=accumulated))
+            assistant_message = state.chat.build_assistant_message(
+                content=accumulated,
+                skill_id=payload.skill_id,
+                skill_result=prepared.skill_result,
+            )
+            state.chat.persist_assistant_message(
+                conversation_id=prepared.conversation_id,
+                message=assistant_message,
+                skill_result=prepared.skill_result,
+            )
             yield json.dumps(
                 {
                     "type": "done",
-                    "conversation_id": conversation_id,
+                    "conversation_id": prepared.conversation_id,
                     "provider_id": payload.provider_id,
                     "model": payload.model,
-                    "skill_output": skill_output,
+                    "message": assistant_message.model_dump(mode="json"),
                 }
             ) + "\n"
         except Exception as exc:

@@ -12,7 +12,23 @@ from uuid import uuid4
 logger = logging.getLogger("audit_news")
 
 from app.model_catalog import get_model_capability
-from app.skills_runtime.base import Skill, SkillMetadata
+from app.skills_runtime.base import (
+    Badge,
+    CardItem,
+    CardLine,
+    CardListBlock,
+    CardSection,
+    FeedbackAction,
+    FeedbackChoice,
+    FeedbackTarget,
+    LinkItem,
+    MarkdownBlock,
+    MetadataItem,
+    Skill,
+    SkillExecutionOptions,
+    SkillExecutionResult,
+    SkillMetadata,
+)
 
 _SKILL_DIR = Path(__file__).resolve().parent
 if str(_SKILL_DIR) not in sys.path:
@@ -76,7 +92,7 @@ class AuditNewsActionBriefSkill(Skill):
         user_text: str,
         history: list[dict[str, str]],
         skill_context: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> SkillExecutionResult:
         del history
 
         context = skill_context or {}
@@ -84,17 +100,19 @@ class AuditNewsActionBriefSkill(Skill):
         model = str(context.get("model") or "").strip()
 
         if provider_id not in ("openai", "azure_openai") or not model:
-            return (
+            message = (
                 "このSkillは OpenAI または Azure OpenAI の Responses API モデル（Web検索有効）専用です。"
                 "対応プロバイダーを選択し、`gpt-5.2-2025-12-11` などのResponsesモデルを指定してください。"
             )
+            return self._markdown_result(message)
 
         capability = get_model_capability(provider_id, model)
         if capability.api_mode != "responses":
-            return (
+            message = (
                 "このSkillは OpenAI Responses API モデルが必須です。"
                 f"現在のモデル `{model}` は `api_mode={capability.api_mode}` のため利用できません。"
             )
+            return self._markdown_result(message)
 
         # Step 1: Parse request (no web search needed)
         parsed = await self._parse_request(user_text=user_text, provider_id=provider_id, model=model)
@@ -104,12 +122,13 @@ class AuditNewsActionBriefSkill(Skill):
         if not parsed.client_industry:
             missing.append("監査クライアントの業種")
         if missing:
-            return (
+            message = (
                 "監査アクションニュースブリーフ\n\n"
                 "## 不足情報\n"
                 + "\n".join([f"- {item} が不足しています。" for item in missing])
                 + "\n- 例: `クライアントは〇〇社、業種は食品、直近7日の監査アクションニュース`"
             )
+            return self._markdown_result(message)
 
         lookback_days = max(1, min(parsed.lookback_days, self._MAX_LOOKBACK_DAYS))
         run_id = str(uuid4())
@@ -141,26 +160,6 @@ class AuditNewsActionBriefSkill(Skill):
             prior_titles=[item.title for item in self_items + peer_items],
         )
 
-        # Build v3 payload
-        payload = {
-            "schema": "audit_news_action_brief/v3",
-            "run_id": run_id,
-            "generated_at": datetime.now(UTC).isoformat(),
-            "client": {
-                "name": parsed.client_name,
-                "industry": parsed.client_industry,
-                "lookback_days": lookback_days,
-                "focus_topics": parsed.focus_topics,
-                "watch_competitors": parsed.watch_competitors,
-            },
-            "views": {
-                "self_company": [self._item_to_dict(item) for item in self_items],
-                "peer_companies": [self._item_to_dict(item) for item in peer_items],
-                "macro": [self._item_to_dict(item) for item in macro_items],
-            },
-        }
-
-        # Build markdown output
         lines = [
             "監査アクションニュースブリーフ v3",
             "",
@@ -178,13 +177,22 @@ class AuditNewsActionBriefSkill(Skill):
         lines.extend(self._render_items(peer_items))
         lines.extend(["", "## マクロ"])
         lines.extend(self._render_items(macro_items))
-        lines.extend([
-            "",
-            "```audit-news-json",
-            json.dumps(payload, ensure_ascii=False),
-            "```",
-        ])
-        return "\n".join(lines)
+        items_by_view = {
+            "self_company": self_items,
+            "peer_companies": peer_items,
+            "macro": macro_items,
+        }
+        feedback_targets = [
+            FeedbackTarget(run_id=run_id, item_id=self._build_news_id(url=item.url, title=item.title, view=item.view))
+            for view_items in items_by_view.values()
+            for item in view_items
+        ]
+        return SkillExecutionResult(
+            llm_context="\n".join(lines),
+            artifacts=[self._build_card_list_block(run_id=run_id, items_by_view=items_by_view)],
+            options=SkillExecutionOptions(disable_web_tool=True),
+            feedback_targets=feedback_targets,
+        )
 
     # ------------------------------------------------------------------
     # Request parsing
@@ -398,6 +406,53 @@ class AuditNewsActionBriefSkill(Skill):
             "view": item.view,
         }
 
+    def _build_card_list_block(self, *, run_id: str, items_by_view: dict[str, list[NewsItemV3]]) -> CardListBlock:
+        return CardListBlock(
+            title="監査アクションニュース",
+            sections=[
+                self._build_card_section(run_id=run_id, view="self_company", items=items_by_view["self_company"]),
+                self._build_card_section(run_id=run_id, view="peer_companies", items=items_by_view["peer_companies"]),
+                self._build_card_section(run_id=run_id, view="macro", items=items_by_view["macro"]),
+            ],
+        )
+
+    def _build_card_section(self, *, run_id: str, view: str, items: list[NewsItemV3]) -> CardSection:
+        return CardSection(
+            id=view,
+            title=self._view_label(view),
+            badge=Badge(label=f"{len(items)}件", tone="medium" if items else "low"),
+            empty_message="探索結果は0件でした。",
+            items=[self._build_card_item(run_id=run_id, item=item) for item in items],
+        )
+
+    def _build_card_item(self, *, run_id: str, item: NewsItemV3) -> CardItem:
+        news_id = self._build_news_id(url=item.url, title=item.title, view=item.view)
+        return CardItem(
+            id=news_id,
+            title=item.title,
+            badge=Badge(label=self._view_label(item.view), tone="medium"),
+            metadata=[
+                MetadataItem(label="Source", value=item.source),
+                MetadataItem(label="Published", value=item.published_at),
+            ],
+            lines=[
+                CardLine(label="概要", value=item.summary),
+                CardLine(label="一言コメント", value=item.one_liner_comment),
+            ],
+            links=[LinkItem(label="Source", url=item.url)],
+            actions=[
+                FeedbackAction(
+                    run_id=run_id,
+                    item_id=news_id,
+                    choices=[
+                        FeedbackChoice(value="acted", label="対応する"),
+                        FeedbackChoice(value="monitor", label="様子見"),
+                        FeedbackChoice(value="not_relevant", label="対象外"),
+                    ],
+                )
+            ],
+        )
+
     def _render_items(self, items: list[NewsItemV3]) -> list[str]:
         if not items:
             return ["- 該当ニュースは見つかりませんでした。"]
@@ -432,6 +487,13 @@ class AuditNewsActionBriefSkill(Skill):
         parsed = urlparse(raw_url)
         return parsed.netloc or "unknown"
 
+    def _view_label(self, view: str) -> str:
+        if view == "self_company":
+            return "自社"
+        if view == "peer_companies":
+            return "他社"
+        return "マクロ"
+
     def _fallback_client_name(self, user_text: str) -> str | None:
         match = re.search(r"([\w\u4e00-\u9fff\u3040-\u30ff・&\-]+)社", user_text)
         if not match:
@@ -459,6 +521,12 @@ class AuditNewsActionBriefSkill(Skill):
             if text:
                 out.append(text)
         return out
+
+    def _markdown_result(self, text: str) -> SkillExecutionResult:
+        return SkillExecutionResult(
+            llm_context=text,
+            artifacts=[MarkdownBlock(content=text)],
+        )
 
 
 def build_skill() -> Skill:

@@ -403,6 +403,11 @@ body {
   border: 1px solid #44506b;
 }
 
+.priority-chip.neutral {
+  border-color: #44506b;
+  color: #d1d9e8;
+}
+
 .priority-chip.high {
   border-color: #b44761;
   color: #ff96b2;
@@ -439,6 +444,15 @@ body {
 
 .audit-news-link a {
   color: #8eb3ff;
+}
+
+.artifact-card-list {
+  margin-top: 10px;
+}
+
+.artifact-card-list-title {
+  margin: 0 0 8px;
+  font-size: 15px;
 }
 
 .audit-news-actions {

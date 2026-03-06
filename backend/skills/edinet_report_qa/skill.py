@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from app.config import get_settings
-from app.skills_runtime.base import Skill, SkillMetadata
+from app.skills_runtime.base import Skill, SkillExecutionResult, SkillMetadata, context_only_result
 
 _SKILL_DIR = Path(__file__).resolve().parent
 if str(_SKILL_DIR) not in sys.path:
@@ -39,11 +39,11 @@ class EdinetReportQASkill(Skill):
         user_text: str,
         history: list[dict[str, str]],
         skill_context: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> SkillExecutionResult:
         settings = get_settings()
         api_key = (settings.edinet_api_key or "").strip()
         if not api_key:
-            return "EDINET APIキーが未設定です。`EDINET_API_KEY` を `.env` に設定してください。"
+            return context_only_result("EDINET APIキーが未設定です。`EDINET_API_KEY` を `.env` に設定してください。")
 
         section_catalog = SectionCatalog.load(self._sections_path())
         parser = IntentParser()
@@ -61,18 +61,18 @@ class EdinetReportQASkill(Skill):
         )
 
         if not parsed_intent.companies:
-            return self._build_clarification_response(
+            return context_only_result(self._build_clarification_response(
                 user_text=user_text,
                 parsed_intent=parsed_intent,
                 unresolved_sections=unresolved_sections,
                 section_reasons=section_reasons,
                 ambiguity_lines=["企業名またはEDINETコードを特定できませんでした。"],
                 candidate_lines=[],
-            )
+            ))
 
         csv_path = self._local_code_list_path()
         if not csv_path.exists():
-            return (
+            return context_only_result(
                 f"企業コード一覧CSVが見つかりません: `{csv_path}`\n"
                 "`backend/skills/edinet_report_qa/docs/EdinetcodeDlInfo.csv` を配置してください。"
             )
@@ -117,26 +117,26 @@ class EdinetReportQASkill(Skill):
                         candidate_lines.append(
                             f"- {res.query}: {cand.company_name} (EDINET={cand.edinet_code}, 証券={cand.sec_code or '-'})"
                         )
-                return self._build_clarification_response(
+                return context_only_result(self._build_clarification_response(
                     user_text=user_text,
                     parsed_intent=parsed_intent,
                     unresolved_sections=unresolved_sections,
                     section_reasons=section_reasons,
                     ambiguity_lines=ambiguity_lines,
                     candidate_lines=candidate_lines,
-                )
+                ))
 
             unresolved = [res for res in resolutions if not res.ok]
             if unresolved:
                 ambiguity_lines = [f"`{res.query}`: {res.reason}" for res in unresolved]
-                return self._build_clarification_response(
+                return context_only_result(self._build_clarification_response(
                     user_text=user_text,
                     parsed_intent=parsed_intent,
                     unresolved_sections=unresolved_sections,
                     section_reasons=section_reasons,
                     ambiguity_lines=ambiguity_lines,
                     candidate_lines=[],
-                )
+                ))
 
             lines = [
                 "EDINET有報抽出コンテキスト",
@@ -250,7 +250,7 @@ class EdinetReportQASkill(Skill):
                     "- 企業ごとの差異を混同しないこと。",
                 ]
             )
-            return "\n".join(lines)
+            return context_only_result("\n".join(lines))
 
     async def _disambiguate_company_candidate(
         self,
