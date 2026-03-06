@@ -1,6 +1,6 @@
 from typing import Any
 
-from app.skills_runtime.base import Skill, SkillMetadata
+from app.skills_runtime.base import Skill, SkillExecutionResult, SkillMetadata, context_only_result
 
 
 class PaperReviewerSkill(Skill):
@@ -18,10 +18,10 @@ class PaperReviewerSkill(Skill):
         user_text: str,
         history: list[dict[str, str]],
         skill_context: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> SkillExecutionResult:
         text = user_text.strip()
         if not text:
-            return (
+            return context_only_result(
                 "Paper Reviewer コンテキスト\n\n"
                 "## 不足情報 / 追加で欲しい情報\n"
                 "- レビュー対象の文章を貼り付けてください（1文〜論文本文の抜粋まで可）。\n"
@@ -97,7 +97,7 @@ class PaperReviewerSkill(Skill):
             "## レビュー対象テキスト",
             text,
         ]
-        return "\n".join(lines)
+        return context_only_result("\n".join(lines))
 
     def _infer_granularity(self, text: str) -> str:
         normalized = text.strip()

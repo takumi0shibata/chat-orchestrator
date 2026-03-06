@@ -1,8 +1,10 @@
+import json
 import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
 from app.schemas import ChatMessage, ConversationSummary
+from app.skills_runtime.base import UI_BLOCKS_ADAPTER
 
 
 class ChatStore:
@@ -84,6 +86,18 @@ class ChatStore:
                 "updated_at",
                 "ALTER TABLE conversations ADD COLUMN updated_at DATETIME",
             )
+            self._ensure_column(
+                conn,
+                "messages",
+                "artifacts_json",
+                "ALTER TABLE messages ADD COLUMN artifacts_json TEXT",
+            )
+            self._ensure_column(
+                conn,
+                "messages",
+                "skill_id",
+                "ALTER TABLE messages ADD COLUMN skill_id TEXT",
+            )
             conn.execute(
                 "UPDATE conversations SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)"
             )
@@ -155,10 +169,19 @@ class ChatStore:
             conn.execute("DELETE FROM conversations")
 
     def add_message(self, conversation_id: str, message: ChatMessage) -> None:
+        artifacts_json = None
+        if message.artifacts:
+            artifacts_json = json.dumps(
+                UI_BLOCKS_ADAPTER.dump_python(message.artifacts, mode="json"),
+                ensure_ascii=False,
+            )
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)",
-                (conversation_id, message.role, message.content),
+                """
+                INSERT INTO messages (conversation_id, role, content, artifacts_json, skill_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (conversation_id, message.role, message.content, artifacts_json, message.skill_id),
             )
             conn.execute(
                 "UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -183,26 +206,84 @@ class ChatStore:
             conn.execute("UPDATE conversations SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (title, conversation_id))
 
     def get_messages(self, conversation_id: str) -> list[ChatMessage]:
+        feedback_map = self.feedback_selection_map(conversation_id=conversation_id)
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id ASC",
+                """
+                SELECT role, content, artifacts_json, skill_id
+                FROM messages
+                WHERE conversation_id = ?
+                ORDER BY id ASC
+                """,
                 (conversation_id,),
             ).fetchall()
 
-        return [ChatMessage(role=row["role"], content=row["content"]) for row in rows]
+        messages: list[ChatMessage] = []
+        for row in rows:
+            artifacts = self._load_artifacts(row["artifacts_json"])
+            self._apply_feedback_selection(artifacts=artifacts, feedback_map=feedback_map)
+            messages.append(
+                ChatMessage(
+                    role=row["role"],
+                    content=row["content"],
+                    artifacts=artifacts,
+                    skill_id=row["skill_id"],
+                )
+            )
+        return messages
 
-    def record_skill_alerts(self, *, conversation_id: str, run_id: str, alert_ids: list[str]) -> None:
-        if not alert_ids:
+    def _load_artifacts(self, artifacts_json: str | None) -> list:
+        if not artifacts_json:
+            return []
+        try:
+            parsed = json.loads(artifacts_json)
+            return list(UI_BLOCKS_ADAPTER.validate_python(parsed))
+        except Exception:
+            return []
+
+    def _apply_feedback_selection(self, *, artifacts: list, feedback_map: dict[tuple[str, str], str]) -> None:
+        for artifact in artifacts:
+            if getattr(artifact, "type", None) != "card_list":
+                continue
+            for section in artifact.sections:
+                for item in section.items:
+                    for action in item.actions:
+                        key = (action.run_id, action.item_id)
+                        action.selected = feedback_map.get(key)
+
+    def record_feedback_targets(self, *, conversation_id: str, run_id: str, item_ids: list[str]) -> None:
+        if not item_ids:
             return
         with self._connect() as conn:
-            for alert_id in alert_ids:
+            for item_id in item_ids:
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO skill_action_alerts (conversation_id, run_id, alert_id)
                     VALUES (?, ?, ?)
                     """,
-                    (conversation_id, run_id, alert_id),
+                    (conversation_id, run_id, item_id),
                 )
+
+    def record_skill_alerts(self, *, conversation_id: str, run_id: str, alert_ids: list[str]) -> None:
+        self.record_feedback_targets(conversation_id=conversation_id, run_id=run_id, item_ids=alert_ids)
+
+    def add_feedback(
+        self,
+        *,
+        conversation_id: str,
+        run_id: str,
+        item_id: str,
+        decision: str,
+        note: str | None,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO skill_action_feedback (conversation_id, run_id, alert_id, decision, note)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (conversation_id, run_id, item_id, decision, note),
+            )
 
     def add_skill_feedback(
         self,
@@ -213,14 +294,29 @@ class ChatStore:
         decision: str,
         note: str | None,
     ) -> None:
+        self.add_feedback(
+            conversation_id=conversation_id,
+            run_id=run_id,
+            item_id=alert_id,
+            decision=decision,
+            note=note,
+        )
+
+    def feedback_selection_map(self, *, conversation_id: str) -> dict[tuple[str, str], str]:
         with self._connect() as conn:
-            conn.execute(
+            rows = conn.execute(
                 """
-                INSERT INTO skill_action_feedback (conversation_id, run_id, alert_id, decision, note)
-                VALUES (?, ?, ?, ?, ?)
+                SELECT run_id, alert_id, decision
+                FROM skill_action_feedback
+                WHERE conversation_id = ?
+                ORDER BY id ASC
                 """,
-                (conversation_id, run_id, alert_id, decision, note),
-            )
+                (conversation_id,),
+            ).fetchall()
+        result: dict[tuple[str, str], str] = {}
+        for row in rows:
+            result[(row["run_id"], row["alert_id"])] = row["decision"]
+        return result
 
     def audit_news_metrics(self, *, date_from: str | None, date_to: str | None) -> dict[str, int | float]:
         range_condition = ""

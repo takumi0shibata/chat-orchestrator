@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import json
 import re
 import sys
 from datetime import UTC, datetime
@@ -11,7 +10,13 @@ from typing import Any
 import httpx
 
 from app.config import get_settings
-from app.skills_runtime.base import Skill, SkillMetadata
+from app.skills_runtime.base import (
+    LineChartBlock,
+    LineChartPoint,
+    Skill,
+    SkillExecutionResult,
+    SkillMetadata,
+)
 
 _SKILL_DIR = Path(__file__).resolve().parent
 if str(_SKILL_DIR) not in sys.path:
@@ -25,7 +30,6 @@ from series_catalog import PRESETS, SeriesPreset, resolve_series  # noqa: E402
 
 
 class BojTimeseriesInsightSkill(Skill):
-    _CHART_SCHEMA = "boj_timeseries_chart/v1"
     _CHART_MAX_POINTS = 300
 
     metadata = SkillMetadata(
@@ -41,12 +45,14 @@ class BojTimeseriesInsightSkill(Skill):
         user_text: str,
         history: list[dict[str, str]],
         skill_context: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> SkillExecutionResult:
         del history, skill_context
 
         resolution = resolve_series(user_text)
         if resolution.selected is None:
-            return self._build_ambiguous_response(user_text=user_text, candidates=resolution.candidates)
+            return SkillExecutionResult(
+                llm_context=self._build_ambiguous_response(user_text=user_text, candidates=resolution.candidates)
+            )
 
         preset = resolution.selected
         freq = preset.frequency
@@ -73,9 +79,11 @@ class BojTimeseriesInsightSkill(Skill):
                     errors=errors,
                 )
                 if not resolved_code:
-                    return self._build_unsupported_series_response(
-                        user_text=user_text,
-                        preset=preset,
+                    return SkillExecutionResult(
+                        llm_context=self._build_unsupported_series_response(
+                            user_text=user_text,
+                            preset=preset,
+                        )
                     )
                 notes.append(f"メタデータ検索で系列コードを解決: {resolved_code}")
             data_params = {
@@ -184,17 +192,11 @@ class BojTimeseriesInsightSkill(Skill):
                 "- 単位や定義が不明な場合は断定せず、追加確認を促すこと。",
             ]
         )
-        chart_payload = self._build_chart_payload(preset=preset, freq=freq, numeric_rows=numeric_rows)
-        if chart_payload is not None:
-            lines.extend(
-                [
-                    "",
-                    "```chart-json",
-                    json.dumps(chart_payload, ensure_ascii=False),
-                    "```",
-                ]
-            )
-        return "\n".join(lines)
+        chart_block = self._build_chart_block(preset=preset, freq=freq, numeric_rows=numeric_rows)
+        return SkillExecutionResult(
+            llm_context="\n".join(lines),
+            artifacts=[chart_block] if chart_block is not None else [],
+        )
 
     async def _fetch_with_cache(
         self,
@@ -580,30 +582,24 @@ class BojTimeseriesInsightSkill(Skill):
         ]
         return "\n".join(lines)
 
-    def _build_chart_payload(
+    def _build_chart_block(
         self,
         *,
         preset: SeriesPreset,
         freq: str,
         numeric_rows: list[tuple[str, float, str]],
-    ) -> dict[str, Any] | None:
+    ) -> LineChartBlock | None:
         if not numeric_rows:
             return None
         chart_rows = self._sample_chart_rows(numeric_rows=numeric_rows, max_points=self._CHART_MAX_POINTS)
-        points = [
-            {
-                "time": time_key,
-                "value": value,
-                "raw": raw_value,
-            }
-            for time_key, value, raw_value in chart_rows
-        ]
-        return {
-            "schema": self._CHART_SCHEMA,
-            "series_label": preset.label,
-            "frequency": freq,
-            "points": points,
-        }
+        return LineChartBlock(
+            title=preset.label,
+            frequency=freq,
+            points=[
+                LineChartPoint(time=time_key, value=value, raw=raw_value)
+                for time_key, value, raw_value in chart_rows
+            ],
+        )
 
     def _sample_chart_rows(
         self,

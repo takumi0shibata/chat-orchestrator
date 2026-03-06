@@ -15,7 +15,7 @@ class OpenAIProvider(LLMProvider):
         "type": "web_search_preview",
         "user_location": {"type": "approximate", "country": "JP"},
     }
-    _MAX_SOURCE_URLS = 5
+    _MAX_SOURCE_URLS = 20
     _URL_PATTERN = re.compile(r"https?://[^\s)>\]}\"']+")
 
     def __init__(

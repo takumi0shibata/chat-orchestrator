@@ -2,10 +2,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.skills_runtime.base import UiBlock
 
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant"]
     content: str
+    artifacts: list[UiBlock] = Field(default_factory=list)
+    skill_id: str | None = None
 
 
 class ChatRequest(BaseModel):
@@ -23,9 +26,9 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     provider_id: str
     model: str
-    output: str
     conversation_id: str
-    skill_output: str | None = None
+    message: ChatMessage
+    output: str
 
 
 class ProviderInfo(BaseModel):
@@ -74,13 +77,21 @@ class ExtractAttachmentsResponse(BaseModel):
 class SkillFeedbackRequest(BaseModel):
     conversation_id: str
     run_id: str
-    alert_id: str
+    item_id: str
     decision: str
     note: str | None = None
 
 
 class SkillFeedbackResponse(BaseModel):
     ok: bool
+
+
+class AuditNewsFeedbackRequest(BaseModel):
+    conversation_id: str
+    run_id: str
+    alert_id: str
+    decision: str
+    note: str | None = None
 
 
 class AuditNewsMetricsResponse(BaseModel):

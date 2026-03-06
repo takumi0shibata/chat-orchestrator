@@ -140,6 +140,7 @@ Azure OpenAI のモデルは `backend/app/model_catalog.py` の `AZURE_OPENAI_MO
 - `POST /api/attachments/extract`: 添付ファイル（PDF/TXT等）からテキスト抽出
 - `POST /api/chat`: 非ストリーミング応答
 - `POST /api/chat/stream`: NDJSONストリーミング応答
+- `POST /api/skill-feedback`: 汎用 feedback action 記録
 - `POST /api/skills/audit_news_action_brief/feedback`: 監査ニュースSkillの行動フィードバック記録
 - `GET /api/skills/audit_news_action_brief/metrics`: 監査ニュースSkillのKPI集計（`from`/`to` 任意）
 
@@ -159,6 +160,28 @@ Azure OpenAI のモデルは `backend/app/model_catalog.py` の `AZURE_OPENAI_MO
 ```
 
 `enable_web_tool` は OpenAI / Azure OpenAI の Responses APIモデルでのみ有効です。`true` の場合、web検索ツールを有効化し、取得できた参照URLは回答末尾の `Sources:` セクションへ追記されます（初期値は `false`）。
+
+会話 message は次の形で返ります。`artifacts` は frontend が汎用 renderer で表示する宣言的ブロックです。
+
+```json
+{
+  "role": "assistant",
+  "content": "回答本文",
+  "skill_id": "boj_timeseries_insight",
+  "artifacts": [
+    {
+      "type": "line_chart",
+      "title": "全国CPI",
+      "frequency": "M",
+      "points": [
+        { "time": "2025-01", "value": 101.2, "raw": "101.2" }
+      ]
+    }
+  ]
+}
+```
+
+`POST /api/chat` は `message` を返し、`output` は互換目的のエイリアスです。`POST /api/chat/stream` の `done` イベントも `message` を返します。
 
 ## EDINET有報QA Skill
 
@@ -210,8 +233,7 @@ EDINET_LOOKBACK_DAYS=365
 - 自然文解釈: キーワードベースで系列を選択。曖昧時は候補を提示
 - 期間既定: 月次で直近24か月（四半期・年次キーワードで切替）
 - 出力形式: `解釈結果` / `分析サマリ` / `生データ（抜粋）` / `API・データ品質メモ` / `回答ポリシー`
-- 機械可読出力: 数値データがある場合、末尾に `chart-json` ブロック（`schema=boj_timeseries_chart/v1`）を付与
-- UI表示: `boj_timeseries_insight` 利用時は `chart-json` から折れ線グラフを描画し、生の `Skill Output` 本文は画面に表示しない
+- UI表示: 数値データがある場合は `message.artifacts` に `line_chart` block を付与し、frontend は skill 名を知らずに折れ線グラフを描画する
 - キャッシュ: TTLベースのローカルキャッシュ。`再取得` / `再実行` / `retry` / `refresh` で強制更新
 
 認証:
@@ -265,17 +287,19 @@ BOJ_STAT_CACHE_TTL_HOURS=24
 
 ## Audit News Action Brief Skill
 
-`backend/skills/audit_news_action_brief/skill.py` は、監査クライアント情報をもとに直近ニュース（競合・マクロ・規制）を探索し、監査アクション優先度付きの候補を返すスキルです。
+`backend/skills/audit_news_action_brief/skill.py` は、監査クライアント情報をもとに仮説先行でニュース探索を行い、`自社 / 他社 / マクロ` の3視点で候補を返すスキルです。
 
 主な仕様:
 
 - OpenAI Responses API モデル（Web検索）必須
-- 既定期間は直近7日（入力で変更可）
-- 出力は人間可読セクション + `audit-news-json` ブロック
-- `audit-news-json` の `alerts` をもとに、UI から `対応する / 様子見 / 対象外` を記録可能
+- 既定期間は直近7日（入力で変更可、最大30日）
+- 出力は `message.artifacts` の `card_list` block。`自社 / 他社 / マクロ` を section として返す
+- 各 card は generic feedback action を持ち、UI は `対応する / 様子見 / 対象外` を backend 契約だけで描画できる
+- 規制・政策ニュースは `マクロ` 視点に統合
 
 KPI計測:
 
+- `POST /api/skill-feedback` により generic feedback action を記録
 - `POST /api/skills/audit_news_action_brief/feedback` によりアクション記録
 - `GET /api/skills/audit_news_action_brief/metrics` で `total_alerts / total_feedback / acted_count / action_rate` を確認
 

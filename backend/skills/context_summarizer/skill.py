@@ -1,6 +1,6 @@
 from typing import Any
 
-from app.skills_runtime.base import Skill, SkillMetadata
+from app.skills_runtime.base import Skill, SkillExecutionResult, SkillMetadata, context_only_result
 
 
 class ContextSummarizerSkill(Skill):
@@ -15,10 +15,10 @@ class ContextSummarizerSkill(Skill):
         user_text: str,
         history: list[dict[str, str]],
         skill_context: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> SkillExecutionResult:
         last_messages = history[-6:]
         if not last_messages:
-            return "履歴はありません。"
+            return context_only_result("履歴はありません。")
 
         lines = []
         for item in last_messages:
@@ -26,7 +26,7 @@ class ContextSummarizerSkill(Skill):
             content = item.get("content", "")
             clipped = content[:120]
             lines.append(f"- {role}: {clipped}")
-        return "最近の会話要約:\n" + "\n".join(lines)
+        return context_only_result("最近の会話要約:\n" + "\n".join(lines))
 
 
 def build_skill() -> Skill:

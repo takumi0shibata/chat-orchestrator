@@ -1,12 +1,11 @@
 import type {
-  ChatMessage,
   AuditNewsMetricsResponse,
+  ChatMessage,
   ConversationInfo,
   ConversationSummary,
   ExtractedAttachment,
   ModelInfo,
   ProviderInfo,
-  SkillFeedbackDecision,
   SkillInfo,
   StreamDone,
   StreamEvent
@@ -164,20 +163,20 @@ export async function streamChat(params: {
   return doneEvent;
 }
 
-export async function submitAuditNewsFeedback(params: {
+export async function submitSkillFeedback(params: {
   conversationId: string;
   runId: string;
-  alertId: string;
-  decision: SkillFeedbackDecision;
+  itemId: string;
+  decision: string;
   note?: string;
 }): Promise<void> {
-  const response = await fetch("/api/skills/audit_news_action_brief/feedback", {
+  const response = await fetch("/api/skill-feedback", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       conversation_id: params.conversationId,
       run_id: params.runId,
-      alert_id: params.alertId,
+      item_id: params.itemId,
       decision: params.decision,
       note: params.note ?? null
     })

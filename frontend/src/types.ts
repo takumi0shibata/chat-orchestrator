@@ -1,8 +1,88 @@
 export type Role = "system" | "user" | "assistant";
 
+export interface Badge {
+  label: string;
+  tone: "neutral" | "low" | "medium" | "high";
+}
+
+export interface MetadataItem {
+  label: string;
+  value: string;
+}
+
+export interface CardLine {
+  label: string;
+  value: string;
+}
+
+export interface LinkItem {
+  label: string;
+  url: string;
+}
+
+export interface FeedbackChoice {
+  value: string;
+  label: string;
+}
+
+export interface FeedbackAction {
+  type: "feedback";
+  run_id: string;
+  item_id: string;
+  choices: FeedbackChoice[];
+  selected: string | null;
+}
+
+export interface CardItem {
+  id: string;
+  title: string;
+  badge?: Badge | null;
+  metadata: MetadataItem[];
+  lines: CardLine[];
+  links: LinkItem[];
+  actions: FeedbackAction[];
+}
+
+export interface CardSection {
+  id: string;
+  title: string;
+  badge?: Badge | null;
+  summary?: string | null;
+  empty_message?: string | null;
+  items: CardItem[];
+}
+
+export interface MarkdownBlock {
+  type: "markdown";
+  content: string;
+}
+
+export interface LineChartPoint {
+  time: string;
+  value: number;
+  raw: string | null;
+}
+
+export interface LineChartBlock {
+  type: "line_chart";
+  title: string;
+  frequency: string;
+  points: LineChartPoint[];
+}
+
+export interface CardListBlock {
+  type: "card_list";
+  title?: string | null;
+  sections: CardSection[];
+}
+
+export type UiBlock = MarkdownBlock | LineChartBlock | CardListBlock;
+
 export interface ChatMessage {
   role: Role;
   content: string;
+  artifacts: UiBlock[];
+  skill_id?: string | null;
 }
 
 export interface ProviderInfo {
@@ -26,35 +106,6 @@ export interface SkillInfo {
   id: string;
   name: string;
   description: string;
-}
-
-export type SkillFeedbackDecision = "acted" | "monitor" | "not_relevant";
-
-export interface AuditNewsAlert {
-  alert_id: string;
-  title: string;
-  url: string;
-  source: string;
-  published_at: string;
-  category: string;
-  impact_hypothesis: string;
-  recommended_audit_action: string;
-  priority: "high" | "medium" | "low";
-  score: number;
-}
-
-export interface AuditNewsPayload {
-  schema: "audit_news_action_brief/v1";
-  run_id: string;
-  generated_at: string;
-  client: {
-    name: string;
-    industry: string;
-    lookback_days: number;
-    focus_topics: string[];
-    watch_competitors: string[];
-  };
-  alerts: AuditNewsAlert[];
 }
 
 export interface AuditNewsMetricsResponse {
@@ -85,7 +136,7 @@ export interface StreamDone {
   conversation_id: string;
   provider_id: string;
   model: string;
-  skill_output: string | null;
+  message: ChatMessage;
 }
 
 export interface StreamChunk {
