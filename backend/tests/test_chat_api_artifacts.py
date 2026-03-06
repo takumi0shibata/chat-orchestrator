@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.chat_service import ChatOrchestrator
 from app.main import app, state
-from app.skills_runtime.base import LineChartBlock, LineChartPoint, SkillExecutionResult, SkillMetadata
+from app.skills_runtime.base import LineChartBlock, LineChartPoint, SkillCategory, SkillExecutionResult, SkillMetadata
 from app.storage import ChatStore
 
 
@@ -31,7 +31,13 @@ class FakeProviders:
 
 
 class FakeSkill:
-    metadata = SkillMetadata(id="chart_skill", name="Chart Skill", description="Returns a chart artifact")
+    metadata = SkillMetadata(
+        id="chart_skill",
+        name="Chart Skill",
+        description="Returns a chart artifact",
+        primary_category=SkillCategory(id="general", label="General"),
+        tags=["general", "chart"],
+    )
 
     async def run(self, user_text: str, history: list[dict[str, str]], skill_context=None):
         del user_text, history, skill_context

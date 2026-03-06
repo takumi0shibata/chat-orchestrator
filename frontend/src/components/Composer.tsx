@@ -1,7 +1,16 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ModelInfo, SkillInfo } from "../types";
-import { AttachmentIcon, CheckIcon, ChevronDownIcon, SendIcon, SettingsIcon, StopIcon } from "./Icons";
+import {
+  AttachmentIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  SendIcon,
+  SettingsIcon,
+  StopIcon
+} from "./Icons";
 
 type Attachment = {
   id: string;
@@ -16,11 +25,26 @@ type RichModel = ModelInfo & {
 };
 
 type ComposerMenu = "model" | "skill" | "settings" | null;
+const CATEGORY_ORDER = ["general", "audit", "finance", "research"] as const;
 
 function reasoningLabel(value: "low" | "medium" | "high") {
   if (value === "low") return "Low";
   if (value === "high") return "High";
   return "Medium";
+}
+
+function compareCategoryIds(left: string, right: string) {
+  const leftIndex = CATEGORY_ORDER.indexOf(left as (typeof CATEGORY_ORDER)[number]);
+  const rightIndex = CATEGORY_ORDER.indexOf(right as (typeof CATEGORY_ORDER)[number]);
+
+  if (leftIndex >= 0 && rightIndex >= 0) return leftIndex - rightIndex;
+  if (leftIndex >= 0) return -1;
+  if (rightIndex >= 0) return 1;
+  return 0;
+}
+
+function formatSkillCount(count: number) {
+  return `${count} ${count === 1 ? "skill" : "skills"}`;
 }
 
 export function Composer(props: {
@@ -75,12 +99,45 @@ export function Composer(props: {
   } = props;
 
   const [activeMenu, setActiveMenu] = useState<ComposerMenu>(null);
+  const [skillCategoryId, setSkillCategoryId] = useState<string | null>(null);
 
   const rootRef = useRef<HTMLFormElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedSkill = useMemo(() => skills.find((skill) => skill.id === skillId), [skillId, skills]);
+  const skillGroups = useMemo(() => {
+    const groups = new Map<string, { category: SkillInfo["primary_category"]; skills: SkillInfo[] }>();
+
+    for (const skill of skills) {
+      const categoryId = skill.primary_category.id;
+      const existing = groups.get(categoryId);
+      if (existing) {
+        existing.skills.push(skill);
+        continue;
+      }
+
+      groups.set(categoryId, {
+        category: skill.primary_category,
+        skills: [skill]
+      });
+    }
+
+    return Array.from(groups.values())
+      .map((group) => ({
+        ...group,
+        skills: [...group.skills].sort((left, right) => left.name.localeCompare(right.name))
+      }))
+      .sort((left, right) => {
+        const preferredOrder = compareCategoryIds(left.category.id, right.category.id);
+        if (preferredOrder !== 0) return preferredOrder;
+        return left.category.label.localeCompare(right.category.label);
+      });
+  }, [skills]);
+  const activeSkillGroup = useMemo(
+    () => skillGroups.find((group) => group.category.id === skillCategoryId) ?? null,
+    [skillCategoryId, skillGroups]
+  );
   const modelLabel = selectedModel?.label || "Select model";
   const skillLabel = selectedSkill?.name || "No skill";
 
@@ -114,6 +171,7 @@ export function Composer(props: {
   }, []);
 
   const toggleMenu = (menu: Exclude<ComposerMenu, null>) => {
+    if (menu === "skill" && activeMenu !== "skill") setSkillCategoryId(null);
     setActiveMenu((current) => (current === menu ? null : menu));
   };
 
@@ -247,43 +305,84 @@ export function Composer(props: {
           {activeMenu === "skill" && (
             <div className="composer-menu" role="dialog" aria-label="Select skill">
               <div className="composer-menu-header">
-                <h3>Select skill</h3>
+                {activeSkillGroup ? (
+                  <>
+                    <button
+                      className="composer-menu-back"
+                      type="button"
+                      aria-label="Back to skill categories"
+                      onClick={() => setSkillCategoryId(null)}
+                    >
+                      <ChevronLeftIcon />
+                      <span>Back</span>
+                    </button>
+                    <p className="composer-menu-title">{activeSkillGroup.category.label}</p>
+                  </>
+                ) : (
+                  <h3>Select skill</h3>
+                )}
               </div>
               <div className="composer-menu-list">
-                <button
-                  className={`composer-menu-item ${skillId ? "" : "active"}`}
-                  type="button"
-                  onClick={() => {
-                    onSkillChange("");
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span className="composer-menu-item-copy">
-                    <strong>No skill</strong>
-                    <span>Use the selected model directly</span>
-                  </span>
-                  {!skillId && <CheckIcon />}
-                </button>
-                {skills.map((skill) => {
-                  const isSelected = skill.id === skillId;
-                  return (
+                {activeSkillGroup ? (
+                  activeSkillGroup.skills.map((skill) => {
+                    const isSelected = skill.id === skillId;
+                    return (
+                      <button
+                        className={`composer-menu-item ${isSelected ? "active" : ""}`}
+                        key={skill.id}
+                        type="button"
+                        onClick={() => {
+                          onSkillChange(skill.id);
+                          setActiveMenu(null);
+                        }}
+                      >
+                        <span className="composer-menu-item-copy">
+                          <strong>{skill.name}</strong>
+                          <span>{skill.description}</span>
+                          <span className="composer-skill-tags">
+                            {skill.tags.map((tag) => (
+                              <span className="composer-skill-tag" key={tag}>
+                                {tag}
+                              </span>
+                            ))}
+                          </span>
+                        </span>
+                        {isSelected && <CheckIcon />}
+                      </button>
+                    );
+                  })
+                ) : (
+                  <>
                     <button
-                      className={`composer-menu-item ${isSelected ? "active" : ""}`}
-                      key={skill.id}
+                      className={`composer-menu-item ${skillId ? "" : "active"}`}
                       type="button"
                       onClick={() => {
-                        onSkillChange(skill.id);
+                        onSkillChange("");
                         setActiveMenu(null);
                       }}
                     >
                       <span className="composer-menu-item-copy">
-                        <strong>{skill.name}</strong>
-                        <span>{skill.description}</span>
+                        <strong>No skill</strong>
+                        <span>Use the selected model directly</span>
                       </span>
-                      {isSelected && <CheckIcon />}
+                      {!skillId && <CheckIcon />}
                     </button>
-                  );
-                })}
+                    {skillGroups.map((group) => (
+                      <button
+                        className="composer-menu-item composer-menu-item-branch"
+                        key={group.category.id}
+                        type="button"
+                        onClick={() => setSkillCategoryId(group.category.id)}
+                      >
+                        <span className="composer-menu-item-copy">
+                          <strong>{group.category.label}</strong>
+                          <span>{formatSkillCount(group.skills.length)}</span>
+                        </span>
+                        <ChevronRightIcon />
+                      </button>
+                    ))}
+                  </>
+                )}
               </div>
             </div>
           )}

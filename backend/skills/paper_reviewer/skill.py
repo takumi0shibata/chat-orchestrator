@@ -1,6 +1,6 @@
 from typing import Any
 
-from app.skills_runtime.base import Skill, SkillExecutionResult, SkillMetadata, context_only_result
+from app.skills_runtime.base import Skill, SkillCategory, SkillExecutionResult, SkillMetadata, context_only_result
 
 
 class PaperReviewerSkill(Skill):
@@ -11,6 +11,8 @@ class PaperReviewerSkill(Skill):
             "論文本文やセンテンス単位の草稿をACL/ARR中心の観点でレビューし、"
             "AI/ML/NLP向けに実行可能なフィードバックとLaTeX修正案を生成する補助コンテキストを返します。"
         ),
+        primary_category=SkillCategory(id="research", label="Research"),
+        tags=["research", "paper", "review"],
     )
 
     async def run(

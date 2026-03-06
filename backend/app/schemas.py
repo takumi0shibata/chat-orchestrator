@@ -48,10 +48,17 @@ class ModelInfo(BaseModel):
     default_reasoning_effort: str | None
 
 
+class SkillCategoryInfo(BaseModel):
+    id: str
+    label: str
+
+
 class SkillInfo(BaseModel):
     id: str
     name: str
     description: str
+    primary_category: SkillCategoryInfo
+    tags: list[str]
 
 
 class ConversationInfo(BaseModel):

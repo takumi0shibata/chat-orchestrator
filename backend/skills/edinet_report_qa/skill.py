@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from app.config import get_settings
-from app.skills_runtime.base import Skill, SkillExecutionResult, SkillMetadata, context_only_result
+from app.skills_runtime.base import Skill, SkillCategory, SkillExecutionResult, SkillMetadata, context_only_result
 
 _SKILL_DIR = Path(__file__).resolve().parent
 if str(_SKILL_DIR) not in sys.path:
@@ -32,6 +32,8 @@ class EdinetReportQASkill(Skill):
             "企業/年度/セクションを質問から解釈してEDINET APIから有価証券報告書XBRLを取得し、"
             "回答補助コンテキストを生成します。"
         ),
+        primary_category=SkillCategory(id="audit", label="Audit"),
+        tags=["finance", "edinet", "filings"],
     )
 
     async def run(

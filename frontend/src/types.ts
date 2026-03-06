@@ -102,10 +102,17 @@ export interface ModelInfo {
   default_reasoning_effort: "low" | "medium" | "high" | null;
 }
 
+export interface SkillCategoryInfo {
+  id: string;
+  label: string;
+}
+
 export interface SkillInfo {
   id: string;
   name: string;
   description: string;
+  primary_category: SkillCategoryInfo;
+  tags: string[];
 }
 
 export interface AuditNewsMetricsResponse {

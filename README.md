@@ -9,6 +9,7 @@ OpenAI / Azure OpenAI / Anthropic / Google / DeepSeek など複数Providerに対
 - 会話履歴を SQLite (`backend/data/chat.db`) に永続化
 - Provider抽象化: `backend/app/providers/` にProviderクラスを追加するだけで拡張可能
 - Skill抽象化: `backend/skills/<skill_id>/skill.py` を置くだけでローカルSkillを追加可能
+  - 各Skillは `primary_category` と `tags` を宣言し、UIではカテゴリ階層から選択
 - OpenAIモデル能力差分をモデルカタログで管理
   - 例: `temperature` 非対応モデル / `reasoning_effort` 対応モデル
   - Responses APIを使うモデルを `api_mode="responses"` で指定可能
@@ -129,6 +130,27 @@ ALL_PROXY=socks5h://127.0.0.1:1080
 
 Azure OpenAI のモデルは `backend/app/model_catalog.py` の `AZURE_OPENAI_MODELS` で管理します。`id` には Azure 側のデプロイ名を設定してください。
 
+## Skill追加方法
+
+`backend/skills/<skill_id>/skill.py` に `build_skill()` を実装するとローカルSkillとして読み込まれます。  
+各Skillは `SkillMetadata` で主カテゴリとタグを宣言してください。
+
+```python
+from app.skills_runtime.base import Skill, SkillCategory, SkillMetadata
+
+
+class ExampleSkill(Skill):
+    metadata = SkillMetadata(
+        id="example_skill",
+        name="Example Skill",
+        description="Does something useful.",
+        primary_category=SkillCategory(id="general", label="General"),
+        tags=["general", "example"],
+    )
+```
+
+`primary_category` は skill picker の1階層目、`tags` は skill詳細表示に使われます。
+
 ## API概要
 
 - `GET /api/providers`: 利用可能Provider一覧
@@ -182,6 +204,23 @@ Azure OpenAI のモデルは `backend/app/model_catalog.py` の `AZURE_OPENAI_MO
 ```
 
 `POST /api/chat` は `message` を返し、`output` は互換目的のエイリアスです。`POST /api/chat/stream` の `done` イベントも `message` を返します。
+
+`GET /api/skills` のレスポンス例:
+
+```json
+[
+  {
+    "id": "audit_news_action_brief",
+    "name": "Audit News Action Brief",
+    "description": "監査クライアントの自社・他社・マクロニュースを戦略的に探索し、監査上有益なニュースをカテゴリ別に提示します。",
+    "primary_category": {
+      "id": "audit",
+      "label": "Audit"
+    },
+    "tags": ["audit", "news", "monitoring"]
+  }
+]
+```
 
 ## EDINET有報QA Skill
 

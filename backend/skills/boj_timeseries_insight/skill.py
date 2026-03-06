@@ -14,6 +14,7 @@ from app.skills_runtime.base import (
     LineChartBlock,
     LineChartPoint,
     Skill,
+    SkillCategory,
     SkillExecutionResult,
     SkillMetadata,
 )
@@ -38,6 +39,8 @@ class BojTimeseriesInsightSkill(Skill):
         description=(
             "日銀の時系列統計APIを使って代表系列を取得し、分析サマリと生データを含む補助コンテキストを返します。"
         ),
+        primary_category=SkillCategory(id="finance", label="Finance"),
+        tags=["finance", "timeseries", "boj"],
     )
 
     async def run(
