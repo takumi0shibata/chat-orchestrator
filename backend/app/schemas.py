@@ -11,12 +11,14 @@ class ChatMessage(BaseModel):
     content: str
     artifacts: list[UiBlock] = Field(default_factory=list)
     skill_id: str | None = None
+    attachments: list["AttachmentSummary"] = Field(default_factory=list)
 
 
 class ChatRequest(BaseModel):
     provider_id: str = Field(description="Provider id, e.g. openai")
     model: str = Field(description="Model name")
     user_input: str
+    attachment_ids: list[str] = Field(default_factory=list)
     conversation_id: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
@@ -75,13 +77,23 @@ class ConversationSummary(BaseModel):
     message_count: int
 
 
-class ExtractedAttachment(BaseModel):
+class AttachmentSummary(BaseModel):
+    id: str
     name: str
-    content: str
+    content_type: str
+    size_bytes: int
+
+
+class StoredAttachment(AttachmentSummary):
+    conversation_id: str
+    message_id: int | None = None
+    original_path: str
+    parsed_markdown_path: str
+    created_at: str | None = None
 
 
 class ExtractAttachmentsResponse(BaseModel):
-    files: list[ExtractedAttachment]
+    files: list[AttachmentSummary]
 
 
 class SkillFeedbackRequest(BaseModel):

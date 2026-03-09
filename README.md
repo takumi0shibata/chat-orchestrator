@@ -157,9 +157,14 @@ def build_skill() -> Skill:
   "model": "gpt-5.4-2026-03-05",
   "conversation_id": "<conversation-id>",
   "user_input": "こんにちは",
+  "attachment_ids": [],
   "reasoning_effort": "medium",
   "temperature": null,
   "enable_web_tool": false,
   "skill_id": "todo_extractor"
 }
 ```
+
+`POST /api/attachments/extract` は `multipart/form-data` で `conversation_id` と `files[]` を受け取り、原本ファイルと抽出 Markdown を backend の管理ディレクトリに保存します。通常チャットでは抽出 Markdown を LLM 文脈へ自動注入し、skill 実行時は自動注入せず `skill_context["attachments"]` 経由で `original_path` / `parsed_markdown_path` を参照できます。
+
+添付抽出は [Docling](https://docling-project.github.io/docling/) を優先利用します。初回のフォーマットによってはローカルモデル取得が走るので、Docker/本番環境では起動後最初の添付処理が少し遅くなる可能性があります。

@@ -10,7 +10,7 @@ describe("Composer", () => {
       input: "Draft request",
       onInputChange: vi.fn(),
       onSubmit: vi.fn((event: { preventDefault: () => void }) => event.preventDefault()),
-      attachments: [{ id: "file-1", name: "brief.md", content: "hello" }],
+      attachments: [{ id: "file-1", name: "brief.md", content_type: "text/markdown", size_bytes: 5 }],
       onAttachFiles: vi.fn(),
       onRemoveAttachment: vi.fn(),
       models: [

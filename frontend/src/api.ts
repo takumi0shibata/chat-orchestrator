@@ -1,9 +1,9 @@
 import type {
+  AttachmentSummary,
   AuditNewsMetricsResponse,
   ChatMessage,
   ConversationInfo,
   ConversationSummary,
-  ExtractedAttachment,
   ModelInfo,
   ProviderInfo,
   ReasoningEffort,
@@ -58,9 +58,13 @@ export async function fetchConversationMessages(conversationId: string): Promise
   return response.json();
 }
 
-export async function extractAttachments(files: File[]): Promise<ExtractedAttachment[]> {
+export async function extractAttachments(params: {
+  conversationId: string;
+  files: File[];
+}): Promise<AttachmentSummary[]> {
   const formData = new FormData();
-  for (const file of files) formData.append("files", file);
+  formData.append("conversation_id", params.conversationId);
+  for (const file of params.files) formData.append("files", file);
 
   const response = await fetch("/api/attachments/extract", {
     method: "POST",
@@ -72,7 +76,7 @@ export async function extractAttachments(files: File[]): Promise<ExtractedAttach
     throw new Error(body || "Failed to extract attachments");
   }
 
-  const data = (await response.json()) as { files: ExtractedAttachment[] };
+  const data = (await response.json()) as { files: AttachmentSummary[] };
   return data.files;
 }
 
@@ -104,6 +108,7 @@ export async function streamChat(params: {
   providerId: string;
   model: string;
   userInput: string;
+  attachmentIds?: string[];
   conversationId: string;
   skillId?: string;
   temperature?: number | null;
@@ -121,6 +126,7 @@ export async function streamChat(params: {
       provider_id: params.providerId,
       model: params.model,
       user_input: params.userInput,
+      attachment_ids: params.attachmentIds ?? [],
       conversation_id: params.conversationId,
       skill_id: params.skillId || null,
       temperature: params.temperature ?? null,

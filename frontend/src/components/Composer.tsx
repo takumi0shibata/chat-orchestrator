@@ -15,7 +15,8 @@ import {
 type Attachment = {
   id: string;
   name: string;
-  content: string;
+  content_type: string;
+  size_bytes: number;
 };
 
 type RichModel = ModelInfo & {

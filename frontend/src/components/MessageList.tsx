@@ -12,6 +12,19 @@ function ThinkingIndicator({ label }: { label: string }) {
   );
 }
 
+function AttachmentChips({ attachments }: { attachments: ChatMessage["attachments"] }) {
+  if (attachments.length === 0) return null;
+  return (
+    <div className="attachment-row" aria-label="Attachments">
+      {attachments.map((attachment) => (
+        <span className="attachment-chip" key={attachment.id}>
+          {attachment.name}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export function MessageList(props: {
   messages: ChatMessage[];
   loading: boolean;
@@ -42,7 +55,10 @@ export function MessageList(props: {
                 )}
               </div>
             ) : (
-              <p className="user-message">{message.content}</p>
+              <div className="user-message">
+                {message.content.trim() && <p>{message.content}</p>}
+                <AttachmentChips attachments={message.attachments} />
+              </div>
             )}
           </div>
         </article>

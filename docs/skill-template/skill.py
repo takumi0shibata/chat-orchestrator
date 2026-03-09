@@ -18,7 +18,8 @@ class ExampleSkill(Skill):
         history: list[dict[str, str]],
         skill_context: dict[str, Any] | None = None,
     ) -> SkillExecutionResult:
-        del history, skill_context
+        attachments = (skill_context or {}).get("attachments", [])
+        del history, attachments
         return context_only_result(f"Input: {user_text}")
 
 

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import HTTPException
 
-from app.schemas import ChatMessage, ChatRequest
+from app.schemas import AttachmentSummary, ChatMessage, ChatRequest, StoredAttachment
 from app.skills_runtime.base import SkillExecutionResult
 from app.skills_runtime.manager import SkillManager
 from app.storage import ChatStore
@@ -18,6 +19,7 @@ class PreparedChatTurn:
     prepared_messages: list[ChatMessage]
     skill_result: SkillExecutionResult | None
     effective_web_tool: bool | None
+    attachments: list[StoredAttachment]
 
 
 class ChatOrchestrator:
@@ -26,14 +28,35 @@ class ChatOrchestrator:
         self.skills = skills
 
     async def prepare_turn(self, payload: ChatRequest) -> PreparedChatTurn:
-        if not payload.user_input.strip():
-            raise HTTPException(status_code=400, detail="user_input cannot be empty")
-
         conversation_id = self.store.ensure_conversation(payload.conversation_id)
-        history = self.store.get_messages(conversation_id)
         user_input = payload.user_input.strip()
-        prepared_messages = [*history, ChatMessage(role="user", content=user_input)]
+        attachment_ids = [attachment_id.strip() for attachment_id in payload.attachment_ids if attachment_id.strip()]
+        if not user_input and not attachment_ids:
+            raise HTTPException(status_code=400, detail="user_input or attachment_ids is required")
+
+        attachments = self.store.get_attachments(conversation_id=conversation_id, attachment_ids=attachment_ids)
+        if len(attachments) != len(attachment_ids):
+            found_ids = {attachment.id for attachment in attachments}
+            missing = [attachment_id for attachment_id in attachment_ids if attachment_id not in found_ids]
+            raise HTTPException(status_code=400, detail=f"Unknown attachment ids: {', '.join(missing)}")
+
+        history = self.store.get_messages(conversation_id)
+        prepared_user_input = user_input or "Please use the attached files as the primary context."
+        prepared_messages = [
+            *history,
+            ChatMessage(
+                role="user",
+                content=prepared_user_input,
+                attachments=self._attachment_summaries(attachments),
+            ),
+        ]
         skill_result: SkillExecutionResult | None = None
+
+        if attachments and not payload.skill_id:
+            prepared_messages = [
+                ChatMessage(role="system", content=self._attachment_context(attachments)),
+                *prepared_messages,
+            ]
 
         if payload.skill_id:
             skill = self.skills.get(payload.skill_id)
@@ -43,7 +66,11 @@ class ChatOrchestrator:
             skill_result = await skill.run(
                 user_text=user_input,
                 history=skill_history,
-                skill_context={"provider_id": payload.provider_id, "model": payload.model},
+                skill_context={
+                    "provider_id": payload.provider_id,
+                    "model": payload.model,
+                    "attachments": [self._skill_attachment_descriptor(attachment) for attachment in attachments],
+                },
             )
             if skill_result.llm_context.strip():
                 prepared_messages = [
@@ -67,11 +94,34 @@ class ChatOrchestrator:
             prepared_messages=prepared_messages,
             skill_result=skill_result,
             effective_web_tool=effective_web_tool,
+            attachments=attachments,
         )
 
-    def persist_user_message(self, *, conversation_id: str, user_input: str) -> None:
-        self.store.ensure_title_from_user_input(conversation_id, user_input)
-        self.store.add_message(conversation_id, ChatMessage(role="user", content=user_input))
+    def persist_user_message(
+        self,
+        *,
+        conversation_id: str,
+        user_input: str,
+        attachments: list[StoredAttachment],
+    ) -> None:
+        self.store.ensure_title_from_user_input(
+            conversation_id,
+            user_input,
+            fallback_attachment_name=attachments[0].name if attachments else None,
+        )
+        message_id = self.store.add_message(
+            conversation_id,
+            ChatMessage(
+                role="user",
+                content=user_input,
+                attachments=self._attachment_summaries(attachments),
+            ),
+        )
+        self.store.attach_pending_attachments(
+            conversation_id=conversation_id,
+            attachment_ids=[attachment.id for attachment in attachments],
+            message_id=message_id,
+        )
 
     def build_assistant_message(
         self,
@@ -105,3 +155,31 @@ class ChatOrchestrator:
                     run_id=run_id,
                     item_ids=item_ids,
                 )
+
+    def _attachment_summaries(self, attachments: list[StoredAttachment]) -> list[AttachmentSummary]:
+        return [
+            AttachmentSummary(
+                id=attachment.id,
+                name=attachment.name,
+                content_type=attachment.content_type,
+                size_bytes=attachment.size_bytes,
+            )
+            for attachment in attachments
+        ]
+
+    def _attachment_context(self, attachments: list[StoredAttachment]) -> str:
+        sections: list[str] = ["You have supplemental context from uploaded attachments. Use it when relevant."]
+        for attachment in attachments:
+            text = Path(attachment.parsed_markdown_path).read_text(encoding="utf-8").strip()
+            sections.append(f"[Attachment:{attachment.name}]\n{text}")
+        return "\n\n".join(sections)
+
+    def _skill_attachment_descriptor(self, attachment: StoredAttachment) -> dict[str, str | int | None]:
+        return {
+            "id": attachment.id,
+            "name": attachment.name,
+            "content_type": attachment.content_type,
+            "size_bytes": attachment.size_bytes,
+            "original_path": attachment.original_path,
+            "parsed_markdown_path": attachment.parsed_markdown_path,
+        }

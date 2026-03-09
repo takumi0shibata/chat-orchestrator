@@ -31,7 +31,7 @@ class OpenAIProvider(LLMProvider):
         self.default_api_mode = default_api_mode
 
     def _chat_messages(self, messages: list[ChatMessage]) -> list[dict[str, str]]:
-        return [m.model_dump() for m in messages]
+        return [{"role": m.role, "content": m.content} for m in messages]
 
     def _responses_input(self, messages: list[ChatMessage]) -> list[dict[str, str]]:
         return [{"role": m.role, "content": m.content} for m in messages]

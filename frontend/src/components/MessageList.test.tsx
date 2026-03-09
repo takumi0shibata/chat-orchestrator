@@ -12,7 +12,8 @@ describe("MessageList", () => {
             role: "assistant",
             content: "## Legacy\n\n- plain content only",
             artifacts: [],
-            skill_id: null
+            skill_id: null,
+            attachments: []
           }
         ]}
         loading={false}
@@ -35,13 +36,15 @@ describe("MessageList", () => {
             role: "assistant",
             content: "Assistant reply",
             artifacts: [],
-            skill_id: null
+            skill_id: null,
+            attachments: []
           },
           {
             role: "user",
             content: "User prompt",
             artifacts: [],
-            skill_id: null
+            skill_id: null,
+            attachments: []
           }
         ]}
         loading={false}
@@ -53,5 +56,28 @@ describe("MessageList", () => {
 
     expect(screen.getByText("Assistant reply").closest(".message-panel")).toHaveClass("assistant");
     expect(screen.getByText("User prompt").closest(".message-panel")).toHaveClass("user");
+  });
+
+  it("renders user attachment chips without extracted text", () => {
+    render(
+      <MessageList
+        messages={[
+          {
+            role: "user",
+            content: "",
+            artifacts: [],
+            skill_id: null,
+            attachments: [{ id: "att-1", name: "report.pdf", content_type: "application/pdf", size_bytes: 1200 }]
+          }
+        ]}
+        loading={false}
+        showThinking={false}
+        showSkillRunning={false}
+        onFeedback={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("report.pdf")).toBeInTheDocument();
+    expect(screen.queryByText("[Attached files]")).not.toBeInTheDocument();
   });
 });

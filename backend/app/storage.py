@@ -1,16 +1,19 @@
 import json
+import shutil
 import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
-from app.schemas import ChatMessage, ConversationSummary
+from app.schemas import AttachmentSummary, ChatMessage, ConversationSummary, StoredAttachment
 from app.skills_runtime.base import UI_BLOCKS_ADAPTER
 
 
 class ChatStore:
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, *, attachments_root: Path | None = None) -> None:
         self.db_path = db_path
+        self.attachments_root = attachments_root or db_path.parent / "attachments"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.attachments_root.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -45,6 +48,23 @@ class ChatStore:
                     content TEXT NOT NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY(conversation_id) REFERENCES conversations(id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS attachments (
+                    id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    message_id INTEGER,
+                    name TEXT NOT NULL,
+                    content_type TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    original_path TEXT NOT NULL,
+                    parsed_markdown_path TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(conversation_id) REFERENCES conversations(id),
+                    FOREIGN KEY(message_id) REFERENCES messages(id)
                 )
                 """
             )
@@ -159,16 +179,25 @@ class ChatStore:
         ]
 
     def delete_conversation(self, conversation_id: str) -> None:
+        attachments = self.list_conversation_attachments(conversation_id)
         with self._connect() as conn:
+            conn.execute("DELETE FROM attachments WHERE conversation_id = ?", (conversation_id,))
             conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
             conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        self._delete_attachment_files(attachments)
 
     def delete_all_conversations(self) -> None:
+        attachments = self.list_all_attachments()
         with self._connect() as conn:
+            conn.execute("DELETE FROM attachments")
             conn.execute("DELETE FROM messages")
             conn.execute("DELETE FROM conversations")
+        self._delete_attachment_files(attachments)
+        if self.attachments_root.exists():
+            shutil.rmtree(self.attachments_root, ignore_errors=True)
+            self.attachments_root.mkdir(parents=True, exist_ok=True)
 
-    def add_message(self, conversation_id: str, message: ChatMessage) -> None:
+    def add_message(self, conversation_id: str, message: ChatMessage) -> int:
         artifacts_json = None
         if message.artifacts:
             artifacts_json = json.dumps(
@@ -176,7 +205,7 @@ class ChatStore:
                 ensure_ascii=False,
             )
         with self._connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO messages (conversation_id, role, content, artifacts_json, skill_id)
                 VALUES (?, ?, ?, ?, ?)
@@ -187,8 +216,118 @@ class ChatStore:
                 "UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (conversation_id,),
             )
+        return int(cursor.lastrowid)
 
-    def ensure_title_from_user_input(self, conversation_id: str, user_input: str) -> None:
+    def add_attachment(
+        self,
+        *,
+        attachment_id: str,
+        conversation_id: str,
+        name: str,
+        content_type: str,
+        size_bytes: int,
+        original_path: str,
+        parsed_markdown_path: str,
+    ) -> AttachmentSummary:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO attachments (
+                    id, conversation_id, message_id, name, content_type, size_bytes, original_path, parsed_markdown_path
+                )
+                VALUES (?, ?, NULL, ?, ?, ?, ?, ?)
+                """,
+                (
+                    attachment_id,
+                    conversation_id,
+                    name,
+                    content_type,
+                    size_bytes,
+                    original_path,
+                    parsed_markdown_path,
+                ),
+            )
+        return AttachmentSummary(
+            id=attachment_id,
+            name=name,
+            content_type=content_type,
+            size_bytes=size_bytes,
+        )
+
+    def attach_pending_attachments(
+        self,
+        *,
+        conversation_id: str,
+        attachment_ids: list[str],
+        message_id: int,
+    ) -> None:
+        if not attachment_ids:
+            return
+        with self._connect() as conn:
+            for attachment_id in attachment_ids:
+                conn.execute(
+                    """
+                    UPDATE attachments
+                    SET message_id = ?
+                    WHERE id = ? AND conversation_id = ? AND message_id IS NULL
+                    """,
+                    (message_id, attachment_id, conversation_id),
+                )
+
+    def get_attachments(
+        self,
+        *,
+        conversation_id: str,
+        attachment_ids: list[str],
+    ) -> list[StoredAttachment]:
+        if not attachment_ids:
+            return []
+
+        placeholders = ",".join("?" for _ in attachment_ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, conversation_id, message_id, name, content_type, size_bytes, original_path, parsed_markdown_path, created_at
+                FROM attachments
+                WHERE conversation_id = ? AND id IN ({placeholders})
+                """,
+                (conversation_id, *attachment_ids),
+            ).fetchall()
+
+        by_id = {row["id"]: self._attachment_from_row(row) for row in rows}
+        return [by_id[attachment_id] for attachment_id in attachment_ids if attachment_id in by_id]
+
+    def list_conversation_attachments(self, conversation_id: str) -> list[StoredAttachment]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, conversation_id, message_id, name, content_type, size_bytes, original_path, parsed_markdown_path, created_at
+                FROM attachments
+                WHERE conversation_id = ?
+                ORDER BY created_at ASC, id ASC
+                """,
+                (conversation_id,),
+            ).fetchall()
+        return [self._attachment_from_row(row) for row in rows]
+
+    def list_all_attachments(self) -> list[StoredAttachment]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, conversation_id, message_id, name, content_type, size_bytes, original_path, parsed_markdown_path, created_at
+                FROM attachments
+                ORDER BY created_at ASC, id ASC
+                """
+            ).fetchall()
+        return [self._attachment_from_row(row) for row in rows]
+
+    def ensure_title_from_user_input(
+        self,
+        conversation_id: str,
+        user_input: str,
+        *,
+        fallback_attachment_name: str | None = None,
+    ) -> None:
         with self._connect() as conn:
             row = conn.execute("SELECT title FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
             if not row:
@@ -197,26 +336,54 @@ class ChatStore:
             if current and current != "New chat":
                 return
 
-            title = user_input.strip().replace("\n", " ")
+            title_source = user_input.strip().replace("\n", " ")
+            if not title_source:
+                title_source = (fallback_attachment_name or "").strip()
+
+            title = title_source
             if len(title) > 48:
                 title = f"{title[:48]}..."
             if not title:
                 title = "New chat"
 
-            conn.execute("UPDATE conversations SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (title, conversation_id))
+            conn.execute(
+                "UPDATE conversations SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (title, conversation_id),
+            )
 
     def get_messages(self, conversation_id: str) -> list[ChatMessage]:
         feedback_map = self.feedback_selection_map(conversation_id=conversation_id)
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT role, content, artifacts_json, skill_id
+                SELECT id, role, content, artifacts_json, skill_id
                 FROM messages
                 WHERE conversation_id = ?
                 ORDER BY id ASC
                 """,
                 (conversation_id,),
             ).fetchall()
+            attachment_rows = conn.execute(
+                """
+                SELECT id, conversation_id, message_id, name, content_type, size_bytes, original_path, parsed_markdown_path, created_at
+                FROM attachments
+                WHERE conversation_id = ? AND message_id IS NOT NULL
+                ORDER BY created_at ASC, id ASC
+                """,
+                (conversation_id,),
+            ).fetchall()
+
+        attachments_by_message: dict[int, list[AttachmentSummary]] = {}
+        for row in attachment_rows:
+            attachment = self._attachment_from_row(row)
+            attachments_by_message.setdefault(int(attachment.message_id), []).append(
+                AttachmentSummary(
+                    id=attachment.id,
+                    name=attachment.name,
+                    content_type=attachment.content_type,
+                    size_bytes=attachment.size_bytes,
+                )
+            )
 
         messages: list[ChatMessage] = []
         for row in rows:
@@ -228,6 +395,7 @@ class ChatStore:
                     content=row["content"],
                     artifacts=artifacts,
                     skill_id=row["skill_id"],
+                    attachments=attachments_by_message.get(int(row["id"]), []),
                 )
             )
         return messages
@@ -356,3 +524,28 @@ class ChatStore:
             "acted_count": int(acted_count),
             "action_rate": float(round(action_rate, 4)),
         }
+
+    def _attachment_from_row(self, row: sqlite3.Row) -> StoredAttachment:
+        return StoredAttachment(
+            id=row["id"],
+            conversation_id=row["conversation_id"],
+            message_id=row["message_id"],
+            name=row["name"],
+            content_type=row["content_type"],
+            size_bytes=row["size_bytes"],
+            original_path=row["original_path"],
+            parsed_markdown_path=row["parsed_markdown_path"],
+            created_at=row["created_at"],
+        )
+
+    def _delete_attachment_files(self, attachments: list[StoredAttachment]) -> None:
+        seen_dirs: set[Path] = set()
+        for attachment in attachments:
+            for raw_path in (attachment.original_path, attachment.parsed_markdown_path):
+                path = Path(raw_path)
+                if path.exists():
+                    path.unlink()
+                seen_dirs.add(path.parent)
+        for directory in sorted(seen_dirs, key=lambda item: len(item.parts), reverse=True):
+            if directory.exists():
+                shutil.rmtree(directory, ignore_errors=True)

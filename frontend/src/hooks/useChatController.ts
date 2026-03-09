@@ -14,6 +14,7 @@ import {
   submitSkillFeedback
 } from "../api";
 import type {
+  AttachmentSummary,
   ChatMessage,
   FeedbackAction,
   FeedbackChoice,
@@ -26,9 +27,10 @@ import type {
 const ACTIVE_CONVERSATION_KEY = "chat_orchestrator_active_conversation_id";
 
 export type Attachment = {
-  id: string;
-  name: string;
-  content: string;
+  id: AttachmentSummary["id"];
+  name: AttachmentSummary["name"];
+  content_type: AttachmentSummary["content_type"];
+  size_bytes: AttachmentSummary["size_bytes"];
 };
 
 export type RichModel = ModelInfo & {
@@ -37,18 +39,12 @@ export type RichModel = ModelInfo & {
   providerEnabled: boolean;
 };
 
-function buildUserInput(text: string, attachments: Attachment[]): string {
-  if (attachments.length === 0) return text;
-
-  const files = attachments.map((file) => `- ${file.name}\n${file.content}`).join("\n\n");
-  return `${text}\n\n[Attached files]\n${files}`;
-}
-
 function normalizeMessage(message: ChatMessage): ChatMessage {
   return {
     ...message,
     artifacts: message.artifacts || [],
-    skill_id: message.skill_id ?? null
+    skill_id: message.skill_id ?? null,
+    attachments: message.attachments || []
   };
 }
 
@@ -255,11 +251,13 @@ export function useChatController() {
 
   const onAttachFiles = async (files: File[]) => {
     try {
-      const extracted = await extractAttachments(files);
+      if (!conversationId) return;
+      const extracted = await extractAttachments({ conversationId, files });
       const next = extracted.map((file) => ({
-        id: `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id: file.id,
         name: file.name,
-        content: file.content
+        content_type: file.content_type,
+        size_bytes: file.size_bytes
       }));
       setAttachments((prev) => [...prev, ...next]);
     } catch (e) {
@@ -306,14 +304,26 @@ export function useChatController() {
     setShowThinking(Boolean(selectedModel.supports_reasoning_effort));
     setShowSkillRunning(Boolean(skillId));
 
-    const userRaw = trimmed || "[Attached files only]";
-    const payloadText = buildUserInput(userRaw, attachments);
+    const userRaw = trimmed;
+    const queuedAttachments = attachments;
 
     setInput("");
     setAttachments([]);
 
-    const userMessage: ChatMessage = { role: "user", content: userRaw, artifacts: [], skill_id: null };
-    const assistantPlaceholder: ChatMessage = { role: "assistant", content: "", artifacts: [], skill_id: skillId || null };
+    const userMessage: ChatMessage = {
+      role: "user",
+      content: userRaw,
+      artifacts: [],
+      skill_id: null,
+      attachments: queuedAttachments
+    };
+    const assistantPlaceholder: ChatMessage = {
+      role: "assistant",
+      content: "",
+      artifacts: [],
+      skill_id: skillId || null,
+      attachments: []
+    };
     setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
@@ -322,7 +332,8 @@ export function useChatController() {
       const done = await streamChat({
         providerId: selectedModel.providerId,
         model: selectedModel.id,
-        userInput: payloadText,
+        userInput: userRaw,
+        attachmentIds: queuedAttachments.map((attachment) => attachment.id),
         conversationId,
         skillId: skillId || undefined,
         temperature,
@@ -370,6 +381,7 @@ export function useChatController() {
         });
       } else {
         setError(e instanceof Error ? e.message : "送信に失敗しました");
+        setAttachments(queuedAttachments);
         setMessages((prev) => prev.slice(0, -2));
       }
     } finally {

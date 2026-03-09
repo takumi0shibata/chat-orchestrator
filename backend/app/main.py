@@ -4,11 +4,11 @@ from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from app.attachments import extract_attachments
+from app.attachments import save_attachment
 from app.chat_service import ChatOrchestrator
 from app.config import Settings, get_settings
 from app.model_catalog import list_models, to_api
@@ -56,7 +56,8 @@ async def lifespan(_: FastAPI):
     state.skills.load()
 
     db_path = project_root / "data" / "chat.db"
-    state.store = ChatStore(db_path=db_path)
+    attachments_root = project_root / "data" / "attachments"
+    state.store = ChatStore(db_path=db_path, attachments_root=attachments_root)
     state.chat = ChatOrchestrator(store=state.store, skills=state.skills)
     yield
 
@@ -106,11 +107,30 @@ def list_skills() -> list[SkillInfo]:
 
 
 @app.post("/api/attachments/extract", response_model=ExtractAttachmentsResponse)
-async def extract_uploaded_attachments(files: list[UploadFile] = File(...)) -> ExtractAttachmentsResponse:
-    extracted = await extract_attachments(files)
-    return ExtractAttachmentsResponse(
-        files=[{"name": item.name, "content": item.content} for item in extracted]
-    )
+async def extract_uploaded_attachments(
+    conversation_id: str = Form(...),
+    files: list[UploadFile] = File(...),
+) -> ExtractAttachmentsResponse:
+    normalized_conversation_id = state.store.ensure_conversation(conversation_id)
+    uploaded = []
+    for upload in files:
+        pending = await save_attachment(
+            conversation_id=normalized_conversation_id,
+            upload=upload,
+            attachments_root=state.store.attachments_root,
+        )
+        uploaded.append(
+            state.store.add_attachment(
+                attachment_id=pending.id,
+                conversation_id=normalized_conversation_id,
+                name=pending.name,
+                content_type=pending.content_type,
+                size_bytes=pending.size_bytes,
+                original_path=pending.original_path,
+                parsed_markdown_path=pending.parsed_markdown_path,
+            )
+        )
+    return ExtractAttachmentsResponse(files=uploaded)
 
 
 @app.get("/api/conversations", response_model=list[ConversationSummary])
@@ -162,6 +182,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     state.chat.persist_user_message(
         conversation_id=prepared.conversation_id,
         user_input=prepared.user_input,
+        attachments=prepared.attachments,
     )
     state.chat.persist_assistant_message(
         conversation_id=prepared.conversation_id,
@@ -248,6 +269,7 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
             state.chat.persist_user_message(
                 conversation_id=prepared.conversation_id,
                 user_input=prepared.user_input,
+                attachments=prepared.attachments,
             )
 
             if payload.skill_id:

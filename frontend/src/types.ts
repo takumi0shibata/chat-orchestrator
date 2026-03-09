@@ -84,6 +84,7 @@ export interface ChatMessage {
   content: string;
   artifacts: UiBlock[];
   skill_id?: string | null;
+  attachments: AttachmentSummary[];
 }
 
 export interface ProviderInfo {
@@ -135,9 +136,11 @@ export interface ConversationSummary {
   message_count: number;
 }
 
-export interface ExtractedAttachment {
+export interface AttachmentSummary {
+  id: string;
   name: string;
-  content: string;
+  content_type: string;
+  size_bytes: number;
 }
 
 export interface StreamDone {
