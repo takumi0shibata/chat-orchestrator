@@ -1,0 +1,13 @@
+id: paper_reviewer
+name: Paper Reviewer (AI/ML/NLP)
+description: 論文本文やセンテンス単位の草稿をACL/ARR中心の観点でレビューし、AI/ML/NLP向けに実行可能なフィードバックとLaTeX修正案を生成する補助コンテキストを返します。
+primary_category:
+  id: research
+  label: Research
+tags:
+  - research
+  - paper
+  - review
+entrypoint: skill.py
+factory: build_skill
+readme: README.md

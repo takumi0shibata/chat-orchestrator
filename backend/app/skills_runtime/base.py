@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 
-@dataclass
+@dataclass(frozen=True)
 class SkillCategory:
     id: str
     label: str
@@ -51,6 +52,32 @@ class SkillMetadata:
             if normalized not in deduped_tags:
                 deduped_tags.append(normalized)
         self.tags = deduped_tags
+
+    def as_comparable(self) -> tuple[str, str, str, str, str, tuple[str, ...]]:
+        return (
+            self.id,
+            self.name,
+            self.description,
+            self.primary_category.id,
+            self.primary_category.label,
+            tuple(self.tags),
+        )
+
+
+@dataclass(frozen=True)
+class SkillManifest:
+    metadata: SkillMetadata
+    entrypoint: str = "skill.py"
+    factory: str = "build_skill"
+    readme: str = "README.md"
+
+    @property
+    def module_path(self) -> Path:
+        return Path(self.entrypoint)
+
+    @property
+    def readme_path(self) -> Path:
+        return Path(self.readme)
 
 
 class SkillModel(BaseModel):

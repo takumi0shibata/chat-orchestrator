@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field
 
 from app.skills_runtime.base import UiBlock
 
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant"]
     content: str
@@ -18,7 +20,7 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
-    reasoning_effort: Literal["low", "medium", "high"] | None = None
+    reasoning_effort: ReasoningEffort | None = None
     enable_web_tool: bool | None = None
     skill_id: str | None = None
 
@@ -45,7 +47,8 @@ class ModelInfo(BaseModel):
     supports_temperature: bool
     supports_reasoning_effort: bool
     default_temperature: float | None
-    default_reasoning_effort: str | None
+    default_reasoning_effort: ReasoningEffort | None
+    reasoning_effort_options: list[ReasoningEffort] = Field(default_factory=list)
 
 
 class SkillCategoryInfo(BaseModel):

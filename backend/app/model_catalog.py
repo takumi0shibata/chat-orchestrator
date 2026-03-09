@@ -1,6 +1,10 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+REASONING_EFFORT_OPTIONS_5 = ("none", "low", "medium", "high", "xhigh")
+REASONING_EFFORT_OPTIONS_4 = ("minimal", "low", "medium", "high")
+REASONING_EFFORT_OPTIONS_3 = ("low", "medium", "high")
+
 
 @dataclass(frozen=True)
 class ModelCapability:
@@ -11,47 +15,42 @@ class ModelCapability:
     supports_reasoning_effort: bool
     default_temperature: float | None
     default_reasoning_effort: str | None
+    reasoning_effort_options: tuple[str, ...] = ()
 
 
 OPENAI_MODELS: list[ModelCapability] = [
     ModelCapability(
-        id="gpt-4o-mini",
-        label="GPT-4o mini",
-        api_mode="chat_completions",
-        supports_temperature=True,
-        supports_reasoning_effort=False,
-        default_temperature=0.3,
-        default_reasoning_effort=None,
-    ),
-    ModelCapability(
-        id="gpt-4.1",
-        label="GPT-4.1",
-        api_mode="chat_completions",
-        supports_temperature=True,
-        supports_reasoning_effort=False,
-        default_temperature=0.3,
-        default_reasoning_effort=None,
-    ),
-    ModelCapability(
-        id="gpt-5.2-2025-12-11",
-        label="GPT-5.2",
+        id="gpt-5.4-2026-03-05",
+        label="GPT-5.4",
         api_mode="responses",
         supports_temperature=False,
         supports_reasoning_effort=True,
         default_temperature=None,
         default_reasoning_effort="medium",
+        reasoning_effort_options=REASONING_EFFORT_OPTIONS_5,
+    ),
+    ModelCapability(
+        id="gpt-5-mini-2025-08-07",
+        label="GPT-5 mini",
+        api_mode="responses",
+        supports_temperature=False,
+        supports_reasoning_effort=True,
+        default_temperature=None,
+        default_reasoning_effort="medium",
+        reasoning_effort_options=REASONING_EFFORT_OPTIONS_4,
     ),
 ]
 
 AZURE_OPENAI_MODELS: list[ModelCapability] = [
     ModelCapability(
-        id="gpt-5.2-2025-12-11",
-        label="GPT-5.2",
+        id="gpt-5.4-2026-03-05",
+        label="GPT-5.4",
         api_mode="responses",
         supports_temperature=False,
         supports_reasoning_effort=True,
         default_temperature=None,
         default_reasoning_effort="medium",
+        reasoning_effort_options=REASONING_EFFORT_OPTIONS_5,
     ),
 ]
 
@@ -85,7 +84,8 @@ GOOGLE_MODELS: list[ModelCapability] = [
         supports_reasoning_effort=True,
         default_temperature=0.3,
         default_reasoning_effort="medium",
-    )
+        reasoning_effort_options=REASONING_EFFORT_OPTIONS_3,
+    ),
 ]
 
 DEEPSEEK_MODELS: list[ModelCapability] = [
@@ -128,7 +128,7 @@ def get_model_capability(provider_id: str, model: str) -> ModelCapability:
     )
 
 
-def to_api(items: Iterable[ModelCapability]) -> list[dict[str, str | bool | float | None]]:
+def to_api(items: Iterable[ModelCapability]) -> list[dict[str, str | bool | float | None | list[str]]]:
     return [
         {
             "id": item.id,
@@ -138,6 +138,7 @@ def to_api(items: Iterable[ModelCapability]) -> list[dict[str, str | bool | floa
             "supports_reasoning_effort": item.supports_reasoning_effort,
             "default_temperature": item.default_temperature,
             "default_reasoning_effort": item.default_reasoning_effort,
+            "reasoning_effort_options": list(item.reasoning_effort_options),
         }
         for item in items
     ]

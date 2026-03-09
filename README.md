@@ -1,177 +1,160 @@
 # Chat Orchestrator
 
-OpenAI / Azure OpenAI / Anthropic / Google / DeepSeek など複数Providerに対応した、拡張しやすいチャットボット基盤です。  
-フロントエンドは TypeScript + Vite + React、バックエンドは Python + FastAPI です。
+OpenAI / Azure OpenAI / Anthropic / Google / DeepSeek など複数 Provider に対応した、拡張しやすいチャット基盤です。フロントエンドは TypeScript + Vite + React、バックエンドは Python + FastAPI です。
 
 ## 特徴
 
-- ChatGPT風のモダンUI（セッション一覧・会話切替・ストリーミング表示）
 - 会話履歴を SQLite (`backend/data/chat.db`) に永続化
-- Provider抽象化: `backend/app/providers/` にProviderクラスを追加するだけで拡張可能
-- Skill抽象化: `backend/skills/<skill_id>/skill.py` を置くだけでローカルSkillを追加可能
-  - 各Skillは `primary_category` と `tags` を宣言し、UIではカテゴリ階層から選択
-- OpenAIモデル能力差分をモデルカタログで管理
-  - 例: `temperature` 非対応モデル / `reasoning_effort` 対応モデル
-  - Responses APIを使うモデルを `api_mode="responses"` で指定可能
+- Provider 抽象化: `backend/app/providers/` にクラスを追加すれば拡張可能
+- Skill 抽象化: `backend/skills/<skill_id>/skill.yaml` を正本としてローカル skill を追加可能
+- OpenAI / Azure OpenAI の Responses API モデルに対応
+- モデル能力差分を `backend/app/model_catalog.py` で一元管理
 
 ## ディレクトリ構成
 
-- `backend/app`: API本体
-- `backend/app/providers`: LLM Provider実装
+- `backend/app`: API 本体
+- `backend/app/providers`: LLM Provider 実装
 - `backend/app/model_catalog.py`: モデル能力定義
-- `backend/app/skills_runtime`: Skillローダー
-- `backend/skills`: ユーザー定義Skill
-- `backend/data`: 永続化DB
-- `frontend/src`: Viteフロントエンド
+- `backend/app/skills_runtime`: Skill loader / validation
+- `backend/skills`: ローカル skill 実装
+- `docs/skill-template`: skill 追加用テンプレート
+- `frontend/src`: Vite フロントエンド
 
-## セットアップ (ローカル)
+## セットアップ
 
 前提: Python 3.11+, Node 20+, `uv`
 
-1. 環境変数
-
 ```bash
 cp .env.example .env
-# .env に各APIキーを設定
-```
-
-2. バックエンド
-
-```bash
 make setup-backend
 make dev-backend
-```
-
-3. フロントエンド
-
-```bash
 make setup-frontend
 make dev-frontend
 ```
 
 アクセス先:
+
 - Frontend: http://localhost:5173
 - Backend: http://localhost:8000
 - Backend Docs: http://localhost:8000/docs
 
-## セットアップ (Docker)
+## モデル管理
 
-```bash
-cp .env.example .env
-docker compose up --build
-```
+OpenAI / Azure OpenAI のモデルは `backend/app/model_catalog.py` で管理します。
 
-## バージョン管理（王道の最小運用）
-
-- ルール: SemVer (`MAJOR.MINOR.PATCH`)
-- 単一のバージョン源: `VERSION`
-- 同期対象:
-  - `backend/pyproject.toml`
-  - `frontend/package.json`
-  - `CHANGELOG.md`
-
-使い方:
-
-```bash
-# バグ修正リリース
-make release-patch
-
-# 機能追加リリース
-make release-minor
-
-# 破壊的変更リリース
-make release-major
-```
-
-リリース時の流れ:
-
-1. `make release-xxx` を実行
-2. `CHANGELOG.md` の該当バージョン欄を埋める
-3. `git add VERSION backend/pyproject.toml frontend/package.json CHANGELOG.md`
-4. `git commit -m "chore(release): vX.Y.Z"`
-5. `git tag vX.Y.Z`
-6. `git push origin main --tags`
-
-## モデル追加方法（OpenAI / Azure OpenAI）
-
-`backend/app/model_catalog.py` の `OPENAI_MODELS` または `AZURE_OPENAI_MODELS` に追加します。
-
-例:
+Responses API モデル例:
 
 ```python
 ModelCapability(
-    id="gpt-5.2",
-    label="GPT-5.2",
+    id="gpt-5.4-2026-03-05",
+    label="GPT-5.4",
     api_mode="responses",
     supports_temperature=False,
     supports_reasoning_effort=True,
     default_temperature=None,
     default_reasoning_effort="medium",
+    reasoning_effort_options=("none", "low", "medium", "high", "xhigh"),
 )
 ```
 
-## Azure OpenAI の設定
+`POST /api/chat` / `POST /api/chat/stream` では `reasoning_effort` に `none | low | medium | high | xhigh` を指定できます。
 
-`.env` に以下を設定すると、Provider 一覧に `Azure OpenAI` が追加されます。
+## Skill 追加方法
 
-```bash
-AZURE_OPENAI_API_KEY=...
-AZURE_OPENAI_ENDPOINT=https://<your-resource>.openai.azure.com
+skill は次の3点セットを必須にします。
+
+- `backend/skills/<skill_id>/skill.yaml`
+- `backend/skills/<skill_id>/skill.py`
+- `backend/skills/<skill_id>/README.md`
+
+`skill.yaml` が正本です。loader は manifest を読み込み、`skill.py` の factory を呼び、`README.md` の存在と metadata 整合性を検証します。欠落や不整合がある skill は起動時に失敗します。
+
+### 追加手順
+
+1. `docs/skill-template/` をコピーして新しい skill ディレクトリを作る
+2. `skill.yaml` の `id / name / description / primary_category / tags` を更新する
+3. `skill.py` に `build_skill()` と `run()` を実装する
+4. `README.md` に人間向けの使い方を書く
+5. `GET /api/skills` と対象テストで読み込みを確認する
+
+### `skill.yaml` テンプレート
+
+```yaml
+id: example_skill
+name: Example Skill
+description: 何をする skill かを1文で書く。
+primary_category:
+  id: general
+  label: General
+tags:
+  - general
+  - example
+entrypoint: skill.py
+factory: build_skill
+readme: README.md
 ```
 
-SSH の DynamicForward（SOCKS）経由で Azure OpenAI Private Endpoint に到達させる場合は、`.env` に以下を設定してください。
-
-```bash
-# DNS も踏み台側で解決するため socks5h を推奨
-ALL_PROXY=socks5h://127.0.0.1:1080
-```
-
-`chat-orchestrator` は `.env` から `ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` を読み取り、Provider SDK 呼び出しに適用します。
-
-Azure OpenAI のモデルは `backend/app/model_catalog.py` の `AZURE_OPENAI_MODELS` で管理します。`id` には Azure 側のデプロイ名を設定してください。
-
-## Skill追加方法
-
-`backend/skills/<skill_id>/skill.py` に `build_skill()` を実装するとローカルSkillとして読み込まれます。  
-各Skillは `SkillMetadata` で主カテゴリとタグを宣言してください。
+### `skill.py` テンプレート
 
 ```python
-from app.skills_runtime.base import Skill, SkillCategory, SkillMetadata
+from typing import Any
+
+from app.skills_runtime.base import Skill, SkillCategory, SkillExecutionResult, SkillMetadata, context_only_result
 
 
 class ExampleSkill(Skill):
     metadata = SkillMetadata(
         id="example_skill",
         name="Example Skill",
-        description="Does something useful.",
+        description="何をする skill かを1文で書く。",
         primary_category=SkillCategory(id="general", label="General"),
         tags=["general", "example"],
     )
+
+    async def run(
+        self,
+        user_text: str,
+        history: list[dict[str, str]],
+        skill_context: dict[str, Any] | None = None,
+    ) -> SkillExecutionResult:
+        del history, skill_context
+        return context_only_result(f"Input: {user_text}")
+
+
+def build_skill() -> Skill:
+    return ExampleSkill()
 ```
 
-`primary_category` は skill picker の1階層目、`tags` は skill詳細表示に使われます。
+### `README.md` テンプレート
 
-## API概要
+`docs/skill-template/README.md` を使ってください。少なくとも次の見出しを揃えます。
 
-- `GET /api/providers`: 利用可能Provider一覧
-- `GET /api/providers/{provider_id}/models`: モデル能力一覧
-- `GET /api/skills`: Skill一覧
-- `GET /api/conversations`: 会話セッション一覧
-- `POST /api/conversations`: 会話作成
-- `GET /api/conversations/{id}/messages`: 会話履歴取得
-- `POST /api/attachments/extract`: 添付ファイル（PDF/TXT等）からテキスト抽出
-- `POST /api/chat`: 非ストリーミング応答
-- `POST /api/chat/stream`: NDJSONストリーミング応答
-- `POST /api/skill-feedback`: 汎用 feedback action 記録
-- `POST /api/skills/audit_news_action_brief/feedback`: 監査ニュースSkillの行動フィードバック記録
-- `GET /api/skills/audit_news_action_brief/metrics`: 監査ニュースSkillのKPI集計（`from`/`to` 任意）
+- `概要`
+- `使う場面`
+- `必要設定`
+- `入力`
+- `出力 / Artifacts`
+- `実装メモ`
 
-`POST /api/chat/stream` body例:
+## API 概要
+
+- `GET /api/providers`
+- `GET /api/providers/{provider_id}/models`
+- `GET /api/skills`
+- `GET /api/conversations`
+- `POST /api/conversations`
+- `GET /api/conversations/{id}/messages`
+- `POST /api/attachments/extract`
+- `POST /api/chat`
+- `POST /api/chat/stream`
+- `POST /api/skill-feedback`
+
+`POST /api/chat/stream` body 例:
 
 ```json
 {
   "provider_id": "openai",
-  "model": "gpt-5.2",
+  "model": "gpt-5.4-2026-03-05",
   "conversation_id": "<conversation-id>",
   "user_input": "こんにちは",
   "reasoning_effort": "medium",
@@ -180,166 +163,3 @@ class ExampleSkill(Skill):
   "skill_id": "todo_extractor"
 }
 ```
-
-`enable_web_tool` は OpenAI / Azure OpenAI の Responses APIモデルでのみ有効です。`true` の場合、web検索ツールを有効化し、取得できた参照URLは回答末尾の `Sources:` セクションへ追記されます（初期値は `false`）。
-
-会話 message は次の形で返ります。`artifacts` は frontend が汎用 renderer で表示する宣言的ブロックです。
-
-```json
-{
-  "role": "assistant",
-  "content": "回答本文",
-  "skill_id": "boj_timeseries_insight",
-  "artifacts": [
-    {
-      "type": "line_chart",
-      "title": "全国CPI",
-      "frequency": "M",
-      "points": [
-        { "time": "2025-01", "value": 101.2, "raw": "101.2" }
-      ]
-    }
-  ]
-}
-```
-
-`POST /api/chat` は `message` を返し、`output` は互換目的のエイリアスです。`POST /api/chat/stream` の `done` イベントも `message` を返します。
-
-`GET /api/skills` のレスポンス例:
-
-```json
-[
-  {
-    "id": "audit_news_action_brief",
-    "name": "Audit News Action Brief",
-    "description": "監査クライアントの自社・他社・マクロニュースを戦略的に探索し、監査上有益なニュースをカテゴリ別に提示します。",
-    "primary_category": {
-      "id": "audit",
-      "label": "Audit"
-    },
-    "tags": ["audit", "news", "monitoring"]
-  }
-]
-```
-
-## EDINET有報QA Skill
-
-`backend/skills/edinet_report_qa/skill.py` は、質問文から企業・年度/決算期・参照セクションを解釈し、EDINET APIから有価証券報告書（通常/訂正）を取得して XBRL 抽出コンテキストを作るスキルです。
-
-主な仕様:
-
-- 企業指定: `EDINETコード(E12345)` / 企業名 / 証券コード(4桁) に対応
-- 期間指定: `2024年度` または `2024年3月期` などに対応（複数期比較も対応）
-- セクション指定: `事業等のリスク` などを辞書（`docs/sections.json`）で解決
-- 曖昧時: 候補企業を返して再指定を促す
-- 意図解析: 利用中の provider/model で LLM 解析を試行し、失敗時はルールベースにフォールバック
-
-最低限の設定:
-
-```bash
-EDINET_API_KEY=your_subscription_key
-```
-
-任意設定:
-
-```bash
-EDINET_CACHE_DIR=$HOME/.cache/chat-orchestrator/edinet
-EDINET_CACHE_TTL_HOURS=24
-EDINET_LOOKBACK_DAYS=365
-```
-
-利用例（`skill_id` 指定）:
-
-```json
-{
-  "provider_id": "openai",
-  "model": "gpt-4o-mini",
-  "user_input": "トヨタ(7203)とホンダの2024年3月期の事業等のリスクを比較して",
-  "skill_id": "edinet_report_qa"
-}
-```
-
-`再取得` / `再実行` / `retry` などの語が質問に含まれる場合は、キャッシュより再取得を優先します。
-
-## BOJ時系列 Skill
-
-`backend/skills/boj_timeseries_insight/skill.py` は、日銀の時系列統計データAPIを使って代表系列を取得し、分析サマリ + 生データの補助コンテキストを生成するスキルです。
-
-主な仕様:
-
-- 対象系列（初期）: 短期金利（無担保コール翌日物）/ 政策金利 / 貸出約定平均金利 / 為替（ドル円・ユーロドル）/ 実質実効為替 / マネーストックM2 / マネタリーベース平残 / 経常収支 / 貿易収支 / 企業物価（全国CPI代替）
-- 注記: BOJ APIカタログ上で系列コードが解決できない系列（例: 10年国債利回り）は、取得不可理由を明示して代替候補を返します。
-- 自然文解釈: キーワードベースで系列を選択。曖昧時は候補を提示
-- 期間既定: 月次で直近24か月（四半期・年次キーワードで切替）
-- 出力形式: `解釈結果` / `分析サマリ` / `生データ（抜粋）` / `API・データ品質メモ` / `回答ポリシー`
-- UI表示: 数値データがある場合は `message.artifacts` に `line_chart` block を付与し、frontend は skill 名を知らずに折れ線グラフを描画する
-- キャッシュ: TTLベースのローカルキャッシュ。`再取得` / `再実行` / `retry` / `refresh` で強制更新
-
-認証:
-
-- APIキーは不要です（2026-02-18 公開の BOJ 時系列統計API仕様に準拠）。
-
-任意設定:
-
-```bash
-BOJ_STAT_CACHE_DIR=$HOME/.cache/chat-orchestrator/boj-stat
-BOJ_STAT_CACHE_TTL_HOURS=24
-```
-
-利用例（`skill_id` 指定）:
-
-```json
-{
-  "provider_id": "openai",
-  "model": "gpt-4o-mini",
-  "user_input": "全国CPIを直近2年で要約して",
-  "skill_id": "boj_timeseries_insight"
-}
-```
-
-## Paper Reviewer Skill (AI/ML/NLP)
-
-`backend/skills/paper_reviewer/skill.py` は、論文本文/段落/センテンス草稿を AI/ML/NLP 論文向けにレビューする補助コンテキストを生成するスキルです。
-
-主な仕様:
-
-- デフォルト評価軸: ACL/ARR中心（ML一般観点として ICML/NeurIPS の観点を補助適用）
-- 出力契約: 以下5セクションを必須化
-  1. `判定サマリ`
-  2. `主要指摘 (Major)`
-  3. `軽微指摘 (Minor)`
-  4. `修正案 (LaTeX)`
-  5. `不足情報 / 追加で欲しい情報`
-- 修正案方針: 問題箇所のみ最小編集を優先
-- 修正案は `latex` コードブロックで提示（必要時は最低1ブロック）
-
-利用例（`skill_id` 指定）:
-
-```json
-{
-  "provider_id": "openai",
-  "model": "gpt-4o-mini",
-  "user_input": "Please review this abstract for ACL style and clarity: We propose ...",
-  "skill_id": "paper_reviewer"
-}
-```
-
-## Audit News Action Brief Skill
-
-`backend/skills/audit_news_action_brief/skill.py` は、監査クライアント情報をもとに仮説先行でニュース探索を行い、`自社 / 他社 / マクロ` の3視点で候補を返すスキルです。
-
-主な仕様:
-
-- OpenAI Responses API モデル（Web検索）必須
-- 既定期間は直近7日（入力で変更可、最大30日）
-- 出力は `message.artifacts` の `card_list` block。`自社 / 他社 / マクロ` を section として返す
-- 各 card は generic feedback action を持ち、UI は `対応する / 様子見 / 対象外` を backend 契約だけで描画できる
-- 規制・政策ニュースは `マクロ` 視点に統合
-
-KPI計測:
-
-- `POST /api/skill-feedback` により generic feedback action を記録
-- `POST /api/skills/audit_news_action_brief/feedback` によりアクション記録
-- `GET /api/skills/audit_news_action_brief/metrics` で `total_alerts / total_feedback / acted_count / action_rate` を確認
-
-一次情報ベースの rubric は `backend/skills/paper_reviewer/docs/rubric_ai_ml_nlp.md` を参照してください。

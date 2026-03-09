@@ -127,11 +127,14 @@ class OpenAIProvider(LLMProvider):
         api_mode = self.default_api_mode or capability.api_mode
         supports_temperature = capability.supports_temperature and api_mode != "responses"
         supports_reasoning_effort = capability.supports_reasoning_effort and api_mode == "responses"
+        effective_reasoning_effort = reasoning_effort
+        if supports_reasoning_effort and effective_reasoning_effort is None:
+            effective_reasoning_effort = capability.default_reasoning_effort
         kwargs = self._build_optional_kwargs(
             capability_api_mode=api_mode,
             temperature=temperature if supports_temperature else None,
             max_tokens=max_tokens,
-            reasoning_effort=reasoning_effort if supports_reasoning_effort else None,
+            reasoning_effort=effective_reasoning_effort if supports_reasoning_effort else None,
         )
         tools = self._responses_tools(api_mode=api_mode, enable_web_tool=enable_web_tool)
 
@@ -169,11 +172,14 @@ class OpenAIProvider(LLMProvider):
         api_mode = self.default_api_mode or capability.api_mode
         supports_temperature = capability.supports_temperature and api_mode != "responses"
         supports_reasoning_effort = capability.supports_reasoning_effort and api_mode == "responses"
+        effective_reasoning_effort = reasoning_effort
+        if supports_reasoning_effort and effective_reasoning_effort is None:
+            effective_reasoning_effort = capability.default_reasoning_effort
         kwargs = self._build_optional_kwargs(
             capability_api_mode=api_mode,
             temperature=temperature if supports_temperature else None,
             max_tokens=max_tokens,
-            reasoning_effort=reasoning_effort if supports_reasoning_effort else None,
+            reasoning_effort=effective_reasoning_effort if supports_reasoning_effort else None,
         )
         tools = self._responses_tools(api_mode=api_mode, enable_web_tool=enable_web_tool)
 

@@ -15,13 +15,14 @@ describe("Composer", () => {
       onRemoveAttachment: vi.fn(),
       models: [
         {
-          id: "gpt-5.2",
-          label: "GPT 5.2",
+          id: "gpt-5.4-2026-03-05",
+          label: "GPT 5.4",
           api_mode: "responses",
-          supports_temperature: true,
+          supports_temperature: false,
           supports_reasoning_effort: true,
-          default_temperature: 0.3,
+          default_temperature: null,
           default_reasoning_effort: "medium" as const,
+          reasoning_effort_options: ["none", "minimal", "low", "medium", "high", "xhigh"],
           providerId: "openai",
           providerLabel: "OpenAI",
           providerEnabled: true
@@ -34,12 +35,13 @@ describe("Composer", () => {
           supports_reasoning_effort: false,
           default_temperature: 0.3,
           default_reasoning_effort: null,
+          reasoning_effort_options: [],
           providerId: "azure_openai",
           providerLabel: "Azure OpenAI",
           providerEnabled: true
         }
       ],
-      modelKey: "openai::gpt-5.2",
+      modelKey: "openai::gpt-5.4-2026-03-05",
       onModelChange: vi.fn(),
       skills: [
         {
@@ -60,18 +62,19 @@ describe("Composer", () => {
       skillId: "audit",
       onSkillChange: vi.fn(),
       selectedModel: {
-        id: "gpt-5.2",
-        label: "GPT 5.2",
+        id: "gpt-5.4-2026-03-05",
+        label: "GPT 5.4",
         api_mode: "responses",
-        supports_temperature: true,
+        supports_temperature: false,
         supports_reasoning_effort: true,
-        default_temperature: 0.3,
+        default_temperature: null,
         default_reasoning_effort: "medium" as const,
+          reasoning_effort_options: ["none", "minimal", "low", "medium", "high", "xhigh"],
         providerId: "openai",
         providerLabel: "OpenAI",
         providerEnabled: true
       },
-      temperature: 0.3,
+      temperature: null,
       onTemperatureChange: vi.fn(),
       reasoningEffort: "medium" as const,
       onReasoningEffortChange: vi.fn(),
@@ -91,7 +94,7 @@ describe("Composer", () => {
     render(<Composer {...props} />);
 
     expect(screen.getByLabelText("Message input")).toHaveAttribute("placeholder", "Ask anything");
-    expect(screen.getByText("GPT 5.2")).toBeInTheDocument();
+    expect(screen.getByText("GPT 5.4")).toBeInTheDocument();
     expect(screen.getByText("Audit brief")).toBeInTheDocument();
     expect(screen.getByText("Settings")).toBeInTheDocument();
     expect(screen.getByText("Cmd + Enter to send")).toBeInTheDocument();
@@ -115,7 +118,8 @@ describe("Composer", () => {
 
     await user.click(screen.getByRole("button", { name: "Open chat settings" }));
     expect(screen.getByRole("dialog", { name: "Chat settings" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Temperature")).toBeInTheDocument();
+    expect(screen.getByText("Reasoning")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "XHigh" })).toBeInTheDocument();
   });
 
   it("selects a skill from a category and closes the menu", async () => {

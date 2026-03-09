@@ -40,4 +40,4 @@ def test_azure_openai_default_model_prefers_configured_value() -> None:
 
 def test_azure_openai_default_model_uses_catalog_head() -> None:
     settings = Settings(_env_file=None, default_azure_openai_model=None)
-    assert settings.azure_openai_default_model == "gpt-5.2-2025-12-11"
+    assert settings.azure_openai_default_model == "gpt-5.4-2026-03-05"

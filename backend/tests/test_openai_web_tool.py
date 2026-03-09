@@ -84,8 +84,14 @@ def _provider_with_fake_client(monkeypatch, *, responses_api: FakeResponsesAPI, 
 
 
 def test_chat_request_accepts_optional_enable_web_tool() -> None:
-    payload = ChatRequest(provider_id="openai", model="gpt-5.2-2025-12-11", user_input="hello")
+    payload = ChatRequest(
+        provider_id="openai",
+        model="gpt-5.4-2026-03-05",
+        user_input="hello",
+        reasoning_effort="xhigh",
+    )
     assert payload.enable_web_tool is None
+    assert payload.reasoning_effort == "xhigh"
 
 
 def test_openai_responses_with_web_tool_adds_tools_and_sources(monkeypatch) -> None:
@@ -107,7 +113,7 @@ def test_openai_responses_with_web_tool_adds_tools_and_sources(monkeypatch) -> N
 
     async def run() -> None:
         output = await provider.chat(
-            model="gpt-5.2-2025-12-11",
+            model="gpt-5.4-2026-03-05",
             messages=[ChatMessage(role="user", content="hi")],
             temperature=None,
             max_tokens=None,
@@ -129,7 +135,7 @@ def test_openai_responses_without_web_tool_does_not_send_tools(monkeypatch) -> N
 
     async def run() -> None:
         output = await provider.chat(
-            model="gpt-5.2-2025-12-11",
+            model="gpt-5.4-2026-03-05",
             messages=[ChatMessage(role="user", content="hi")],
             temperature=None,
             max_tokens=None,
@@ -179,7 +185,7 @@ def test_openai_responses_stream_appends_sources(monkeypatch) -> None:
     async def run() -> None:
         chunks: list[str] = []
         async for chunk in provider.stream_chat(
-            model="gpt-5.2-2025-12-11",
+            model="gpt-5.4-2026-03-05",
             messages=[ChatMessage(role="user", content="hi")],
             temperature=None,
             max_tokens=None,
@@ -190,5 +196,45 @@ def test_openai_responses_stream_appends_sources(monkeypatch) -> None:
         assert chunks[0] == "Hello"
         assert any("Sources:" in chunk for chunk in chunks[1:])
         assert responses_api.calls[0]["tools"] == [EXPECTED_WEB_TOOL]
+
+    asyncio.run(run())
+
+
+def test_openai_responses_passes_reasoning_effort(monkeypatch) -> None:
+    response = FakeResponse(output_text="Answer", payload={})
+    responses_api = FakeResponsesAPI(response=response)
+    chat_api = FakeChatCompletionsAPI(content="unused")
+    provider = _provider_with_fake_client(monkeypatch, responses_api=responses_api, chat_api=chat_api)
+
+    async def run() -> None:
+        await provider.chat(
+            model="gpt-5.4-2026-03-05",
+            messages=[ChatMessage(role="user", content="hi")],
+            temperature=None,
+            max_tokens=None,
+            reasoning_effort="xhigh",
+            enable_web_tool=False,
+        )
+        assert responses_api.calls[0]["reasoning"] == {"effort": "xhigh"}
+
+    asyncio.run(run())
+
+
+def test_openai_responses_defaults_reasoning_effort_to_model_default(monkeypatch) -> None:
+    response = FakeResponse(output_text="Answer", payload={})
+    responses_api = FakeResponsesAPI(response=response)
+    chat_api = FakeChatCompletionsAPI(content="unused")
+    provider = _provider_with_fake_client(monkeypatch, responses_api=responses_api, chat_api=chat_api)
+
+    async def run() -> None:
+        await provider.chat(
+            model="gpt-5.4-2026-03-05",
+            messages=[ChatMessage(role="user", content="hi")],
+            temperature=None,
+            max_tokens=None,
+            reasoning_effort=None,
+            enable_web_tool=False,
+        )
+        assert responses_api.calls[0]["reasoning"] == {"effort": "medium"}
 
     asyncio.run(run())
