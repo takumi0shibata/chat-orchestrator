@@ -1,0 +1,12 @@
+id: example_skill
+name: Example Skill
+description: 何をする skill かを1文で書く。
+primary_category:
+  id: general
+  label: General
+tags:
+  - general
+  - example
+entrypoint: skill.py
+factory: build_skill
+readme: README.md

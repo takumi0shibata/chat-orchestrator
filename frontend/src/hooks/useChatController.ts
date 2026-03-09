@@ -19,6 +19,7 @@ import type {
   FeedbackChoice,
   ModelInfo,
   ProviderInfo,
+  ReasoningEffort,
   SkillInfo
 } from "../types";
 
@@ -49,6 +50,12 @@ function normalizeMessage(message: ChatMessage): ChatMessage {
     artifacts: message.artifacts || [],
     skill_id: message.skill_id ?? null
   };
+}
+
+function resolveReasoningEffort(model: ModelInfo, current: ReasoningEffort | null): ReasoningEffort | null {
+  if (!model.supports_reasoning_effort) return null;
+  if (current && model.reasoning_effort_options.includes(current)) return current;
+  return model.default_reasoning_effort ?? model.reasoning_effort_options[0] ?? null;
 }
 
 function applyFeedbackSelection(
@@ -90,7 +97,7 @@ export function useChatController() {
   const [modelKey, setModelKey] = useState<string>("");
   const [skillId, setSkillId] = useState<string>("");
   const [temperature, setTemperature] = useState<number | null>(0.3);
-  const [reasoningEffort, setReasoningEffort] = useState<"low" | "medium" | "high" | null>(null);
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | null>(null);
   const [enableWebTool, setEnableWebTool] = useState<boolean>(false);
 
   const [conversationId, setConversationId] = useState<string>("");
@@ -168,7 +175,7 @@ export function useChatController() {
     if (initial) {
       setModelKey(`${initial.providerId}::${initial.id}`);
       setTemperature(initial.supports_temperature ? (initial.default_temperature ?? 0.3) : null);
-      setReasoningEffort(initial.supports_reasoning_effort ? initial.default_reasoning_effort : null);
+      setReasoningEffort(resolveReasoningEffort(initial, null));
     }
   };
 
@@ -198,8 +205,7 @@ export function useChatController() {
     if (!item.supports_temperature) setTemperature(null);
     else if (temperature === null) setTemperature(item.default_temperature ?? 0.3);
 
-    if (!item.supports_reasoning_effort) setReasoningEffort(null);
-    else if (!reasoningEffort) setReasoningEffort(item.default_reasoning_effort ?? "medium");
+    setReasoningEffort(resolveReasoningEffort(item, reasoningEffort));
 
     if (!(item.api_mode === "responses" && (item.providerId === "openai" || item.providerId === "azure_openai"))) {
       setEnableWebTool(false);

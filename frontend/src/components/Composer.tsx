@@ -1,6 +1,6 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-import type { ModelInfo, SkillInfo } from "../types";
+import type { ModelInfo, ReasoningEffort, SkillInfo } from "../types";
 import {
   AttachmentIcon,
   CheckIcon,
@@ -27,9 +27,12 @@ type RichModel = ModelInfo & {
 type ComposerMenu = "model" | "skill" | "settings" | null;
 const CATEGORY_ORDER = ["general", "audit", "finance", "research"] as const;
 
-function reasoningLabel(value: "low" | "medium" | "high") {
+function reasoningLabel(value: ReasoningEffort) {
+  if (value === "none") return "None";
+  if (value === "minimal") return "Minimal";
   if (value === "low") return "Low";
   if (value === "high") return "High";
+  if (value === "xhigh") return "XHigh";
   return "Medium";
 }
 
@@ -63,8 +66,8 @@ export function Composer(props: {
   selectedModel?: RichModel;
   temperature: number | null;
   onTemperatureChange: (value: number) => void;
-  reasoningEffort: "low" | "medium" | "high" | null;
-  onReasoningEffortChange: (value: "low" | "medium" | "high") => void;
+  reasoningEffort: ReasoningEffort | null;
+  onReasoningEffortChange: (value: ReasoningEffort) => void;
   canUseWebTool: boolean;
   enableWebTool: boolean;
   onEnableWebToolChange: (value: boolean) => void;
@@ -140,6 +143,8 @@ export function Composer(props: {
   );
   const modelLabel = selectedModel?.label || "Select model";
   const skillLabel = selectedSkill?.name || "No skill";
+  const reasoningOptions = selectedModel?.reasoning_effort_options ?? [];
+  const activeReasoningEffort = reasoningEffort ?? selectedModel?.default_reasoning_effort ?? reasoningOptions[0] ?? null;
 
   const resizeTextarea = () => {
     if (!textareaRef.current) return;
@@ -425,13 +430,13 @@ export function Composer(props: {
                   </section>
                 )}
 
-                {selectedModel?.supports_reasoning_effort && (
+                {selectedModel?.supports_reasoning_effort && reasoningOptions.length > 0 && (
                   <section className="composer-settings-section">
                     <p>Reasoning</p>
                     <div className="composer-choice-group">
-                      {(["low", "medium", "high"] as const).map((value) => (
+                      {reasoningOptions.map((value) => (
                         <button
-                          className={`composer-choice ${value === (reasoningEffort ?? "medium") ? "active" : ""}`}
+                          className={`composer-choice ${value === activeReasoningEffort ? "active" : ""}`}
                           key={value}
                           type="button"
                           onClick={() => onReasoningEffortChange(value)}

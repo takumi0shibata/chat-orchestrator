@@ -6,6 +6,7 @@ import type {
   ExtractedAttachment,
   ModelInfo,
   ProviderInfo,
+  ReasoningEffort,
   SkillInfo,
   StreamDone,
   StreamEvent
@@ -106,7 +107,7 @@ export async function streamChat(params: {
   conversationId: string;
   skillId?: string;
   temperature?: number | null;
-  reasoningEffort?: "low" | "medium" | "high" | null;
+  reasoningEffort?: ReasoningEffort | null;
   enableWebTool?: boolean;
   signal?: AbortSignal;
   onChunk: (delta: string) => void;

@@ -1,0 +1,13 @@
+id: boj_timeseries_insight
+name: BOJ Timeseries Insight
+description: 日銀の時系列統計APIを使って代表系列を取得し、分析サマリと生データを含む補助コンテキストを返します。
+primary_category:
+  id: finance
+  label: Finance
+tags:
+  - finance
+  - timeseries
+  - boj
+entrypoint: skill.py
+factory: build_skill
+readme: README.md

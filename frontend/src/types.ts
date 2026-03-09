@@ -1,4 +1,5 @@
 export type Role = "system" | "user" | "assistant";
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export interface Badge {
   label: string;
@@ -99,7 +100,8 @@ export interface ModelInfo {
   supports_temperature: boolean;
   supports_reasoning_effort: boolean;
   default_temperature: number | null;
-  default_reasoning_effort: "low" | "medium" | "high" | null;
+  default_reasoning_effort: ReasoningEffort | null;
+  reasoning_effort_options: ReasoningEffort[];
 }
 
 export interface SkillCategoryInfo {

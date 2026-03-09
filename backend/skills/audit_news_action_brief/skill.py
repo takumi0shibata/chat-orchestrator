@@ -105,7 +105,7 @@ class AuditNewsActionBriefSkill(Skill):
         if provider_id not in ("openai", "azure_openai") or not model:
             message = (
                 "このSkillは OpenAI または Azure OpenAI の Responses API モデル（Web検索有効）専用です。"
-                "対応プロバイダーを選択し、`gpt-5.2-2025-12-11` などのResponsesモデルを指定してください。"
+                "対応プロバイダーを選択し、`gpt-5.4-2026-03-05` などのResponsesモデルを指定してください。"
             )
             return self._markdown_result(message)
 

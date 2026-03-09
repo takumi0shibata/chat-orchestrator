@@ -1,0 +1,13 @@
+id: todo_extractor
+name: TODO Extractor
+description: 入力文から行動可能なTODOを抽出して箇条書き化します。
+primary_category:
+  id: general
+  label: General
+tags:
+  - general
+  - todo
+  - productivity
+entrypoint: skill.py
+factory: build_skill
+readme: README.md

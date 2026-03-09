@@ -25,13 +25,14 @@ const { controller } = vi.hoisted(() => ({
     showSkillRunning: false,
     sidebarOpen: true,
     selectedModel: {
-      id: "gpt-5.2",
-      label: "GPT 5.2",
+      id: "gpt-5.4-2026-03-05",
+      label: "GPT 5.4",
       api_mode: "responses",
-      supports_temperature: true,
+      supports_temperature: false,
       supports_reasoning_effort: true,
-      default_temperature: 0.3,
+      default_temperature: null,
       default_reasoning_effort: "medium" as const,
+      reasoning_effort_options: ["none", "minimal", "low", "medium", "high", "xhigh"],
       providerId: "openai",
       providerLabel: "OpenAI",
       providerEnabled: true

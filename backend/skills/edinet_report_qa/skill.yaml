@@ -1,0 +1,13 @@
+id: edinet_report_qa
+name: EDINET Annual Report QA
+description: 企業/年度/セクションを質問から解釈してEDINET APIから有価証券報告書XBRLを取得し、回答補助コンテキストを生成します。
+primary_category:
+  id: audit
+  label: Audit
+tags:
+  - finance
+  - edinet
+  - filings
+entrypoint: skill.py
+factory: build_skill
+readme: README.md

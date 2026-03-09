@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     boj_stat_cache_dir: str | None = None
     boj_stat_cache_ttl_hours: int = 24
 
-    default_openai_model: str = "gpt-4o-mini"
+    default_openai_model: str = "gpt-5.4-2026-03-05"
     default_azure_openai_model: str | None = None
     default_anthropic_model: str = "claude-3-5-haiku-latest"
     default_google_model: str = "gemini-2.5-flash"

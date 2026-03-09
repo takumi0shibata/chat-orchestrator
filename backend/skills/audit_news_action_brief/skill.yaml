@@ -1,0 +1,13 @@
+id: audit_news_action_brief
+name: Audit News Action Brief
+description: 監査クライアントの自社・他社・マクロニュースを戦略的に探索し、監査上有益なニュースをカテゴリ別に提示します。
+primary_category:
+  id: audit
+  label: Audit
+tags:
+  - audit
+  - news
+  - monitoring
+entrypoint: skill.py
+factory: build_skill
+readme: README.md
