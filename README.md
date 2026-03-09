@@ -136,15 +136,6 @@ def build_skill() -> Skill:
 - `出力 / Artifacts`
 - `実装メモ`
 
-## 既存 Skill 一覧
-
-- [Audit News Action Brief](/Users/takumishibata/Documents/repo/chat-orchestrator/backend/skills/audit_news_action_brief/README.md)
-- [BOJ Timeseries Insight](/Users/takumishibata/Documents/repo/chat-orchestrator/backend/skills/boj_timeseries_insight/README.md)
-- [Context Summarizer](/Users/takumishibata/Documents/repo/chat-orchestrator/backend/skills/context_summarizer/README.md)
-- [EDINET Annual Report QA](/Users/takumishibata/Documents/repo/chat-orchestrator/backend/skills/edinet_report_qa/README.md)
-- [Paper Reviewer](/Users/takumishibata/Documents/repo/chat-orchestrator/backend/skills/paper_reviewer/README.md)
-- [TODO Extractor](/Users/takumishibata/Documents/repo/chat-orchestrator/backend/skills/todo_extractor/README.md)
-
 ## API 概要
 
 - `GET /api/providers`
