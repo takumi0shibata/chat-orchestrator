@@ -13,6 +13,8 @@ describe("Composer", () => {
       input: "Draft request",
       onInputChange: vi.fn(),
       onSubmit: vi.fn((event: { preventDefault: () => void }) => event.preventDefault()),
+      isParsingAttachments: false,
+      parsingAttachmentLabel: "",
       attachments: [{ id: "file-1", name: "brief.md", content_type: "text/markdown", size_bytes: 5 }],
       onAttachFiles: vi.fn(),
       onRemoveAttachment: vi.fn(),
@@ -155,6 +157,23 @@ describe("Composer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Remove brief.md" }));
     expect(props.onRemoveAttachment).toHaveBeenCalledWith("file-1");
+  });
+
+  it("renders the parsing banner and disables send while attachments are being parsed", () => {
+    const props = createProps();
+
+    render(
+      <Composer
+        {...props}
+        isParsingAttachments
+        parsingAttachmentLabel="report.pdf ほか1件を解析しています"
+      />
+    );
+
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("report.pdf ほか1件を解析しています");
+    expect(document.querySelector(".composer-status-spinner")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
   });
 
   it("accepts drag-and-drop attachments on the composer surface", () => {

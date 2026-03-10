@@ -130,6 +130,8 @@ export function App() {
                 input={controller.input}
                 onInputChange={controller.setInput}
                 onSubmit={(event) => void controller.onSubmit(event)}
+                isParsingAttachments={controller.isParsingAttachments}
+                parsingAttachmentLabel={controller.parsingAttachmentLabel}
                 attachments={controller.attachments}
                 onAttachFiles={(files) => void controller.onAttachFiles(files)}
                 onRemoveAttachment={controller.onRemoveAttachment}

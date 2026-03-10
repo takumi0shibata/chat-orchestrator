@@ -27,6 +27,11 @@ import type {
 
 const ACTIVE_CONVERSATION_KEY = "chat_orchestrator_active_conversation_id";
 
+type PendingAttachmentBatch = {
+  id: number;
+  names: string[];
+};
+
 export type Attachment = {
   id: AttachmentSummary["id"];
   name: AttachmentSummary["name"];
@@ -86,6 +91,12 @@ function applyFeedbackSelection(
   });
 }
 
+function formatParsingAttachmentLabel(names: string[]): string {
+  if (names.length === 0) return "";
+  if (names.length === 1) return `${names[0]} を解析しています`;
+  return `${names[0]} ほか${names.length - 1}件を解析しています`;
+}
+
 export function useChatController() {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [conversations, setConversations] = useState<{ id: string; title: string; updated_at: string; message_count: number }[]>([]);
@@ -101,6 +112,7 @@ export function useChatController() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState<string>("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [pendingAttachmentBatches, setPendingAttachmentBatches] = useState<PendingAttachmentBatch[]>([]);
 
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
@@ -109,6 +121,7 @@ export function useChatController() {
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const nextAttachmentBatchIdRef = useRef(0);
 
   const selectedModel = useMemo(
     () => models.find((item) => `${item.providerId}::${item.id}` === modelKey),
@@ -119,6 +132,15 @@ export function useChatController() {
     selectedModel &&
       selectedModel.api_mode === "responses" &&
       (selectedModel.providerId === "openai" || selectedModel.providerId === "azure_openai")
+  );
+  const parsingAttachmentNames = useMemo(
+    () => pendingAttachmentBatches.flatMap((batch) => batch.names),
+    [pendingAttachmentBatches]
+  );
+  const isParsingAttachments = pendingAttachmentBatches.length > 0;
+  const parsingAttachmentLabel = useMemo(
+    () => formatParsingAttachmentLabel(parsingAttachmentNames),
+    [parsingAttachmentNames]
   );
 
   const selectConversation = async (id: string, persist = true) => {
@@ -251,8 +273,18 @@ export function useChatController() {
   };
 
   const onAttachFiles = async (files: File[]) => {
+    if (!conversationId || files.length === 0) return;
+
+    const batchId = nextAttachmentBatchIdRef.current;
+    nextAttachmentBatchIdRef.current += 1;
+    const batch: PendingAttachmentBatch = {
+      id: batchId,
+      names: files.map((file) => file.name || "添付ファイル")
+    };
+
+    setPendingAttachmentBatches((prev) => [...prev, batch]);
+
     try {
-      if (!conversationId) return;
       const extracted = await extractAttachments({ conversationId, files });
       const next = extracted.map((file) => ({
         id: file.id,
@@ -263,6 +295,8 @@ export function useChatController() {
       setAttachments((prev) => [...prev, ...next]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "ファイルの読み込みに失敗しました");
+    } finally {
+      setPendingAttachmentBatches((prev) => prev.filter((item) => item.id !== batchId));
     }
   };
 
@@ -293,7 +327,7 @@ export function useChatController() {
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = input.trim();
-    if ((!trimmed && attachments.length === 0) || !selectedModel || !conversationId || loading) return;
+    if ((!trimmed && attachments.length === 0) || !selectedModel || !conversationId || loading || isParsingAttachments) return;
 
     if (!selectedModel.providerEnabled) {
       setError(`${selectedModel.providerLabel} のAPIキーが設定されていません`);
@@ -416,6 +450,9 @@ export function useChatController() {
     messages,
     input,
     attachments,
+    isParsingAttachments,
+    parsingAttachmentNames,
+    parsingAttachmentLabel,
     error,
     loading,
     showThinking,
