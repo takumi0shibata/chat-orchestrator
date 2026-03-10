@@ -4,16 +4,24 @@ import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
-from app.schemas import AttachmentSummary, ChatMessage, ConversationSummary, StoredAttachment
+from app.schemas import AttachmentSummary, ChatMessage, ConversationSummary, StoredAttachment, StoredGeneratedFile
 from app.skills_runtime.base import UI_BLOCKS_ADAPTER
 
 
 class ChatStore:
-    def __init__(self, db_path: Path, *, attachments_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        *,
+        attachments_root: Path | None = None,
+        generated_files_root: Path | None = None,
+    ) -> None:
         self.db_path = db_path
         self.attachments_root = attachments_root or db_path.parent / "attachments"
+        self.generated_files_root = generated_files_root or db_path.parent / "generated_files"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.attachments_root.mkdir(parents=True, exist_ok=True)
+        self.generated_files_root.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -65,6 +73,22 @@ class ChatStore:
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY(conversation_id) REFERENCES conversations(id),
                     FOREIGN KEY(message_id) REFERENCES messages(id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS generated_files (
+                    id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    skill_id TEXT NOT NULL,
+                    source_attachment_id TEXT,
+                    name TEXT NOT NULL,
+                    content_type TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(conversation_id) REFERENCES conversations(id),
+                    FOREIGN KEY(source_attachment_id) REFERENCES attachments(id)
                 )
                 """
             )
@@ -180,22 +204,31 @@ class ChatStore:
 
     def delete_conversation(self, conversation_id: str) -> None:
         attachments = self.list_conversation_attachments(conversation_id)
+        generated_files = self.list_generated_files(conversation_id=conversation_id)
         with self._connect() as conn:
+            conn.execute("DELETE FROM generated_files WHERE conversation_id = ?", (conversation_id,))
             conn.execute("DELETE FROM attachments WHERE conversation_id = ?", (conversation_id,))
             conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
             conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
         self._delete_attachment_files(attachments)
+        self._delete_generated_files(generated_files)
 
     def delete_all_conversations(self) -> None:
         attachments = self.list_all_attachments()
+        generated_files = self.list_all_generated_files()
         with self._connect() as conn:
+            conn.execute("DELETE FROM generated_files")
             conn.execute("DELETE FROM attachments")
             conn.execute("DELETE FROM messages")
             conn.execute("DELETE FROM conversations")
         self._delete_attachment_files(attachments)
+        self._delete_generated_files(generated_files)
         if self.attachments_root.exists():
             shutil.rmtree(self.attachments_root, ignore_errors=True)
             self.attachments_root.mkdir(parents=True, exist_ok=True)
+        if self.generated_files_root.exists():
+            shutil.rmtree(self.generated_files_root, ignore_errors=True)
+            self.generated_files_root.mkdir(parents=True, exist_ok=True)
 
     def add_message(self, conversation_id: str, message: ChatMessage) -> int:
         artifacts_json = None
@@ -320,6 +353,76 @@ class ChatStore:
                 """
             ).fetchall()
         return [self._attachment_from_row(row) for row in rows]
+
+    def add_generated_file(
+        self,
+        *,
+        conversation_id: str,
+        skill_id: str,
+        source_attachment_id: str | None,
+        name: str,
+        content_type: str,
+        path: str,
+        file_id: str | None = None,
+    ) -> StoredGeneratedFile:
+        generated_file_id = file_id or str(uuid4())
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO generated_files (
+                    id, conversation_id, skill_id, source_attachment_id, name, content_type, path
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    generated_file_id,
+                    conversation_id,
+                    skill_id,
+                    source_attachment_id,
+                    name,
+                    content_type,
+                    path,
+                ),
+            )
+        return self.get_generated_file(generated_file_id)
+
+    def get_generated_file(self, file_id: str) -> StoredGeneratedFile | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, conversation_id, skill_id, source_attachment_id, name, content_type, path, created_at
+                FROM generated_files
+                WHERE id = ?
+                """,
+                (file_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return self._generated_file_from_row(row)
+
+    def list_generated_files(self, *, conversation_id: str) -> list[StoredGeneratedFile]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, conversation_id, skill_id, source_attachment_id, name, content_type, path, created_at
+                FROM generated_files
+                WHERE conversation_id = ?
+                ORDER BY created_at ASC, id ASC
+                """,
+                (conversation_id,),
+            ).fetchall()
+        return [self._generated_file_from_row(row) for row in rows]
+
+    def list_all_generated_files(self) -> list[StoredGeneratedFile]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, conversation_id, skill_id, source_attachment_id, name, content_type, path, created_at
+                FROM generated_files
+                ORDER BY created_at ASC, id ASC
+                """
+            ).fetchall()
+        return [self._generated_file_from_row(row) for row in rows]
 
     def ensure_title_from_user_input(
         self,
@@ -538,6 +641,18 @@ class ChatStore:
             created_at=row["created_at"],
         )
 
+    def _generated_file_from_row(self, row: sqlite3.Row) -> StoredGeneratedFile:
+        return StoredGeneratedFile(
+            id=row["id"],
+            conversation_id=row["conversation_id"],
+            skill_id=row["skill_id"],
+            source_attachment_id=row["source_attachment_id"],
+            name=row["name"],
+            content_type=row["content_type"],
+            path=row["path"],
+            created_at=row["created_at"],
+        )
+
     def _delete_attachment_files(self, attachments: list[StoredAttachment]) -> None:
         seen_dirs: set[Path] = set()
         for attachment in attachments:
@@ -546,6 +661,17 @@ class ChatStore:
                 if path.exists():
                     path.unlink()
                 seen_dirs.add(path.parent)
+        for directory in sorted(seen_dirs, key=lambda item: len(item.parts), reverse=True):
+            if directory.exists():
+                shutil.rmtree(directory, ignore_errors=True)
+
+    def _delete_generated_files(self, generated_files: list[StoredGeneratedFile]) -> None:
+        seen_dirs: set[Path] = set()
+        for generated_file in generated_files:
+            path = Path(generated_file.path)
+            if path.exists():
+                path.unlink()
+            seen_dirs.add(path.parent)
         for directory in sorted(seen_dirs, key=lambda item: len(item.parts), reverse=True):
             if directory.exists():
                 shutil.rmtree(directory, ignore_errors=True)

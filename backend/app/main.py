@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.attachments import save_attachment
 from app.chat_service import ChatOrchestrator
@@ -138,6 +138,23 @@ def list_conversations() -> list[ConversationSummary]:
     return state.store.list_conversations()
 
 
+@app.get("/api/generated-files/{file_id}/download")
+def download_generated_file(file_id: str) -> FileResponse:
+    generated_file = state.store.get_generated_file(file_id)
+    if not generated_file:
+        raise HTTPException(status_code=404, detail=f"Unknown generated file: {file_id}")
+
+    path = Path(generated_file.path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Generated file is missing: {file_id}")
+
+    return FileResponse(
+        path=path,
+        media_type=generated_file.content_type,
+        filename=generated_file.name,
+    )
+
+
 @app.post("/api/conversations", response_model=ConversationInfo)
 def create_conversation() -> ConversationInfo:
     conversation_id = state.store.create_conversation()
@@ -163,17 +180,20 @@ def get_conversation_messages(conversation_id: str) -> list[ChatMessage]:
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(payload: ChatRequest) -> ChatResponse:
-    provider = state.providers.get(payload.provider_id)
     prepared = await state.chat.prepare_turn(payload)
+    if state.chat.should_skip_model_response(prepared.skill_result):
+        output = state.chat.resolve_assistant_content(content="", skill_result=prepared.skill_result)
+    else:
+        provider = state.providers.get(payload.provider_id)
+        output = await provider.chat(
+            model=payload.model,
+            messages=prepared.prepared_messages,
+            temperature=payload.temperature,
+            max_tokens=payload.max_tokens,
+            reasoning_effort=payload.reasoning_effort,
+            enable_web_tool=prepared.effective_web_tool,
+        )
 
-    output = await provider.chat(
-        model=payload.model,
-        messages=prepared.prepared_messages,
-        temperature=payload.temperature,
-        max_tokens=payload.max_tokens,
-        reasoning_effort=payload.reasoning_effort,
-        enable_web_tool=prepared.effective_web_tool,
-    )
     assistant_message = state.chat.build_assistant_message(
         content=output,
         skill_id=payload.skill_id,
@@ -256,8 +276,6 @@ def audit_news_metrics(
 
 @app.post("/api/chat/stream")
 async def stream_chat(payload: ChatRequest) -> StreamingResponse:
-    provider = state.providers.get(payload.provider_id)
-
     async def generate():
         try:
             if payload.skill_id:
@@ -274,19 +292,22 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
 
             if payload.skill_id:
                 yield json.dumps({"type": "skill_status", "status": "done", "skill_id": payload.skill_id}) + "\n"
-                await asyncio.sleep(5)
 
             accumulated = ""
-            async for chunk in provider.stream_chat(
-                model=payload.model,
-                messages=prepared.prepared_messages,
-                temperature=payload.temperature,
-                max_tokens=payload.max_tokens,
-                reasoning_effort=payload.reasoning_effort,
-                enable_web_tool=prepared.effective_web_tool,
-            ):
-                accumulated += chunk
-                yield json.dumps({"type": "chunk", "delta": chunk}) + "\n"
+            if state.chat.should_skip_model_response(prepared.skill_result):
+                accumulated = state.chat.resolve_assistant_content(content="", skill_result=prepared.skill_result)
+            else:
+                provider = state.providers.get(payload.provider_id)
+                async for chunk in provider.stream_chat(
+                    model=payload.model,
+                    messages=prepared.prepared_messages,
+                    temperature=payload.temperature,
+                    max_tokens=payload.max_tokens,
+                    reasoning_effort=payload.reasoning_effort,
+                    enable_web_tool=prepared.effective_web_tool,
+                ):
+                    accumulated += chunk
+                    yield json.dumps({"type": "chunk", "delta": chunk}) + "\n"
 
             assistant_message = state.chat.build_assistant_message(
                 content=accumulated,

@@ -178,13 +178,24 @@ class FeedbackTarget(SkillModel):
 
 class SkillExecutionOptions(SkillModel):
     disable_web_tool: bool = False
+    skip_model_response: bool = False
+
+
+class GeneratedFileArtifact(SkillModel):
+    id: str
+    name: str
+    content_type: str
+    path: str
+    source_attachment_id: str | None = None
 
 
 class SkillExecutionResult(SkillModel):
     llm_context: str = ""
+    assistant_response: str | None = None
     artifacts: list[UiBlock] = Field(default_factory=list)
     options: SkillExecutionOptions = Field(default_factory=SkillExecutionOptions)
     feedback_targets: list[FeedbackTarget] = Field(default_factory=list)
+    generated_files: list[GeneratedFileArtifact] = Field(default_factory=list)
 
 
 def context_only_result(text: str) -> SkillExecutionResult:

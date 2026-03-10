@@ -69,6 +69,8 @@ class ChatOrchestrator:
                 skill_context={
                     "provider_id": payload.provider_id,
                     "model": payload.model,
+                    "conversation_id": conversation_id,
+                    "generated_files_root": str(self.store.generated_files_root),
                     "attachments": [self._skill_attachment_descriptor(attachment) for attachment in attachments],
                 },
             )
@@ -130,12 +132,23 @@ class ChatOrchestrator:
         skill_id: str | None,
         skill_result: SkillExecutionResult | None,
     ) -> ChatMessage:
+        resolved_content = self.resolve_assistant_content(content=content, skill_result=skill_result)
         return ChatMessage(
             role="assistant",
-            content=content,
+            content=resolved_content,
             artifacts=list(skill_result.artifacts) if skill_result else [],
             skill_id=skill_id,
         )
+
+    def should_skip_model_response(self, skill_result: SkillExecutionResult | None) -> bool:
+        return bool(skill_result and skill_result.options.skip_model_response)
+
+    def resolve_assistant_content(self, *, content: str, skill_result: SkillExecutionResult | None) -> str:
+        if not self.should_skip_model_response(skill_result):
+            return content
+        if skill_result and skill_result.assistant_response is not None:
+            return skill_result.assistant_response
+        return content
 
     def persist_assistant_message(
         self,
@@ -144,6 +157,17 @@ class ChatOrchestrator:
         message: ChatMessage,
         skill_result: SkillExecutionResult | None,
     ) -> None:
+        if skill_result and skill_result.generated_files:
+            for generated_file in skill_result.generated_files:
+                self.store.add_generated_file(
+                    file_id=generated_file.id,
+                    conversation_id=conversation_id,
+                    skill_id=message.skill_id or "local_skill",
+                    source_attachment_id=generated_file.source_attachment_id,
+                    name=generated_file.name,
+                    content_type=generated_file.content_type,
+                    path=generated_file.path,
+                )
         self.store.add_message(conversation_id, message)
         if skill_result and skill_result.feedback_targets:
             grouped: dict[str, list[str]] = defaultdict(list)

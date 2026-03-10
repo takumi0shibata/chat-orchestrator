@@ -76,7 +76,7 @@ def test_skill_prompts_for_missing_required_fields() -> None:
         skill.run(
             user_text="今週の監査ニュース",
             history=[],
-            skill_context={"provider_id": "openai", "model": "gpt-5.2-2025-12-11"},
+            skill_context={"provider_id": "openai", "model": "gpt-5.4-2026-03-05"},
         )
     )
 
@@ -93,7 +93,7 @@ def test_skill_returns_card_list_artifact_and_feedback_targets() -> None:
         skill.run(
             user_text="A食品株式会社の監査ニュース",
             history=[],
-            skill_context={"provider_id": "openai", "model": "gpt-5.2-2025-12-11"},
+            skill_context={"provider_id": "openai", "model": "gpt-5.4-2026-03-05"},
         )
     )
 

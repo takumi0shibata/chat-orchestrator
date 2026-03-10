@@ -92,6 +92,17 @@ class StoredAttachment(AttachmentSummary):
     created_at: str | None = None
 
 
+class StoredGeneratedFile(BaseModel):
+    id: str
+    conversation_id: str
+    skill_id: str
+    source_attachment_id: str | None = None
+    name: str
+    content_type: str
+    path: str
+    created_at: str | None = None
+
+
 class ExtractAttachmentsResponse(BaseModel):
     files: list[AttachmentSummary]
 
