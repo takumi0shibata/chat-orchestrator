@@ -2,10 +2,13 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
+import type { ReasoningEffort } from "../types";
 import { Composer } from "./Composer";
 
 describe("Composer", () => {
   function createProps() {
+    const reasoningOptions: ReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh"];
+
     return {
       input: "Draft request",
       onInputChange: vi.fn(),
@@ -22,7 +25,7 @@ describe("Composer", () => {
           supports_reasoning_effort: true,
           default_temperature: null,
           default_reasoning_effort: "medium" as const,
-          reasoning_effort_options: ["none", "minimal", "low", "medium", "high", "xhigh"],
+          reasoning_effort_options: reasoningOptions,
           providerId: "openai",
           providerLabel: "OpenAI",
           providerEnabled: true
@@ -69,7 +72,7 @@ describe("Composer", () => {
         supports_reasoning_effort: true,
         default_temperature: null,
         default_reasoning_effort: "medium" as const,
-          reasoning_effort_options: ["none", "minimal", "low", "medium", "high", "xhigh"],
+        reasoning_effort_options: reasoningOptions,
         providerId: "openai",
         providerLabel: "OpenAI",
         providerEnabled: true
@@ -152,5 +155,37 @@ describe("Composer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Remove brief.md" }));
     expect(props.onRemoveAttachment).toHaveBeenCalledWith("file-1");
+  });
+
+  it("accepts drag-and-drop attachments on the composer surface", () => {
+    const props = createProps();
+    const droppedFile = new File(["hello"], "drop.txt", { type: "text/plain" });
+
+    render(<Composer {...props} />);
+
+    const composer = document.querySelector("form.composer");
+    expect(composer).not.toBeNull();
+
+    fireEvent.dragEnter(composer as HTMLFormElement, {
+      dataTransfer: { files: [droppedFile], types: ["Files"] }
+    });
+    expect(composer).toHaveClass("drag-active");
+
+    fireEvent.dragLeave(composer as HTMLFormElement, {
+      dataTransfer: { files: [droppedFile], types: ["Files"] }
+    });
+    expect(composer).not.toHaveClass("drag-active");
+
+    fireEvent.dragOver(composer as HTMLFormElement, {
+      dataTransfer: { files: [droppedFile], types: ["Files"], dropEffect: "none" }
+    });
+    expect(composer).toHaveClass("drag-active");
+
+    fireEvent.drop(composer as HTMLFormElement, {
+      dataTransfer: { files: [droppedFile], types: ["Files"] }
+    });
+
+    expect(props.onAttachFiles).toHaveBeenCalledWith([droppedFile]);
+    expect(composer).not.toHaveClass("drag-active");
   });
 });
