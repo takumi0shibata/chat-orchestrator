@@ -54,6 +54,7 @@ beforeEach(() => {
       api_mode: "responses",
       supports_temperature: false,
       supports_reasoning_effort: true,
+      supports_image_input: true,
       default_temperature: null,
       default_reasoning_effort: "medium",
       reasoning_effort_options: ["none", "minimal", "low", "medium", "high", "xhigh"]
@@ -232,5 +233,74 @@ describe("useChatController", () => {
     expect(result.current.isParsingAttachments).toBe(false);
     expect(result.current.parsingAttachmentNames).toEqual([]);
     expect(result.current.attachments).toEqual([]);
+  });
+
+  it("blocks send when queued images remain on a model without image input support", async () => {
+    apiMocks.fetchProviderModels.mockResolvedValueOnce([
+      {
+        id: "gpt-5.4-2026-03-05",
+        label: "GPT 5.4",
+        api_mode: "responses",
+        supports_temperature: false,
+        supports_reasoning_effort: true,
+        supports_image_input: true,
+        default_temperature: null,
+        default_reasoning_effort: "medium",
+        reasoning_effort_options: ["none", "minimal", "low", "medium", "high", "xhigh"]
+      },
+      {
+        id: "claude-3-5-haiku-latest",
+        label: "Claude 3.5 Haiku",
+        api_mode: "chat_completions",
+        supports_temperature: true,
+        supports_reasoning_effort: false,
+        supports_image_input: false,
+        default_temperature: 0.3,
+        default_reasoning_effort: null,
+        reasoning_effort_options: []
+      }
+    ]);
+    apiMocks.extractAttachments.mockResolvedValueOnce([
+      {
+        id: "img-1",
+        name: "photo.png",
+        content_type: "image/png",
+        size_bytes: 7
+      }
+    ]);
+
+    const { result } = await renderController();
+
+    await act(async () => {
+      await result.current.onAttachFiles([new File(["png"], "photo.png", { type: "image/png" })]);
+    });
+
+    expect(result.current.imageAttachmentWarning).toBe("");
+
+    await act(async () => {
+      result.current.onModelChange("openai::claude-3-5-haiku-latest");
+    });
+
+    expect(result.current.attachments).toEqual([
+      {
+        id: "img-1",
+        name: "photo.png",
+        content_type: "image/png",
+        size_bytes: 7
+      }
+    ]);
+    expect(result.current.imageAttachmentWarning).toContain("does not support image input");
+
+    await act(async () => {
+      result.current.setInput("describe this");
+    });
+
+    const submitEvent = { preventDefault: vi.fn() } as unknown as Parameters<typeof result.current.onSubmit>[0];
+    await act(async () => {
+      await result.current.onSubmit(submitEvent);
+    });
+
+    expect(apiMocks.streamChat).not.toHaveBeenCalled();
+    expect(result.current.error).toContain("does not support image input");
   });
 });

@@ -6,6 +6,8 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
+from app.attachments import is_image_attachment
+from app.model_catalog import get_model_capability
 from app.schemas import AttachmentSummary, ChatMessage, ChatRequest, StoredAttachment
 from app.skills_runtime.base import (
     SKILL_RUNTIME_CONTEXT_KEY,
@@ -49,6 +51,14 @@ class ChatOrchestrator:
             found_ids = {attachment.id for attachment in attachments}
             missing = [attachment_id for attachment_id in attachment_ids if attachment_id not in found_ids]
             raise HTTPException(status_code=400, detail=f"Unknown attachment ids: {', '.join(missing)}")
+        document_attachments, image_attachments = self._split_attachments(attachments)
+
+        capability = get_model_capability(payload.provider_id, payload.model)
+        if image_attachments and not capability.supports_image_input:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model does not support image input: {payload.model}",
+            )
 
         history = self.store.get_messages(conversation_id)
         prepared_user_input = user_input or "Please use the attached files as the primary context."
@@ -62,9 +72,9 @@ class ChatOrchestrator:
         ]
         skill_result: SkillExecutionResult | None = None
 
-        if attachments and not payload.skill_id:
+        if document_attachments and not payload.skill_id:
             prepared_messages = [
-                ChatMessage(role="system", content=self._attachment_context(attachments)),
+                ChatMessage(role="system", content=self._attachment_context(document_attachments)),
                 *prepared_messages,
             ]
 
@@ -209,6 +219,19 @@ class ChatOrchestrator:
             text = Path(attachment.parsed_markdown_path).read_text(encoding="utf-8").strip()
             sections.append(f"[Attachment:{attachment.name}]\n{text}")
         return "\n\n".join(sections)
+
+    def _split_attachments(
+        self,
+        attachments: list[StoredAttachment],
+    ) -> tuple[list[StoredAttachment], list[StoredAttachment]]:
+        document_attachments: list[StoredAttachment] = []
+        image_attachments: list[StoredAttachment] = []
+        for attachment in attachments:
+            if is_image_attachment(name=attachment.name, content_type=attachment.content_type):
+                image_attachments.append(attachment)
+            else:
+                document_attachments.append(attachment)
+        return document_attachments, image_attachments
 
     def _skill_attachment_descriptor(self, attachment: StoredAttachment) -> dict[str, str | int | None]:
         return {

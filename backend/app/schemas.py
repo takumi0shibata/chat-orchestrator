@@ -48,6 +48,7 @@ class ModelInfo(BaseModel):
     api_mode: str
     supports_temperature: bool
     supports_reasoning_effort: bool
+    supports_image_input: bool
     default_temperature: float | None
     default_reasoning_effort: ReasoningEffort | None
     reasoning_effort_options: list[ReasoningEffort] = Field(default_factory=list)

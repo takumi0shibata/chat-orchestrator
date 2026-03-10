@@ -4,7 +4,7 @@ from google import genai
 from google.genai import types
 
 from app.providers.base import LLMProvider
-from app.schemas import ChatMessage
+from app.schemas import ChatMessage, StoredAttachment
 
 
 class GoogleProvider(LLMProvider):
@@ -30,12 +30,13 @@ class GoogleProvider(LLMProvider):
         *,
         model: str,
         messages: list[ChatMessage],
+        attachments: list[StoredAttachment],
         temperature: float | None,
         max_tokens: int | None,
         reasoning_effort: str | None,
         enable_web_tool: bool | None,
     ) -> str:
-        del reasoning_effort, enable_web_tool
+        del attachments, reasoning_effort, enable_web_tool
         system_prompt, contents = self._build_request(messages)
         config = types.GenerateContentConfig(
             temperature=temperature if temperature is not None else 0.3,
@@ -54,15 +55,17 @@ class GoogleProvider(LLMProvider):
         *,
         model: str,
         messages: list[ChatMessage],
+        attachments: list[StoredAttachment],
         temperature: float | None,
         max_tokens: int | None,
         reasoning_effort: str | None,
         enable_web_tool: bool | None,
     ) -> AsyncGenerator[str, None]:
-        del reasoning_effort, enable_web_tool
+        del attachments, reasoning_effort, enable_web_tool
         text = await self.chat(
             model=model,
             messages=messages,
+            attachments=[],
             temperature=temperature,
             max_tokens=max_tokens,
             reasoning_effort=None,

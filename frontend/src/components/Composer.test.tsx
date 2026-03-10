@@ -15,6 +15,7 @@ describe("Composer", () => {
       onSubmit: vi.fn((event: { preventDefault: () => void }) => event.preventDefault()),
       isParsingAttachments: false,
       parsingAttachmentLabel: "",
+      attachmentWarning: "",
       attachments: [{ id: "file-1", name: "brief.md", content_type: "text/markdown", size_bytes: 5 }],
       onAttachFiles: vi.fn(),
       onRemoveAttachment: vi.fn(),
@@ -25,6 +26,7 @@ describe("Composer", () => {
           api_mode: "responses",
           supports_temperature: false,
           supports_reasoning_effort: true,
+          supports_image_input: true,
           default_temperature: null,
           default_reasoning_effort: "medium" as const,
           reasoning_effort_options: reasoningOptions,
@@ -38,6 +40,7 @@ describe("Composer", () => {
           api_mode: "responses",
           supports_temperature: true,
           supports_reasoning_effort: false,
+          supports_image_input: false,
           default_temperature: 0.3,
           default_reasoning_effort: null,
           reasoning_effort_options: [],
@@ -72,6 +75,7 @@ describe("Composer", () => {
         api_mode: "responses",
         supports_temperature: false,
         supports_reasoning_effort: true,
+        supports_image_input: true,
         default_temperature: null,
         default_reasoning_effort: "medium" as const,
         reasoning_effort_options: reasoningOptions,
@@ -173,6 +177,21 @@ describe("Composer", () => {
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent("report.pdf ほか1件を解析しています");
     expect(document.querySelector(".composer-status-spinner")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+  });
+
+  it("shows an image compatibility warning and disables send", () => {
+    const props = createProps();
+
+    render(
+      <Composer
+        {...props}
+        attachments={[{ id: "img-1", name: "photo.png", content_type: "image/png", size_bytes: 5 }]}
+        attachmentWarning="Claude 3.5 Haiku does not support image input. Remove images or switch to GPT-5.4 / GPT-5 mini."
+      />
+    );
+
+    expect(screen.getByText(/does not support image input/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
   });
 

@@ -62,6 +62,7 @@ export function Composer(props: {
   onSubmit: (event: FormEvent) => void;
   isParsingAttachments: boolean;
   parsingAttachmentLabel: string;
+  attachmentWarning: string;
   attachments: Attachment[];
   onAttachFiles: (files: File[]) => void;
   onRemoveAttachment: (id: string) => void;
@@ -89,6 +90,7 @@ export function Composer(props: {
     onSubmit,
     isParsingAttachments,
     parsingAttachmentLabel,
+    attachmentWarning,
     attachments,
     onAttachFiles,
     onRemoveAttachment,
@@ -261,6 +263,12 @@ export function Composer(props: {
         </div>
       )}
 
+      {attachmentWarning && (
+        <div className="composer-warning" role="status" aria-live="polite">
+          {attachmentWarning}
+        </div>
+      )}
+
       <div className="composer-input-row">
         <button
           className="composer-attach-btn"
@@ -305,7 +313,7 @@ export function Composer(props: {
           <button
             className="send-btn"
             type="submit"
-            disabled={isParsingAttachments || !conversationId || !selectedModel}
+            disabled={isParsingAttachments || !conversationId || !selectedModel || Boolean(attachmentWarning)}
             aria-label="Send message"
           >
             <SendIcon />

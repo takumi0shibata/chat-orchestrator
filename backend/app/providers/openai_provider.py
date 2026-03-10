@@ -1,11 +1,14 @@
 from collections.abc import AsyncGenerator
+import base64
+from pathlib import Path
 import re
 from typing import Any
 
+from app.attachments import is_image_attachment
 from app.model_catalog import get_model_capability
 from app.openai_client import build_openai_client
 from app.providers.base import LLMProvider
-from app.schemas import ChatMessage
+from app.schemas import ChatMessage, StoredAttachment
 from app.config import Settings
 
 
@@ -33,8 +36,46 @@ class OpenAIProvider(LLMProvider):
     def _chat_messages(self, messages: list[ChatMessage]) -> list[dict[str, str]]:
         return [{"role": m.role, "content": m.content} for m in messages]
 
-    def _responses_input(self, messages: list[ChatMessage]) -> list[dict[str, str]]:
-        return [{"role": m.role, "content": m.content} for m in messages]
+    def _responses_input(
+        self,
+        messages: list[ChatMessage],
+        attachments: list[StoredAttachment],
+    ) -> list[dict[str, Any]]:
+        image_attachments = [
+            attachment
+            for attachment in attachments
+            if is_image_attachment(name=attachment.name, content_type=attachment.content_type)
+        ]
+        if not image_attachments:
+            return [{"role": m.role, "content": m.content} for m in messages]
+
+        last_user_index = next((index for index in range(len(messages) - 1, -1, -1) if messages[index].role == "user"), -1)
+        payload: list[dict[str, Any]] = []
+
+        for index, message in enumerate(messages):
+            if index != last_user_index:
+                payload.append({"role": message.role, "content": message.content})
+                continue
+
+            content: list[dict[str, str]] = []
+            if message.content:
+                content.append({"type": "input_text", "text": message.content})
+            for attachment in image_attachments:
+                content.append(
+                    {
+                        "type": "input_image",
+                        "image_url": self._attachment_data_url(attachment),
+                        "detail": "auto",
+                    }
+                )
+            payload.append({"role": message.role, "content": content})
+
+        return payload
+
+    def _attachment_data_url(self, attachment: StoredAttachment) -> str:
+        raw = Path(attachment.original_path).read_bytes()
+        encoded = base64.b64encode(raw).decode("ascii")
+        return f"data:{attachment.content_type};base64,{encoded}"
 
     def _build_optional_kwargs(
         self,
@@ -118,6 +159,7 @@ class OpenAIProvider(LLMProvider):
         *,
         model: str,
         messages: list[ChatMessage],
+        attachments: list[StoredAttachment],
         temperature: float | None,
         max_tokens: int | None,
         reasoning_effort: str | None,
@@ -143,7 +185,7 @@ class OpenAIProvider(LLMProvider):
                 kwargs["tools"] = tools
             response = await self.client.responses.create(
                 model=model,
-                input=self._responses_input(messages),
+                input=self._responses_input(messages, attachments),
                 **kwargs,
             )
             text = response.output_text or ""
@@ -163,6 +205,7 @@ class OpenAIProvider(LLMProvider):
         *,
         model: str,
         messages: list[ChatMessage],
+        attachments: list[StoredAttachment],
         temperature: float | None,
         max_tokens: int | None,
         reasoning_effort: str | None,
@@ -188,7 +231,7 @@ class OpenAIProvider(LLMProvider):
                 kwargs["tools"] = tools
             stream = await self.client.responses.create(
                 model=model,
-                input=self._responses_input(messages),
+                input=self._responses_input(messages, attachments),
                 stream=True,
                 **kwargs,
             )

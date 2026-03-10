@@ -45,6 +45,10 @@ export type RichModel = ModelInfo & {
   providerEnabled: boolean;
 };
 
+function isImageAttachment(attachment: AttachmentSummary | Attachment): boolean {
+  return attachment.content_type.toLowerCase().startsWith("image/");
+}
+
 function normalizeMessage(message: ChatMessage): ChatMessage {
   return {
     ...message,
@@ -138,10 +142,18 @@ export function useChatController() {
     [pendingAttachmentBatches]
   );
   const isParsingAttachments = pendingAttachmentBatches.length > 0;
+  const hasQueuedImageAttachments = useMemo(
+    () => attachments.some((attachment) => isImageAttachment(attachment)),
+    [attachments]
+  );
   const parsingAttachmentLabel = useMemo(
     () => formatParsingAttachmentLabel(parsingAttachmentNames),
     [parsingAttachmentNames]
   );
+  const imageAttachmentWarning = useMemo(() => {
+    if (!selectedModel || !hasQueuedImageAttachments || selectedModel.supports_image_input) return "";
+    return `${selectedModel.label} does not support image input. Remove images or switch to GPT-5.4 / GPT-5 mini.`;
+  }, [hasQueuedImageAttachments, selectedModel]);
 
   const selectConversation = async (id: string, persist = true) => {
     const history = await fetchConversationMessages(id);
@@ -328,6 +340,10 @@ export function useChatController() {
     event.preventDefault();
     const trimmed = input.trim();
     if ((!trimmed && attachments.length === 0) || !selectedModel || !conversationId || loading || isParsingAttachments) return;
+    if (imageAttachmentWarning) {
+      setError(imageAttachmentWarning);
+      return;
+    }
 
     if (!selectedModel.providerEnabled) {
       setError(`${selectedModel.providerLabel} のAPIキーが設定されていません`);
@@ -453,6 +469,7 @@ export function useChatController() {
     isParsingAttachments,
     parsingAttachmentNames,
     parsingAttachmentLabel,
+    imageAttachmentWarning,
     error,
     loading,
     showThinking,

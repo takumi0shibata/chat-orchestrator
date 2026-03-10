@@ -100,6 +100,7 @@ export interface ModelInfo {
   api_mode: string;
   supports_temperature: boolean;
   supports_reasoning_effort: boolean;
+  supports_image_input: boolean;
   default_temperature: number | null;
   default_reasoning_effort: ReasoningEffort | null;
   reasoning_effort_options: ReasoningEffort[];

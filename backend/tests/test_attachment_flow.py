@@ -10,14 +10,14 @@ from app.storage import ChatStore
 
 class RecordingProvider:
     def __init__(self) -> None:
-        self.calls: list[list] = []
+        self.calls: list[dict] = []
 
     async def chat(self, **kwargs):
-        self.calls.append(kwargs["messages"])
+        self.calls.append(kwargs)
         return "assistant result"
 
     async def stream_chat(self, **kwargs):
-        self.calls.append(kwargs["messages"])
+        self.calls.append(kwargs)
         yield "assistant result"
 
 
@@ -74,11 +74,18 @@ def _set_state(tmp_path: Path, *, skill: Skill | None = None) -> RecordingProvid
     return provider
 
 
-def _upload_attachment(client: TestClient, conversation_id: str, *, name: str, content: bytes) -> dict:
+def _upload_attachment(
+    client: TestClient,
+    conversation_id: str,
+    *,
+    name: str,
+    content: bytes,
+    content_type: str,
+) -> dict:
     response = client.post(
         "/api/attachments/extract",
         data={"conversation_id": conversation_id},
-        files=[("files", (name, content, "text/plain"))],
+        files=[("files", (name, content, content_type))],
     )
     assert response.status_code == 200
     payload = response.json()["files"]
@@ -86,10 +93,17 @@ def _upload_attachment(client: TestClient, conversation_id: str, *, name: str, c
     return payload[0]
 
 
-def _chat_payload(conversation_id: str, *, user_input: str, attachment_ids: list[str], skill_id: str | None = None) -> dict:
+def _chat_payload(
+    conversation_id: str,
+    *,
+    user_input: str,
+    attachment_ids: list[str],
+    skill_id: str | None = None,
+    model: str = "gpt-4o-mini",
+) -> dict:
     return {
         "provider_id": "openai",
-        "model": "gpt-4o-mini",
+        "model": model,
         "conversation_id": conversation_id,
         "user_input": user_input,
         "attachment_ids": attachment_ids,
@@ -102,7 +116,13 @@ def test_attachment_upload_persists_file_and_hides_extracted_body(tmp_path: Path
         _set_state(tmp_path)
         conversation_id = state.store.create_conversation()
 
-        attachment = _upload_attachment(client, conversation_id, name="brief.txt", content=b"hello attachment")
+        attachment = _upload_attachment(
+            client,
+            conversation_id,
+            name="brief.txt",
+            content=b"hello attachment",
+            content_type="text/plain",
+        )
         assert attachment == {
             "id": attachment["id"],
             "name": "brief.txt",
@@ -116,11 +136,36 @@ def test_attachment_upload_persists_file_and_hides_extracted_body(tmp_path: Path
         assert Path(stored[0].parsed_markdown_path).read_text(encoding="utf-8") == "hello attachment"
 
 
+def test_image_upload_persists_file_and_placeholder(tmp_path: Path) -> None:
+    with TestClient(app) as client:
+        _set_state(tmp_path)
+        conversation_id = state.store.create_conversation()
+
+        image = _upload_attachment(
+            client,
+            conversation_id,
+            name="diagram.png",
+            content=b"\x89PNG\r\n\x1a\nfake",
+            content_type="image/png",
+        )
+
+        stored = state.store.get_attachments(conversation_id=conversation_id, attachment_ids=[image["id"]])
+        assert len(stored) == 1
+        assert Path(stored[0].original_path).read_bytes() == b"\x89PNG\r\n\x1a\nfake"
+        assert Path(stored[0].parsed_markdown_path).read_text(encoding="utf-8") == "[Image attachment: diagram.png]"
+
+
 def test_normal_chat_injects_attachment_context_without_persisting_body(tmp_path: Path) -> None:
     with TestClient(app) as client:
         provider = _set_state(tmp_path)
         conversation_id = state.store.create_conversation()
-        attachment = _upload_attachment(client, conversation_id, name="notes.txt", content=b"attachment body")
+        attachment = _upload_attachment(
+            client,
+            conversation_id,
+            name="notes.txt",
+            content=b"attachment body",
+            content_type="text/plain",
+        )
 
         response = client.post(
             "/api/chat",
@@ -129,7 +174,7 @@ def test_normal_chat_injects_attachment_context_without_persisting_body(tmp_path
         assert response.status_code == 200
 
         assert len(provider.calls) == 1
-        messages = provider.calls[0]
+        messages = provider.calls[0]["messages"]
         assert messages[0].role == "system"
         assert "attachment body" in messages[0].content
         assert messages[-1].role == "user"
@@ -148,7 +193,13 @@ def test_skill_chat_uses_attachment_descriptors_without_double_injection(tmp_pat
     with TestClient(app) as client:
         provider = _set_state(tmp_path, skill=skill)
         conversation_id = state.store.create_conversation()
-        attachment = _upload_attachment(client, conversation_id, name="paper.txt", content=b"skill attachment body")
+        attachment = _upload_attachment(
+            client,
+            conversation_id,
+            name="paper.txt",
+            content=b"skill attachment body",
+            content_type="text/plain",
+        )
 
         response = client.post(
             "/api/chat",
@@ -169,15 +220,92 @@ def test_skill_chat_uses_attachment_descriptors_without_double_injection(tmp_pat
         assert Path(descriptor["original_path"]).read_bytes() == b"skill attachment body"
         assert Path(descriptor["parsed_markdown_path"]).read_text(encoding="utf-8") == "skill attachment body"
 
-        sent_messages = provider.calls[0]
+        sent_messages = provider.calls[0]["messages"]
         assert all("skill attachment body" not in message.content for message in sent_messages)
+
+
+def test_mixed_chat_injects_only_document_context_and_passes_images_to_provider(tmp_path: Path) -> None:
+    with TestClient(app) as client:
+        provider = _set_state(tmp_path)
+        conversation_id = state.store.create_conversation()
+        document = _upload_attachment(
+            client,
+            conversation_id,
+            name="notes.txt",
+            content=b"document body",
+            content_type="text/plain",
+        )
+        image = _upload_attachment(
+            client,
+            conversation_id,
+            name="chart.png",
+            content=b"\x89PNG\r\n\x1a\nchart",
+            content_type="image/png",
+        )
+
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload(
+                conversation_id,
+                user_input="Describe the uploaded materials",
+                attachment_ids=[document["id"], image["id"]],
+                model="gpt-5.4-2026-03-05",
+            ),
+        )
+        assert response.status_code == 200
+
+        provider_call = provider.calls[0]
+        messages = provider_call["messages"]
+        assert messages[0].role == "system"
+        assert "document body" in messages[0].content
+        assert "[Image attachment:" not in messages[0].content
+        assert [attachment.id for attachment in provider_call["attachments"]] == [document["id"], image["id"]]
+
+        history = client.get(f"/api/conversations/{conversation_id}/messages")
+        assert history.status_code == 200
+        user_message = history.json()[0]
+        assert sorted(user_message["attachments"], key=lambda item: item["id"]) == sorted(
+            [document, image],
+            key=lambda item: item["id"],
+        )
+
+
+def test_image_attachment_requires_image_capable_model(tmp_path: Path) -> None:
+    with TestClient(app) as client:
+        provider = _set_state(tmp_path)
+        conversation_id = state.store.create_conversation()
+        image = _upload_attachment(
+            client,
+            conversation_id,
+            name="photo.png",
+            content=b"\x89PNG\r\n\x1a\nimage",
+            content_type="image/png",
+        )
+
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload(
+                conversation_id,
+                user_input="What is in this image?",
+                attachment_ids=[image["id"]],
+            ),
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Model does not support image input: gpt-4o-mini"
+        assert provider.calls == []
 
 
 def test_attachment_only_chat_uses_attachment_name_for_title(tmp_path: Path) -> None:
     with TestClient(app) as client:
         _set_state(tmp_path)
         conversation_id = state.store.create_conversation()
-        attachment = _upload_attachment(client, conversation_id, name="report.txt", content=b"report body")
+        attachment = _upload_attachment(
+            client,
+            conversation_id,
+            name="report.txt",
+            content=b"report body",
+            content_type="text/plain",
+        )
 
         response = client.post(
             "/api/chat",

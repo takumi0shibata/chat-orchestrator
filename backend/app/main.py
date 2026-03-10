@@ -189,6 +189,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         output = await provider.chat(
             model=payload.model,
             messages=prepared.prepared_messages,
+            attachments=prepared.attachments,
             temperature=payload.temperature,
             max_tokens=payload.max_tokens,
             reasoning_effort=payload.reasoning_effort,
@@ -358,6 +359,7 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
                 async for chunk in provider.stream_chat(
                     model=payload.model,
                     messages=prepared.prepared_messages,
+                    attachments=prepared.attachments,
                     temperature=payload.temperature,
                     max_tokens=payload.max_tokens,
                     reasoning_effort=payload.reasoning_effort,

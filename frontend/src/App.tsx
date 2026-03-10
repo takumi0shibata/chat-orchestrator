@@ -132,6 +132,7 @@ export function App() {
                 onSubmit={(event) => void controller.onSubmit(event)}
                 isParsingAttachments={controller.isParsingAttachments}
                 parsingAttachmentLabel={controller.parsingAttachmentLabel}
+                attachmentWarning={controller.imageAttachmentWarning}
                 attachments={controller.attachments}
                 onAttachFiles={(files) => void controller.onAttachFiles(files)}
                 onRemoveAttachment={controller.onRemoveAttachment}

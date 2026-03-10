@@ -596,6 +596,13 @@ a {
   gap: 8px;
 }
 
+.composer-warning {
+  margin: -2px 0 0;
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .attachment-chip {
   display: inline-flex;
   align-items: center;

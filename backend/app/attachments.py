@@ -13,7 +13,8 @@ MAX_TEXT_CHARS = 12000
 MAX_PDF_PAGES = 30
 DOCLING_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".html", ".htm", ".md", ".csv"}
 PLAIN_TEXT_EXTENSIONS = {".txt", ".json"}
-ALLOWED_EXTENSIONS = DOCLING_EXTENSIONS | PLAIN_TEXT_EXTENSIONS
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+ALLOWED_EXTENSIONS = DOCLING_EXTENSIONS | PLAIN_TEXT_EXTENSIONS | IMAGE_EXTENSIONS
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,13 @@ def _extract_text_from_plain(raw: bytes, filename: str) -> str:
         except UnicodeDecodeError:
             continue
     raise HTTPException(status_code=400, detail=f"Unsupported encoding: {filename}")
+
+
+def is_image_attachment(*, name: str, content_type: str | None = None) -> bool:
+    normalized_type = (content_type or "").lower()
+    if normalized_type.startswith("image/"):
+        return True
+    return Path(name).suffix.lower() in IMAGE_EXTENSIONS
 
 
 @lru_cache(maxsize=1)
@@ -93,7 +101,9 @@ async def save_attachment(
     original_path = attachment_dir / f"original{suffix}"
     original_path.write_bytes(raw)
 
-    if suffix in PLAIN_TEXT_EXTENSIONS:
+    if suffix in IMAGE_EXTENSIONS:
+        parsed_markdown = f"[Image attachment: {filename}]"
+    elif suffix in PLAIN_TEXT_EXTENSIONS:
         parsed_markdown = _extract_text_from_plain(raw, filename)
     else:
         parsed_markdown = _extract_text_with_docling(original_path, filename)
