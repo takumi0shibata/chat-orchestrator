@@ -1,6 +1,13 @@
 from typing import Any
 
-from app.skills_runtime.base import Skill, SkillCategory, SkillExecutionResult, SkillMetadata, context_only_result
+from app.skills_runtime.base import (
+    Skill,
+    SkillCategory,
+    SkillExecutionResult,
+    SkillMetadata,
+    context_only_result,
+    get_skill_progress,
+)
 
 
 class ContextSummarizerSkill(Skill):
@@ -18,10 +25,13 @@ class ContextSummarizerSkill(Skill):
         history: list[dict[str, str]],
         skill_context: dict[str, Any] | None = None,
     ) -> SkillExecutionResult:
+        progress = get_skill_progress(skill_context)
+        await progress.update(stage="review_history", label="履歴を確認しています")
         last_messages = history[-6:]
         if not last_messages:
             return context_only_result("履歴はありません。")
 
+        await progress.update(stage="build_summary", label="要約を組み立てています")
         lines = []
         for item in last_messages:
             role = item.get("role", "unknown")

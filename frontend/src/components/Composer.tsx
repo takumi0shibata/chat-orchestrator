@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ModelInfo, ReasoningEffort, SkillInfo } from "../types";
 import {
@@ -15,7 +15,8 @@ import {
 type Attachment = {
   id: string;
   name: string;
-  content: string;
+  content_type: string;
+  size_bytes: number;
 };
 
 type RichModel = ModelInfo & {
@@ -50,10 +51,18 @@ function formatSkillCount(count: number) {
   return `${count} ${count === 1 ? "skill" : "skills"}`;
 }
 
+function hasDraggedFiles(dataTransfer: DataTransfer | null) {
+  if (!dataTransfer) return false;
+  return Array.from(dataTransfer.types || []).includes("Files");
+}
+
 export function Composer(props: {
   input: string;
   onInputChange: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
+  isParsingAttachments: boolean;
+  parsingAttachmentLabel: string;
+  attachmentWarning: string;
   attachments: Attachment[];
   onAttachFiles: (files: File[]) => void;
   onRemoveAttachment: (id: string) => void;
@@ -79,6 +88,9 @@ export function Composer(props: {
     input,
     onInputChange,
     onSubmit,
+    isParsingAttachments,
+    parsingAttachmentLabel,
+    attachmentWarning,
     attachments,
     onAttachFiles,
     onRemoveAttachment,
@@ -103,10 +115,12 @@ export function Composer(props: {
 
   const [activeMenu, setActiveMenu] = useState<ComposerMenu>(null);
   const [skillCategoryId, setSkillCategoryId] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
 
   const rootRef = useRef<HTMLFormElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const dragDepthRef = useRef(0);
 
   const selectedSkill = useMemo(() => skills.find((skill) => skill.id === skillId), [skillId, skills]);
   const skillGroups = useMemo(() => {
@@ -186,8 +200,56 @@ export function Composer(props: {
     if (event.target) event.target.value = "";
   };
 
+  const resetDragState = () => {
+    dragDepthRef.current = 0;
+    setDragActive(false);
+  };
+
+  const onDragEnter = (event: DragEvent<HTMLFormElement>) => {
+    if (!hasDraggedFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setDragActive(true);
+  };
+
+  const onDragOver = (event: DragEvent<HTMLFormElement>) => {
+    if (!hasDraggedFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    if (!dragActive) setDragActive(true);
+  };
+
+  const onDragLeave = (event: DragEvent<HTMLFormElement>) => {
+    if (!hasDraggedFiles(event.dataTransfer)) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragActive(false);
+  };
+
+  const onDrop = (event: DragEvent<HTMLFormElement>) => {
+    if (!hasDraggedFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    const files = Array.from(event.dataTransfer.files || []);
+    if (files.length > 0) onAttachFiles(files);
+    resetDragState();
+  };
+
   return (
-    <form ref={rootRef} className="composer" onSubmit={onSubmit}>
+    <form
+      ref={rootRef}
+      className={`composer ${dragActive ? "drag-active" : ""}`}
+      onSubmit={onSubmit}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {isParsingAttachments && parsingAttachmentLabel && (
+        <div className="composer-status-banner" role="status" aria-live="polite">
+          <span className="composer-status-spinner" aria-hidden="true" />
+          <span>{parsingAttachmentLabel}</span>
+        </div>
+      )}
+
       {attachments.length > 0 && (
         <div className="attachment-row">
           {attachments.map((file) => (
@@ -198,6 +260,12 @@ export function Composer(props: {
               </button>
             </span>
           ))}
+        </div>
+      )}
+
+      {attachmentWarning && (
+        <div className="composer-warning" role="status" aria-live="polite">
+          {attachmentWarning}
         </div>
       )}
 
@@ -245,7 +313,7 @@ export function Composer(props: {
           <button
             className="send-btn"
             type="submit"
-            disabled={!conversationId || !selectedModel}
+            disabled={isParsingAttachments || !conversationId || !selectedModel || Boolean(attachmentWarning)}
             aria-label="Send message"
           >
             <SendIcon />

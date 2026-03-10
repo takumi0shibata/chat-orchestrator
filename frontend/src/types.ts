@@ -84,6 +84,7 @@ export interface ChatMessage {
   content: string;
   artifacts: UiBlock[];
   skill_id?: string | null;
+  attachments: AttachmentSummary[];
 }
 
 export interface ProviderInfo {
@@ -99,6 +100,7 @@ export interface ModelInfo {
   api_mode: string;
   supports_temperature: boolean;
   supports_reasoning_effort: boolean;
+  supports_image_input: boolean;
   default_temperature: number | null;
   default_reasoning_effort: ReasoningEffort | null;
   reasoning_effort_options: ReasoningEffort[];
@@ -135,9 +137,11 @@ export interface ConversationSummary {
   message_count: number;
 }
 
-export interface ExtractedAttachment {
+export interface AttachmentSummary {
+  id: string;
   name: string;
-  content: string;
+  content_type: string;
+  size_bytes: number;
 }
 
 export interface StreamDone {
@@ -162,6 +166,8 @@ export interface StreamSkillStatus {
   type: "skill_status";
   status: "running" | "done";
   skill_id: string;
+  stage: string;
+  label: string;
 }
 
 export type StreamEvent = StreamChunk | StreamDone | StreamError | StreamSkillStatus;

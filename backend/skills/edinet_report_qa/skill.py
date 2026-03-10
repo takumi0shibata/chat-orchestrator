@@ -10,7 +10,14 @@ from typing import Any
 import httpx
 
 from app.config import get_settings
-from app.skills_runtime.base import Skill, SkillCategory, SkillExecutionResult, SkillMetadata, context_only_result
+from app.skills_runtime.base import (
+    Skill,
+    SkillCategory,
+    SkillExecutionResult,
+    SkillMetadata,
+    context_only_result,
+    get_skill_progress,
+)
 
 _SKILL_DIR = Path(__file__).resolve().parent
 if str(_SKILL_DIR) not in sys.path:
@@ -42,6 +49,7 @@ class EdinetReportQASkill(Skill):
         history: list[dict[str, str]],
         skill_context: dict[str, Any] | None = None,
     ) -> SkillExecutionResult:
+        progress = get_skill_progress(skill_context)
         settings = get_settings()
         api_key = (settings.edinet_api_key or "").strip()
         if not api_key:
@@ -49,6 +57,7 @@ class EdinetReportQASkill(Skill):
 
         section_catalog = SectionCatalog.load(self._sections_path())
         parser = IntentParser()
+        await progress.update(stage="parse_request", label="質問を解釈しています")
         parsed_intent = await parser.parse(
             user_text=user_text,
             history=history,
@@ -83,6 +92,7 @@ class EdinetReportQASkill(Skill):
         api_errors: list[str] = []
         extraction_hits = 0
 
+        await progress.update(stage="resolve_company", label="企業を特定しています")
         async with httpx.AsyncClient(timeout=30.0) as client:
             repo = DocumentsRepository(
                 client=client,
@@ -140,6 +150,7 @@ class EdinetReportQASkill(Skill):
                     candidate_lines=[],
                 ))
 
+            await progress.update(stage="fetch_filings", label="有報を取得しています")
             lines = [
                 "EDINET有報抽出コンテキスト",
                 "",
@@ -166,6 +177,7 @@ class EdinetReportQASkill(Skill):
 
             lines.extend(["", "## 抽出本文"])
 
+            await progress.update(stage="extract_sections", label="該当セクションを抽出しています")
             for company in [res for res in resolutions if res.ok]:
                 lines.extend(["", f"### {company.company_name or company.query}"])
                 target_periods = explicit_periods or [None]
@@ -252,6 +264,7 @@ class EdinetReportQASkill(Skill):
                     "- 企業ごとの差異を混同しないこと。",
                 ]
             )
+            await progress.update(stage="build_context", label="回答コンテキストを整えています")
             return context_only_result("\n".join(lines))
 
     async def _disambiguate_company_candidate(

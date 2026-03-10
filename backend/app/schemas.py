@@ -11,12 +11,14 @@ class ChatMessage(BaseModel):
     content: str
     artifacts: list[UiBlock] = Field(default_factory=list)
     skill_id: str | None = None
+    attachments: list["AttachmentSummary"] = Field(default_factory=list)
 
 
 class ChatRequest(BaseModel):
     provider_id: str = Field(description="Provider id, e.g. openai")
     model: str = Field(description="Model name")
     user_input: str
+    attachment_ids: list[str] = Field(default_factory=list)
     conversation_id: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
@@ -46,6 +48,7 @@ class ModelInfo(BaseModel):
     api_mode: str
     supports_temperature: bool
     supports_reasoning_effort: bool
+    supports_image_input: bool
     default_temperature: float | None
     default_reasoning_effort: ReasoningEffort | None
     reasoning_effort_options: list[ReasoningEffort] = Field(default_factory=list)
@@ -75,13 +78,34 @@ class ConversationSummary(BaseModel):
     message_count: int
 
 
-class ExtractedAttachment(BaseModel):
+class AttachmentSummary(BaseModel):
+    id: str
     name: str
-    content: str
+    content_type: str
+    size_bytes: int
+
+
+class StoredAttachment(AttachmentSummary):
+    conversation_id: str
+    message_id: int | None = None
+    original_path: str
+    parsed_markdown_path: str
+    created_at: str | None = None
+
+
+class StoredGeneratedFile(BaseModel):
+    id: str
+    conversation_id: str
+    skill_id: str
+    source_attachment_id: str | None = None
+    name: str
+    content_type: str
+    path: str
+    created_at: str | None = None
 
 
 class ExtractAttachmentsResponse(BaseModel):
-    files: list[ExtractedAttachment]
+    files: list[AttachmentSummary]
 
 
 class SkillFeedbackRequest(BaseModel):

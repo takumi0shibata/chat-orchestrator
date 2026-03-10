@@ -14,21 +14,29 @@ import {
   submitSkillFeedback
 } from "../api";
 import type {
+  AttachmentSummary,
   ChatMessage,
   FeedbackAction,
   FeedbackChoice,
   ModelInfo,
   ProviderInfo,
   ReasoningEffort,
-  SkillInfo
+  SkillInfo,
+  StreamSkillStatus
 } from "../types";
 
 const ACTIVE_CONVERSATION_KEY = "chat_orchestrator_active_conversation_id";
 
+type PendingAttachmentBatch = {
+  id: number;
+  names: string[];
+};
+
 export type Attachment = {
-  id: string;
-  name: string;
-  content: string;
+  id: AttachmentSummary["id"];
+  name: AttachmentSummary["name"];
+  content_type: AttachmentSummary["content_type"];
+  size_bytes: AttachmentSummary["size_bytes"];
 };
 
 export type RichModel = ModelInfo & {
@@ -37,18 +45,16 @@ export type RichModel = ModelInfo & {
   providerEnabled: boolean;
 };
 
-function buildUserInput(text: string, attachments: Attachment[]): string {
-  if (attachments.length === 0) return text;
-
-  const files = attachments.map((file) => `- ${file.name}\n${file.content}`).join("\n\n");
-  return `${text}\n\n[Attached files]\n${files}`;
+function isImageAttachment(attachment: AttachmentSummary | Attachment): boolean {
+  return attachment.content_type.toLowerCase().startsWith("image/");
 }
 
 function normalizeMessage(message: ChatMessage): ChatMessage {
   return {
     ...message,
     artifacts: message.artifacts || [],
-    skill_id: message.skill_id ?? null
+    skill_id: message.skill_id ?? null,
+    attachments: message.attachments || []
   };
 }
 
@@ -89,6 +95,12 @@ function applyFeedbackSelection(
   });
 }
 
+function formatParsingAttachmentLabel(names: string[]): string {
+  if (names.length === 0) return "";
+  if (names.length === 1) return `${names[0]} を解析しています`;
+  return `${names[0]} ほか${names.length - 1}件を解析しています`;
+}
+
 export function useChatController() {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [conversations, setConversations] = useState<{ id: string; title: string; updated_at: string; message_count: number }[]>([]);
@@ -104,14 +116,16 @@ export function useChatController() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState<string>("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [pendingAttachmentBatches, setPendingAttachmentBatches] = useState<PendingAttachmentBatch[]>([]);
 
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [showThinking, setShowThinking] = useState<boolean>(false);
-  const [showSkillRunning, setShowSkillRunning] = useState<boolean>(false);
+  const [skillStatus, setSkillStatus] = useState<StreamSkillStatus | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const nextAttachmentBatchIdRef = useRef(0);
 
   const selectedModel = useMemo(
     () => models.find((item) => `${item.providerId}::${item.id}` === modelKey),
@@ -123,6 +137,23 @@ export function useChatController() {
       selectedModel.api_mode === "responses" &&
       (selectedModel.providerId === "openai" || selectedModel.providerId === "azure_openai")
   );
+  const parsingAttachmentNames = useMemo(
+    () => pendingAttachmentBatches.flatMap((batch) => batch.names),
+    [pendingAttachmentBatches]
+  );
+  const isParsingAttachments = pendingAttachmentBatches.length > 0;
+  const hasQueuedImageAttachments = useMemo(
+    () => attachments.some((attachment) => isImageAttachment(attachment)),
+    [attachments]
+  );
+  const parsingAttachmentLabel = useMemo(
+    () => formatParsingAttachmentLabel(parsingAttachmentNames),
+    [parsingAttachmentNames]
+  );
+  const imageAttachmentWarning = useMemo(() => {
+    if (!selectedModel || !hasQueuedImageAttachments || selectedModel.supports_image_input) return "";
+    return `${selectedModel.label} does not support image input. Remove images or switch to GPT-5.4 / GPT-5 mini.`;
+  }, [hasQueuedImageAttachments, selectedModel]);
 
   const selectConversation = async (id: string, persist = true) => {
     const history = await fetchConversationMessages(id);
@@ -254,16 +285,30 @@ export function useChatController() {
   };
 
   const onAttachFiles = async (files: File[]) => {
+    if (!conversationId || files.length === 0) return;
+
+    const batchId = nextAttachmentBatchIdRef.current;
+    nextAttachmentBatchIdRef.current += 1;
+    const batch: PendingAttachmentBatch = {
+      id: batchId,
+      names: files.map((file) => file.name || "添付ファイル")
+    };
+
+    setPendingAttachmentBatches((prev) => [...prev, batch]);
+
     try {
-      const extracted = await extractAttachments(files);
+      const extracted = await extractAttachments({ conversationId, files });
       const next = extracted.map((file) => ({
-        id: `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id: file.id,
         name: file.name,
-        content: file.content
+        content_type: file.content_type,
+        size_bytes: file.size_bytes
       }));
       setAttachments((prev) => [...prev, ...next]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "ファイルの読み込みに失敗しました");
+    } finally {
+      setPendingAttachmentBatches((prev) => prev.filter((item) => item.id !== batchId));
     }
   };
 
@@ -294,7 +339,11 @@ export function useChatController() {
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = input.trim();
-    if ((!trimmed && attachments.length === 0) || !selectedModel || !conversationId || loading) return;
+    if ((!trimmed && attachments.length === 0) || !selectedModel || !conversationId || loading || isParsingAttachments) return;
+    if (imageAttachmentWarning) {
+      setError(imageAttachmentWarning);
+      return;
+    }
 
     if (!selectedModel.providerEnabled) {
       setError(`${selectedModel.providerLabel} のAPIキーが設定されていません`);
@@ -304,16 +353,38 @@ export function useChatController() {
     setLoading(true);
     setError("");
     setShowThinking(Boolean(selectedModel.supports_reasoning_effort));
-    setShowSkillRunning(Boolean(skillId));
+    setSkillStatus(
+      skillId
+        ? {
+            type: "skill_status",
+            status: "running",
+            skill_id: skillId,
+            stage: "starting",
+            label: "準備しています"
+          }
+        : null
+    );
 
-    const userRaw = trimmed || "[Attached files only]";
-    const payloadText = buildUserInput(userRaw, attachments);
+    const userRaw = trimmed;
+    const queuedAttachments = attachments;
 
     setInput("");
     setAttachments([]);
 
-    const userMessage: ChatMessage = { role: "user", content: userRaw, artifacts: [], skill_id: null };
-    const assistantPlaceholder: ChatMessage = { role: "assistant", content: "", artifacts: [], skill_id: skillId || null };
+    const userMessage: ChatMessage = {
+      role: "user",
+      content: userRaw,
+      artifacts: [],
+      skill_id: null,
+      attachments: queuedAttachments
+    };
+    const assistantPlaceholder: ChatMessage = {
+      role: "assistant",
+      content: "",
+      artifacts: [],
+      skill_id: skillId || null,
+      attachments: []
+    };
     setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
@@ -322,7 +393,8 @@ export function useChatController() {
       const done = await streamChat({
         providerId: selectedModel.providerId,
         model: selectedModel.id,
-        userInput: payloadText,
+        userInput: userRaw,
+        attachmentIds: queuedAttachments.map((attachment) => attachment.id),
         conversationId,
         skillId: skillId || undefined,
         temperature,
@@ -331,7 +403,7 @@ export function useChatController() {
         signal: abortController.signal,
         onChunk: (delta) => {
           if (delta) setShowThinking(false);
-          if (delta) setShowSkillRunning(false);
+          if (delta) setSkillStatus(null);
           setMessages((prev) => {
             const next = [...prev];
             const lastIndex = next.length - 1;
@@ -342,7 +414,7 @@ export function useChatController() {
           });
         },
         onSkillStatus: (status) => {
-          setShowSkillRunning(status === "running");
+          setSkillStatus(status);
         }
       });
 
@@ -370,13 +442,14 @@ export function useChatController() {
         });
       } else {
         setError(e instanceof Error ? e.message : "送信に失敗しました");
+        setAttachments(queuedAttachments);
         setMessages((prev) => prev.slice(0, -2));
       }
     } finally {
       abortControllerRef.current = null;
       setLoading(false);
       setShowThinking(false);
-      setShowSkillRunning(false);
+      setSkillStatus(null);
     }
   };
 
@@ -393,10 +466,14 @@ export function useChatController() {
     messages,
     input,
     attachments,
+    isParsingAttachments,
+    parsingAttachmentNames,
+    parsingAttachmentLabel,
+    imageAttachmentWarning,
     error,
     loading,
     showThinking,
-    showSkillRunning,
+    skillStatus,
     sidebarOpen,
     selectedModel,
     selectedSkill,

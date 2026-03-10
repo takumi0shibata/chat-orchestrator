@@ -18,9 +18,13 @@ from app.skills_runtime.base import (
     SkillExecutionResult,
     SkillManifest,
     SkillMetadata,
+    SkillProgressReporter,
+    SkillProgressUpdate,
+    SkillRuntimeContext,
     UiAction,
     UiBlock,
     context_only_result,
+    get_skill_progress,
 )
 
 __all__ = [
@@ -43,7 +47,11 @@ __all__ = [
     "SkillExecutionResult",
     "SkillManifest",
     "SkillMetadata",
+    "SkillProgressReporter",
+    "SkillProgressUpdate",
+    "SkillRuntimeContext",
     "UiAction",
     "UiBlock",
     "context_only_result",
+    "get_skill_progress",
 ]

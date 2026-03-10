@@ -4,7 +4,7 @@ from typing import Any
 
 from app.config import Settings
 from app.providers.openai_provider import OpenAIProvider
-from app.schemas import ChatMessage, ChatRequest
+from app.schemas import ChatMessage, ChatRequest, StoredAttachment
 
 EXPECTED_WEB_TOOL = {
     "type": "web_search_preview",
@@ -83,6 +83,26 @@ def _provider_with_fake_client(monkeypatch, *, responses_api: FakeResponsesAPI, 
     return OpenAIProvider(settings=Settings(_env_file=None), api_key="test-key", provider_id="openai")
 
 
+def _stored_attachment(tmp_path, *, name: str, content_type: str, content: bytes) -> StoredAttachment:
+    attachment_dir = tmp_path / "attachments"
+    attachment_dir.mkdir(parents=True, exist_ok=True)
+    original_path = attachment_dir / name
+    parsed_path = attachment_dir / f"{name}.md"
+    original_path.write_bytes(content)
+    parsed_path.write_text("placeholder", encoding="utf-8")
+    return StoredAttachment(
+        id="att-1",
+        conversation_id="conv-1",
+        message_id=None,
+        name=name,
+        content_type=content_type,
+        size_bytes=len(content),
+        original_path=str(original_path),
+        parsed_markdown_path=str(parsed_path),
+        created_at=None,
+    )
+
+
 def test_chat_request_accepts_optional_enable_web_tool() -> None:
     payload = ChatRequest(
         provider_id="openai",
@@ -115,6 +135,7 @@ def test_openai_responses_with_web_tool_adds_tools_and_sources(monkeypatch) -> N
         output = await provider.chat(
             model="gpt-5.4-2026-03-05",
             messages=[ChatMessage(role="user", content="hi")],
+            attachments=[],
             temperature=None,
             max_tokens=None,
             reasoning_effort=None,
@@ -137,6 +158,7 @@ def test_openai_responses_without_web_tool_does_not_send_tools(monkeypatch) -> N
         output = await provider.chat(
             model="gpt-5.4-2026-03-05",
             messages=[ChatMessage(role="user", content="hi")],
+            attachments=[],
             temperature=None,
             max_tokens=None,
             reasoning_effort=None,
@@ -158,6 +180,7 @@ def test_openai_chat_completions_ignores_web_tool(monkeypatch) -> None:
         output = await provider.chat(
             model="gpt-4o-mini",
             messages=[ChatMessage(role="user", content="hi")],
+            attachments=[],
             temperature=0.3,
             max_tokens=None,
             reasoning_effort=None,
@@ -187,6 +210,7 @@ def test_openai_responses_stream_appends_sources(monkeypatch) -> None:
         async for chunk in provider.stream_chat(
             model="gpt-5.4-2026-03-05",
             messages=[ChatMessage(role="user", content="hi")],
+            attachments=[],
             temperature=None,
             max_tokens=None,
             reasoning_effort=None,
@@ -210,6 +234,7 @@ def test_openai_responses_passes_reasoning_effort(monkeypatch) -> None:
         await provider.chat(
             model="gpt-5.4-2026-03-05",
             messages=[ChatMessage(role="user", content="hi")],
+            attachments=[],
             temperature=None,
             max_tokens=None,
             reasoning_effort="xhigh",
@@ -230,11 +255,49 @@ def test_openai_responses_defaults_reasoning_effort_to_model_default(monkeypatch
         await provider.chat(
             model="gpt-5.4-2026-03-05",
             messages=[ChatMessage(role="user", content="hi")],
+            attachments=[],
             temperature=None,
             max_tokens=None,
             reasoning_effort=None,
             enable_web_tool=False,
         )
         assert responses_api.calls[0]["reasoning"] == {"effort": "medium"}
+
+    asyncio.run(run())
+
+
+def test_openai_responses_encodes_image_attachments_as_input_blocks(monkeypatch, tmp_path) -> None:
+    response = FakeResponse(output_text="Answer", payload={})
+    responses_api = FakeResponsesAPI(response=response)
+    chat_api = FakeChatCompletionsAPI(content="unused")
+    provider = _provider_with_fake_client(monkeypatch, responses_api=responses_api, chat_api=chat_api)
+    attachment = _stored_attachment(
+        tmp_path,
+        name="photo.png",
+        content_type="image/png",
+        content=b"\x89PNG\r\n\x1a\nimage-bytes",
+    )
+
+    async def run() -> None:
+        await provider.chat(
+            model="gpt-5.4-2026-03-05",
+            messages=[
+                ChatMessage(role="system", content="You are helpful."),
+                ChatMessage(role="user", content="What is in this image?"),
+            ],
+            attachments=[attachment],
+            temperature=None,
+            max_tokens=None,
+            reasoning_effort=None,
+            enable_web_tool=False,
+        )
+
+        payload = responses_api.calls[0]["input"]
+        assert payload[0] == {"role": "system", "content": "You are helpful."}
+        assert payload[1]["role"] == "user"
+        assert payload[1]["content"][0] == {"type": "input_text", "text": "What is in this image?"}
+        assert payload[1]["content"][1]["type"] == "input_image"
+        assert payload[1]["content"][1]["detail"] == "auto"
+        assert payload[1]["content"][1]["image_url"].startswith("data:image/png;base64,")
 
     asyncio.run(run())

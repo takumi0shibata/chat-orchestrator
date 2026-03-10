@@ -17,6 +17,7 @@ from app.skills_runtime.base import (
     SkillCategory,
     SkillExecutionResult,
     SkillMetadata,
+    get_skill_progress,
 )
 
 _SKILL_DIR = Path(__file__).resolve().parent
@@ -49,7 +50,10 @@ class BojTimeseriesInsightSkill(Skill):
         history: list[dict[str, str]],
         skill_context: dict[str, Any] | None = None,
     ) -> SkillExecutionResult:
-        del history, skill_context
+        del history
+
+        progress = get_skill_progress(skill_context)
+        await progress.update(stage="parse_request", label="系列を解釈しています")
 
         resolution = resolve_series(user_text)
         if resolution.selected is None:
@@ -69,6 +73,7 @@ class BojTimeseriesInsightSkill(Skill):
         if preset.advisory_note:
             notes.append(preset.advisory_note)
 
+        await progress.update(stage="fetch_series", label="時系列データを取得しています")
         cache = JsonFileCache(root=self._cache_root(), ttl_hours=self._cache_ttl_hours())
         async with httpx.AsyncClient(timeout=30.0) as http_client:
             client = BojStatClient(client=http_client)
@@ -107,6 +112,7 @@ class BojTimeseriesInsightSkill(Skill):
             )
 
         observations = self._extract_observations(data_payload)
+        await progress.update(stage="analyze_series", label="データを分析しています")
         numeric_rows = []
         dropped_non_numeric = 0
         for time_key, raw_value in observations:
@@ -196,6 +202,7 @@ class BojTimeseriesInsightSkill(Skill):
             ]
         )
         chart_block = self._build_chart_block(preset=preset, freq=freq, numeric_rows=numeric_rows)
+        await progress.update(stage="build_response", label="結果を整えています")
         return SkillExecutionResult(
             llm_context="\n".join(lines),
             artifacts=[chart_block] if chart_block is not None else [],

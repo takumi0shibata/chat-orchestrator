@@ -1,13 +1,14 @@
 import type {
+  AttachmentSummary,
   AuditNewsMetricsResponse,
   ChatMessage,
   ConversationInfo,
   ConversationSummary,
-  ExtractedAttachment,
   ModelInfo,
   ProviderInfo,
   ReasoningEffort,
   SkillInfo,
+  StreamSkillStatus,
   StreamDone,
   StreamEvent
 } from "./types";
@@ -58,9 +59,13 @@ export async function fetchConversationMessages(conversationId: string): Promise
   return response.json();
 }
 
-export async function extractAttachments(files: File[]): Promise<ExtractedAttachment[]> {
+export async function extractAttachments(params: {
+  conversationId: string;
+  files: File[];
+}): Promise<AttachmentSummary[]> {
   const formData = new FormData();
-  for (const file of files) formData.append("files", file);
+  formData.append("conversation_id", params.conversationId);
+  for (const file of params.files) formData.append("files", file);
 
   const response = await fetch("/api/attachments/extract", {
     method: "POST",
@@ -72,7 +77,7 @@ export async function extractAttachments(files: File[]): Promise<ExtractedAttach
     throw new Error(body || "Failed to extract attachments");
   }
 
-  const data = (await response.json()) as { files: ExtractedAttachment[] };
+  const data = (await response.json()) as { files: AttachmentSummary[] };
   return data.files;
 }
 
@@ -104,6 +109,7 @@ export async function streamChat(params: {
   providerId: string;
   model: string;
   userInput: string;
+  attachmentIds?: string[];
   conversationId: string;
   skillId?: string;
   temperature?: number | null;
@@ -111,7 +117,7 @@ export async function streamChat(params: {
   enableWebTool?: boolean;
   signal?: AbortSignal;
   onChunk: (delta: string) => void;
-  onSkillStatus?: (status: "running" | "done", skillId: string) => void;
+  onSkillStatus?: (event: StreamSkillStatus) => void;
 }): Promise<StreamDone> {
   const response = await fetch("/api/chat/stream", {
     method: "POST",
@@ -121,6 +127,7 @@ export async function streamChat(params: {
       provider_id: params.providerId,
       model: params.model,
       user_input: params.userInput,
+      attachment_ids: params.attachmentIds ?? [],
       conversation_id: params.conversationId,
       skill_id: params.skillId || null,
       temperature: params.temperature ?? null,
@@ -146,7 +153,7 @@ export async function streamChat(params: {
     buffer += decoder.decode(value, { stream: true });
     const parsed = parseStreamBuffer(buffer, (event) => {
       if (event.type === "chunk") params.onChunk(event.delta);
-      if (event.type === "skill_status") params.onSkillStatus?.(event.status, event.skill_id);
+      if (event.type === "skill_status") params.onSkillStatus?.(event);
     });
     buffer = parsed.rest;
     if (parsed.done) doneEvent = parsed.done;
@@ -155,7 +162,7 @@ export async function streamChat(params: {
   if (!doneEvent) {
     const parsed = parseStreamBuffer(`${buffer}\n`, (event) => {
       if (event.type === "chunk") params.onChunk(event.delta);
-      if (event.type === "skill_status") params.onSkillStatus?.(event.status, event.skill_id);
+      if (event.type === "skill_status") params.onSkillStatus?.(event);
     });
     doneEvent = parsed.done;
   }

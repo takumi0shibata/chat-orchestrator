@@ -29,6 +29,7 @@ def test_list_skills_returns_category_and_tags() -> None:
     expected_categories = {
         "todo_extractor": "general",
         "context_summarizer": "general",
+        "docx_auto_commenter": "general",
         "audit_news_action_brief": "audit",
         "boj_timeseries_insight": "finance",
         "edinet_report_qa": "audit",

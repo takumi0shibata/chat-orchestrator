@@ -13,5 +13,11 @@ def test_azure_openai_model_capability_for_responses() -> None:
     assert capability.api_mode == "responses"
     assert capability.supports_temperature is False
     assert capability.supports_reasoning_effort is True
+    assert capability.supports_image_input is True
     assert capability.default_reasoning_effort == "medium"
     assert capability.reasoning_effort_options == ("none", "low", "medium", "high", "xhigh")
+
+
+def test_unknown_model_defaults_to_no_image_support() -> None:
+    capability = get_model_capability("openai", "unknown-model")
+    assert capability.supports_image_input is False

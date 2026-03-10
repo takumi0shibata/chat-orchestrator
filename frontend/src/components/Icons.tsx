@@ -76,6 +76,16 @@ export function SettingsIcon() {
   );
 }
 
+export function GearIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 3.75v2.1M12 18.15v2.1M5.82 5.82l1.49 1.49M16.69 16.69l1.49 1.49M3.75 12h2.1M18.15 12h2.1M5.82 18.18l1.49-1.49M16.69 7.31l1.49-1.49" {...strokeProps} />
+      <circle cx="12" cy="12" r="3.2" {...strokeProps} />
+      <circle cx="12" cy="12" r="6.2" {...strokeProps} />
+    </svg>
+  );
+}
+
 export function CheckIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">

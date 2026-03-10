@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
 
-from app.schemas import ChatMessage
+from app.schemas import ChatMessage, StoredAttachment
 
 
 class LLMProvider(ABC):
@@ -13,6 +13,7 @@ class LLMProvider(ABC):
         *,
         model: str,
         messages: list[ChatMessage],
+        attachments: list[StoredAttachment],
         temperature: float | None,
         max_tokens: int | None,
         reasoning_effort: str | None,
@@ -26,6 +27,7 @@ class LLMProvider(ABC):
         *,
         model: str,
         messages: list[ChatMessage],
+        attachments: list[StoredAttachment],
         temperature: float | None,
         max_tokens: int | None,
         reasoning_effort: str | None,

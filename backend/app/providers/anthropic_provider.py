@@ -3,7 +3,7 @@ from collections.abc import AsyncGenerator
 from anthropic import AsyncAnthropic
 
 from app.providers.base import LLMProvider
-from app.schemas import ChatMessage
+from app.schemas import ChatMessage, StoredAttachment
 
 
 class AnthropicProvider(LLMProvider):
@@ -26,12 +26,13 @@ class AnthropicProvider(LLMProvider):
         *,
         model: str,
         messages: list[ChatMessage],
+        attachments: list[StoredAttachment],
         temperature: float | None,
         max_tokens: int | None,
         reasoning_effort: str | None,
         enable_web_tool: bool | None,
     ) -> str:
-        del reasoning_effort, enable_web_tool
+        del attachments, reasoning_effort, enable_web_tool
         system_prompt, chat_messages = self._split_messages(messages)
         response = await self.client.messages.create(
             model=model,
@@ -52,12 +53,13 @@ class AnthropicProvider(LLMProvider):
         *,
         model: str,
         messages: list[ChatMessage],
+        attachments: list[StoredAttachment],
         temperature: float | None,
         max_tokens: int | None,
         reasoning_effort: str | None,
         enable_web_tool: bool | None,
     ) -> AsyncGenerator[str, None]:
-        del reasoning_effort, enable_web_tool
+        del attachments, reasoning_effort, enable_web_tool
         system_prompt, chat_messages = self._split_messages(messages)
         async with self.client.messages.stream(
             model=model,

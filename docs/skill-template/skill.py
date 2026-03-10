@@ -1,6 +1,13 @@
 from typing import Any
 
-from app.skills_runtime.base import Skill, SkillCategory, SkillExecutionResult, SkillMetadata, context_only_result
+from app.skills_runtime.base import (
+    Skill,
+    SkillCategory,
+    SkillExecutionResult,
+    SkillMetadata,
+    context_only_result,
+    get_skill_progress,
+)
 
 
 class ExampleSkill(Skill):
@@ -18,7 +25,11 @@ class ExampleSkill(Skill):
         history: list[dict[str, str]],
         skill_context: dict[str, Any] | None = None,
     ) -> SkillExecutionResult:
-        del history, skill_context
+        progress = get_skill_progress(skill_context)
+        await progress.update(stage="inspect_input", label="入力を確認しています")
+        attachments = (skill_context or {}).get("attachments", [])
+        del history, attachments
+        await progress.update(stage="build_context", label="結果を整えています")
         return context_only_result(f"Input: {user_text}")
 
 

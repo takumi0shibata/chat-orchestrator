@@ -99,7 +99,14 @@ readme: README.md
 ```python
 from typing import Any
 
-from app.skills_runtime.base import Skill, SkillCategory, SkillExecutionResult, SkillMetadata, context_only_result
+from app.skills_runtime.base import (
+    Skill,
+    SkillCategory,
+    SkillExecutionResult,
+    SkillMetadata,
+    context_only_result,
+    get_skill_progress,
+)
 
 
 class ExampleSkill(Skill):
@@ -117,13 +124,18 @@ class ExampleSkill(Skill):
         history: list[dict[str, str]],
         skill_context: dict[str, Any] | None = None,
     ) -> SkillExecutionResult:
-        del history, skill_context
+        progress = get_skill_progress(skill_context)
+        await progress.update(stage="inspect_input", label="入力を確認しています")
+        del history
+        await progress.update(stage="build_context", label="結果を整えています")
         return context_only_result(f"Input: {user_text}")
 
 
 def build_skill() -> Skill:
     return ExampleSkill()
 ```
+
+skill 実行中に UI へ進捗ラベルを出したい場合は、`get_skill_progress(skill_context)` で reporter を取得し、`await progress.update(stage="snake_case", label="短い日本語ラベル")` を 2-5 箇所の粗い工程境界で呼んでください。未対応環境では no-op になります。
 
 ### `README.md` テンプレート
 
@@ -157,9 +169,14 @@ def build_skill() -> Skill:
   "model": "gpt-5.4-2026-03-05",
   "conversation_id": "<conversation-id>",
   "user_input": "こんにちは",
+  "attachment_ids": [],
   "reasoning_effort": "medium",
   "temperature": null,
   "enable_web_tool": false,
   "skill_id": "todo_extractor"
 }
 ```
+
+`POST /api/attachments/extract` は `multipart/form-data` で `conversation_id` と `files[]` を受け取り、原本ファイルと抽出 Markdown を backend の管理ディレクトリに保存します。通常チャットでは抽出 Markdown を LLM 文脈へ自動注入し、skill 実行時は自動注入せず `skill_context["attachments"]` 経由で `original_path` / `parsed_markdown_path` を参照できます。
+
+添付抽出は [Docling](https://docling-project.github.io/docling/) を優先利用します。初回のフォーマットによってはローカルモデル取得が走るので、Docker/本番環境では起動後最初の添付処理が少し遅くなる可能性があります。

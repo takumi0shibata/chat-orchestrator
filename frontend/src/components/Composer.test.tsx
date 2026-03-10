@@ -2,15 +2,21 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
+import type { ReasoningEffort } from "../types";
 import { Composer } from "./Composer";
 
 describe("Composer", () => {
   function createProps() {
+    const reasoningOptions: ReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh"];
+
     return {
       input: "Draft request",
       onInputChange: vi.fn(),
       onSubmit: vi.fn((event: { preventDefault: () => void }) => event.preventDefault()),
-      attachments: [{ id: "file-1", name: "brief.md", content: "hello" }],
+      isParsingAttachments: false,
+      parsingAttachmentLabel: "",
+      attachmentWarning: "",
+      attachments: [{ id: "file-1", name: "brief.md", content_type: "text/markdown", size_bytes: 5 }],
       onAttachFiles: vi.fn(),
       onRemoveAttachment: vi.fn(),
       models: [
@@ -20,9 +26,10 @@ describe("Composer", () => {
           api_mode: "responses",
           supports_temperature: false,
           supports_reasoning_effort: true,
+          supports_image_input: true,
           default_temperature: null,
           default_reasoning_effort: "medium" as const,
-          reasoning_effort_options: ["none", "minimal", "low", "medium", "high", "xhigh"],
+          reasoning_effort_options: reasoningOptions,
           providerId: "openai",
           providerLabel: "OpenAI",
           providerEnabled: true
@@ -33,6 +40,7 @@ describe("Composer", () => {
           api_mode: "responses",
           supports_temperature: true,
           supports_reasoning_effort: false,
+          supports_image_input: false,
           default_temperature: 0.3,
           default_reasoning_effort: null,
           reasoning_effort_options: [],
@@ -67,9 +75,10 @@ describe("Composer", () => {
         api_mode: "responses",
         supports_temperature: false,
         supports_reasoning_effort: true,
+        supports_image_input: true,
         default_temperature: null,
         default_reasoning_effort: "medium" as const,
-          reasoning_effort_options: ["none", "minimal", "low", "medium", "high", "xhigh"],
+        reasoning_effort_options: reasoningOptions,
         providerId: "openai",
         providerLabel: "OpenAI",
         providerEnabled: true
@@ -152,5 +161,69 @@ describe("Composer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Remove brief.md" }));
     expect(props.onRemoveAttachment).toHaveBeenCalledWith("file-1");
+  });
+
+  it("renders the parsing banner and disables send while attachments are being parsed", () => {
+    const props = createProps();
+
+    render(
+      <Composer
+        {...props}
+        isParsingAttachments
+        parsingAttachmentLabel="report.pdf ほか1件を解析しています"
+      />
+    );
+
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("report.pdf ほか1件を解析しています");
+    expect(document.querySelector(".composer-status-spinner")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+  });
+
+  it("shows an image compatibility warning and disables send", () => {
+    const props = createProps();
+
+    render(
+      <Composer
+        {...props}
+        attachments={[{ id: "img-1", name: "photo.png", content_type: "image/png", size_bytes: 5 }]}
+        attachmentWarning="Claude 3.5 Haiku does not support image input. Remove images or switch to GPT-5.4 / GPT-5 mini."
+      />
+    );
+
+    expect(screen.getByText(/does not support image input/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+  });
+
+  it("accepts drag-and-drop attachments on the composer surface", () => {
+    const props = createProps();
+    const droppedFile = new File(["hello"], "drop.txt", { type: "text/plain" });
+
+    render(<Composer {...props} />);
+
+    const composer = document.querySelector("form.composer");
+    expect(composer).not.toBeNull();
+
+    fireEvent.dragEnter(composer as HTMLFormElement, {
+      dataTransfer: { files: [droppedFile], types: ["Files"] }
+    });
+    expect(composer).toHaveClass("drag-active");
+
+    fireEvent.dragLeave(composer as HTMLFormElement, {
+      dataTransfer: { files: [droppedFile], types: ["Files"] }
+    });
+    expect(composer).not.toHaveClass("drag-active");
+
+    fireEvent.dragOver(composer as HTMLFormElement, {
+      dataTransfer: { files: [droppedFile], types: ["Files"], dropEffect: "none" }
+    });
+    expect(composer).toHaveClass("drag-active");
+
+    fireEvent.drop(composer as HTMLFormElement, {
+      dataTransfer: { files: [droppedFile], types: ["Files"] }
+    });
+
+    expect(props.onAttachFiles).toHaveBeenCalledWith([droppedFile]);
+    expect(composer).not.toHaveClass("drag-active");
   });
 });

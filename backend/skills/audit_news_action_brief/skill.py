@@ -29,6 +29,7 @@ from app.skills_runtime.base import (
     SkillExecutionOptions,
     SkillExecutionResult,
     SkillMetadata,
+    get_skill_progress,
 )
 
 _SKILL_DIR = Path(__file__).resolve().parent
@@ -101,6 +102,8 @@ class AuditNewsActionBriefSkill(Skill):
         context = skill_context or {}
         provider_id = str(context.get("provider_id") or "")
         model = str(context.get("model") or "").strip()
+        progress = get_skill_progress(skill_context)
+        await progress.update(stage="validate_request", label="実行条件を確認しています")
 
         if provider_id not in ("openai", "azure_openai") or not model:
             message = (
@@ -118,6 +121,7 @@ class AuditNewsActionBriefSkill(Skill):
             return self._markdown_result(message)
 
         # Step 1: Parse request (no web search needed)
+        await progress.update(stage="parse_request", label="探索条件を整理しています")
         parsed = await self._parse_request(user_text=user_text, provider_id=provider_id, model=model)
         missing = []
         if not parsed.client_name:
@@ -137,6 +141,7 @@ class AuditNewsActionBriefSkill(Skill):
         run_id = str(uuid4())
 
         # Step 2: Search self_company (serial)
+        await progress.update(stage="search_self_company", label="自社ニュースを探索しています")
         self_items = await self._search_category(
             view="self_company",
             parsed=parsed,
@@ -146,6 +151,7 @@ class AuditNewsActionBriefSkill(Skill):
         )
 
         # Step 3: Search peer_companies (serial)
+        await progress.update(stage="search_peer_companies", label="他社ニュースを探索しています")
         peer_items = await self._search_category(
             view="peer_companies",
             parsed=parsed,
@@ -155,6 +161,7 @@ class AuditNewsActionBriefSkill(Skill):
         )
 
         # Step 4: Search macro (serial)
+        await progress.update(stage="search_macro", label="マクロニュースを探索しています")
         macro_items = await self._search_category(
             view="macro",
             parsed=parsed,
@@ -190,6 +197,7 @@ class AuditNewsActionBriefSkill(Skill):
             for view_items in items_by_view.values()
             for item in view_items
         ]
+        await progress.update(stage="build_brief", label="ブリーフを整えています")
         return SkillExecutionResult(
             llm_context="\n".join(lines),
             artifacts=[self._build_card_list_block(run_id=run_id, items_by_view=items_by_view)],

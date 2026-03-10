@@ -11,6 +11,8 @@ skill の目的を短く書く。
 
 ## 入力
 - 想定するユーザー入力
+- 添付を使う skill の場合は `skill_context["attachments"]` から `original_path` / `parsed_markdown_path` を読む
+- 進捗表示を出す場合は `get_skill_progress(skill_context)` で reporter を取得し、`await progress.update(stage="...", label="...")` を coarse-grained に呼ぶ
 
 ## 出力 / Artifacts
 - 補助コンテキストの形

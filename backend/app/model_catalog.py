@@ -13,6 +13,7 @@ class ModelCapability:
     api_mode: str
     supports_temperature: bool
     supports_reasoning_effort: bool
+    supports_image_input: bool
     default_temperature: float | None
     default_reasoning_effort: str | None
     reasoning_effort_options: tuple[str, ...] = ()
@@ -25,6 +26,7 @@ OPENAI_MODELS: list[ModelCapability] = [
         api_mode="responses",
         supports_temperature=False,
         supports_reasoning_effort=True,
+        supports_image_input=True,
         default_temperature=None,
         default_reasoning_effort="medium",
         reasoning_effort_options=REASONING_EFFORT_OPTIONS_5,
@@ -35,6 +37,7 @@ OPENAI_MODELS: list[ModelCapability] = [
         api_mode="responses",
         supports_temperature=False,
         supports_reasoning_effort=True,
+        supports_image_input=True,
         default_temperature=None,
         default_reasoning_effort="medium",
         reasoning_effort_options=REASONING_EFFORT_OPTIONS_4,
@@ -48,6 +51,7 @@ AZURE_OPENAI_MODELS: list[ModelCapability] = [
         api_mode="responses",
         supports_temperature=False,
         supports_reasoning_effort=True,
+        supports_image_input=True,
         default_temperature=None,
         default_reasoning_effort="medium",
         reasoning_effort_options=REASONING_EFFORT_OPTIONS_5,
@@ -61,6 +65,7 @@ ANTHROPIC_MODELS: list[ModelCapability] = [
         api_mode="chat_completions",
         supports_temperature=True,
         supports_reasoning_effort=False,
+        supports_image_input=False,
         default_temperature=0.3,
         default_reasoning_effort=None,
     )
@@ -73,6 +78,7 @@ GOOGLE_MODELS: list[ModelCapability] = [
         api_mode="chat_completions",
         supports_temperature=True,
         supports_reasoning_effort=False,
+        supports_image_input=False,
         default_temperature=0.3,
         default_reasoning_effort=None,
     ),
@@ -82,6 +88,7 @@ GOOGLE_MODELS: list[ModelCapability] = [
         api_mode="chat_completions",
         supports_temperature=True,
         supports_reasoning_effort=True,
+        supports_image_input=False,
         default_temperature=0.3,
         default_reasoning_effort="medium",
         reasoning_effort_options=REASONING_EFFORT_OPTIONS_3,
@@ -95,6 +102,7 @@ DEEPSEEK_MODELS: list[ModelCapability] = [
         api_mode="chat_completions",
         supports_temperature=True,
         supports_reasoning_effort=False,
+        supports_image_input=False,
         default_temperature=0.3,
         default_reasoning_effort=None,
     )
@@ -123,6 +131,7 @@ def get_model_capability(provider_id: str, model: str) -> ModelCapability:
         api_mode="chat_completions",
         supports_temperature=True,
         supports_reasoning_effort=False,
+        supports_image_input=False,
         default_temperature=0.3,
         default_reasoning_effort=None,
     )
@@ -136,6 +145,7 @@ def to_api(items: Iterable[ModelCapability]) -> list[dict[str, str | bool | floa
             "api_mode": item.api_mode,
             "supports_temperature": item.supports_temperature,
             "supports_reasoning_effort": item.supports_reasoning_effort,
+            "supports_image_input": item.supports_image_input,
             "default_temperature": item.default_temperature,
             "default_reasoning_effort": item.default_reasoning_effort,
             "reasoning_effort_options": list(item.reasoning_effort_options),
