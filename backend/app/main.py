@@ -28,6 +28,7 @@ from app.schemas import (
     SkillFeedbackResponse,
     SkillInfo,
 )
+from app.skills_runtime.base import SkillProgressReporter, SkillProgressUpdate
 from app.skills_runtime.manager import SkillManager
 from app.storage import ChatStore
 
@@ -278,12 +279,60 @@ def audit_news_metrics(
 async def stream_chat(payload: ChatRequest) -> StreamingResponse:
     async def generate():
         try:
+            prepared = None
             if payload.skill_id:
+                startup_update = SkillProgressUpdate(stage="starting", label="準備しています")
+                progress_queue: asyncio.Queue[SkillProgressUpdate] = asyncio.Queue()
+
+                async def on_progress(update: SkillProgressUpdate) -> None:
+                    await progress_queue.put(update)
+
+                progress_reporter = SkillProgressReporter(
+                    callback=on_progress,
+                    last_update=startup_update,
+                )
                 yield json.dumps(
-                    {"type": "skill_status", "status": "running", "skill_id": payload.skill_id}
+                    {
+                        "type": "skill_status",
+                        "status": "running",
+                        "skill_id": payload.skill_id,
+                        "stage": startup_update.stage,
+                        "label": startup_update.label,
+                    }
                 ) + "\n"
 
-            prepared = await state.chat.prepare_turn(payload)
+                prepare_task = asyncio.create_task(
+                    state.chat.prepare_turn(payload, progress_reporter=progress_reporter)
+                )
+                while not prepare_task.done():
+                    try:
+                        update = await asyncio.wait_for(progress_queue.get(), timeout=0.05)
+                    except asyncio.TimeoutError:
+                        continue
+                    yield json.dumps(
+                        {
+                            "type": "skill_status",
+                            "status": "running",
+                            "skill_id": payload.skill_id,
+                            "stage": update.stage,
+                            "label": update.label,
+                        }
+                    ) + "\n"
+
+                prepared = await prepare_task
+                while not progress_queue.empty():
+                    update = progress_queue.get_nowait()
+                    yield json.dumps(
+                        {
+                            "type": "skill_status",
+                            "status": "running",
+                            "skill_id": payload.skill_id,
+                            "stage": update.stage,
+                            "label": update.label,
+                        }
+                    ) + "\n"
+            else:
+                prepared = await state.chat.prepare_turn(payload)
             state.chat.persist_user_message(
                 conversation_id=prepared.conversation_id,
                 user_input=prepared.user_input,
@@ -291,7 +340,15 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
             )
 
             if payload.skill_id:
-                yield json.dumps({"type": "skill_status", "status": "done", "skill_id": payload.skill_id}) + "\n"
+                yield json.dumps(
+                    {
+                        "type": "skill_status",
+                        "status": "done",
+                        "skill_id": payload.skill_id,
+                        "stage": "completed",
+                        "label": "完了しました",
+                    }
+                ) + "\n"
 
             accumulated = ""
             if state.chat.should_skip_model_response(prepared.skill_result):

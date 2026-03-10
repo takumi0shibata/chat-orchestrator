@@ -21,7 +21,8 @@ import type {
   ModelInfo,
   ProviderInfo,
   ReasoningEffort,
-  SkillInfo
+  SkillInfo,
+  StreamSkillStatus
 } from "../types";
 
 const ACTIVE_CONVERSATION_KEY = "chat_orchestrator_active_conversation_id";
@@ -104,7 +105,7 @@ export function useChatController() {
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [showThinking, setShowThinking] = useState<boolean>(false);
-  const [showSkillRunning, setShowSkillRunning] = useState<boolean>(false);
+  const [skillStatus, setSkillStatus] = useState<StreamSkillStatus | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -302,7 +303,17 @@ export function useChatController() {
     setLoading(true);
     setError("");
     setShowThinking(Boolean(selectedModel.supports_reasoning_effort));
-    setShowSkillRunning(Boolean(skillId));
+    setSkillStatus(
+      skillId
+        ? {
+            type: "skill_status",
+            status: "running",
+            skill_id: skillId,
+            stage: "starting",
+            label: "準備しています"
+          }
+        : null
+    );
 
     const userRaw = trimmed;
     const queuedAttachments = attachments;
@@ -342,7 +353,7 @@ export function useChatController() {
         signal: abortController.signal,
         onChunk: (delta) => {
           if (delta) setShowThinking(false);
-          if (delta) setShowSkillRunning(false);
+          if (delta) setSkillStatus(null);
           setMessages((prev) => {
             const next = [...prev];
             const lastIndex = next.length - 1;
@@ -353,7 +364,7 @@ export function useChatController() {
           });
         },
         onSkillStatus: (status) => {
-          setShowSkillRunning(status === "running");
+          setSkillStatus(status);
         }
       });
 
@@ -388,7 +399,7 @@ export function useChatController() {
       abortControllerRef.current = null;
       setLoading(false);
       setShowThinking(false);
-      setShowSkillRunning(false);
+      setSkillStatus(null);
     }
   };
 
@@ -408,7 +419,7 @@ export function useChatController() {
     error,
     loading,
     showThinking,
-    showSkillRunning,
+    skillStatus,
     sidebarOpen,
     selectedModel,
     selectedSkill,

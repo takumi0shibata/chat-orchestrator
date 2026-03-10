@@ -1,7 +1,14 @@
 import re
 from typing import Any
 
-from app.skills_runtime.base import Skill, SkillCategory, SkillExecutionResult, SkillMetadata, context_only_result
+from app.skills_runtime.base import (
+    Skill,
+    SkillCategory,
+    SkillExecutionResult,
+    SkillMetadata,
+    context_only_result,
+    get_skill_progress,
+)
 
 
 class TodoExtractorSkill(Skill):
@@ -19,8 +26,11 @@ class TodoExtractorSkill(Skill):
         history: list[dict[str, str]],
         skill_context: dict[str, Any] | None = None,
     ) -> SkillExecutionResult:
+        progress = get_skill_progress(skill_context)
+        await progress.update(stage="parse_input", label="入力を分解しています")
         parts = re.split(r"[。.!?\n]", user_text)
         candidates = [p.strip() for p in parts if p.strip()]
+        await progress.update(stage="extract_todos", label="TODO候補を整理しています")
         bullets = []
         for item in candidates:
             if len(item) < 4:

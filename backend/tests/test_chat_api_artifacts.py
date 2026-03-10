@@ -6,7 +6,14 @@ from fastapi.testclient import TestClient
 
 from app.chat_service import ChatOrchestrator
 from app.main import app, state
-from app.skills_runtime.base import LineChartBlock, LineChartPoint, SkillCategory, SkillExecutionResult, SkillMetadata
+from app.skills_runtime.base import (
+    LineChartBlock,
+    LineChartPoint,
+    SkillCategory,
+    SkillExecutionResult,
+    SkillMetadata,
+    get_skill_progress,
+)
 from app.storage import ChatStore
 
 
@@ -40,7 +47,10 @@ class FakeSkill:
     )
 
     async def run(self, user_text: str, history: list[dict[str, str]], skill_context=None):
-        del user_text, history, skill_context
+        del user_text, history
+        progress = get_skill_progress(skill_context)
+        await progress.update(stage="prepare_chart", label="グラフを準備しています")
+        await progress.update(stage="prepare_chart", label="グラフを準備しています")
         return SkillExecutionResult(
             llm_context="Skill context",
             artifacts=[
@@ -100,6 +110,30 @@ def test_chat_and_stream_return_equivalent_message_payloads() -> None:
             stream_response = client.post("/api/chat/stream", json=_chat_payload(conversation_id))
             assert stream_response.status_code == 200
             events = [json.loads(line) for line in stream_response.text.strip().splitlines()]
+            skill_events = [event for event in events if event["type"] == "skill_status"]
+            assert skill_events == [
+                {
+                    "type": "skill_status",
+                    "status": "running",
+                    "skill_id": "chart_skill",
+                    "stage": "starting",
+                    "label": "準備しています",
+                },
+                {
+                    "type": "skill_status",
+                    "status": "running",
+                    "skill_id": "chart_skill",
+                    "stage": "prepare_chart",
+                    "label": "グラフを準備しています",
+                },
+                {
+                    "type": "skill_status",
+                    "status": "done",
+                    "skill_id": "chart_skill",
+                    "stage": "completed",
+                    "label": "完了しました",
+                },
+            ]
             done_event = next(event for event in events if event["type"] == "done")
             assert done_event["message"] == sync_message
 

@@ -7,7 +7,12 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from app.schemas import AttachmentSummary, ChatMessage, ChatRequest, StoredAttachment
-from app.skills_runtime.base import SkillExecutionResult
+from app.skills_runtime.base import (
+    SKILL_RUNTIME_CONTEXT_KEY,
+    SkillExecutionResult,
+    SkillProgressReporter,
+    SkillRuntimeContext,
+)
 from app.skills_runtime.manager import SkillManager
 from app.storage import ChatStore
 
@@ -27,7 +32,12 @@ class ChatOrchestrator:
         self.store = store
         self.skills = skills
 
-    async def prepare_turn(self, payload: ChatRequest) -> PreparedChatTurn:
+    async def prepare_turn(
+        self,
+        payload: ChatRequest,
+        *,
+        progress_reporter: SkillProgressReporter | None = None,
+    ) -> PreparedChatTurn:
         conversation_id = self.store.ensure_conversation(payload.conversation_id)
         user_input = payload.user_input.strip()
         attachment_ids = [attachment_id.strip() for attachment_id in payload.attachment_ids if attachment_id.strip()]
@@ -62,6 +72,7 @@ class ChatOrchestrator:
             skill = self.skills.get(payload.skill_id)
             if not skill:
                 raise HTTPException(status_code=400, detail=f"Unknown skill: {payload.skill_id}")
+            skill_progress = progress_reporter or SkillProgressReporter()
             skill_history = [{"role": item.role, "content": item.content} for item in prepared_messages]
             skill_result = await skill.run(
                 user_text=user_input,
@@ -72,6 +83,7 @@ class ChatOrchestrator:
                     "conversation_id": conversation_id,
                     "generated_files_root": str(self.store.generated_files_root),
                     "attachments": [self._skill_attachment_descriptor(attachment) for attachment in attachments],
+                    SKILL_RUNTIME_CONTEXT_KEY: SkillRuntimeContext(progress=skill_progress),
                 },
             )
             if skill_result.llm_context.strip():

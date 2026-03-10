@@ -22,6 +22,7 @@ from app.skills_runtime.base import (
     SkillExecutionOptions,
     SkillExecutionResult,
     SkillMetadata,
+    get_skill_progress,
 )
 
 _SKILL_DIR = Path(__file__).resolve().parent
@@ -113,6 +114,8 @@ class DocxAutoCommenterSkill(Skill):
         context = skill_context or {}
         provider_id = str(context.get("provider_id") or "")
         model = str(context.get("model") or "").strip()
+        progress = get_skill_progress(skill_context)
+        await progress.update(stage="validate_input", label="入力を確認しています")
         if not self._supports_llm(provider_id=provider_id, model=model):
             return self._failure_result(
                 assistant_response=(
@@ -156,6 +159,7 @@ class DocxAutoCommenterSkill(Skill):
             )
 
         generator = DocxCommentGenerator(source_path=original_path)
+        await progress.update(stage="load_document", label="文書を読み込んでいます")
         generator.load()
 
         review_brief = self._normalize_review_brief(user_text=user_text, source_name=source_name)
@@ -172,6 +176,7 @@ class DocxAutoCommenterSkill(Skill):
                 details=[],
             )
 
+        await progress.update(stage="plan_comments", label="レビュー観点を抽出しています")
         planned_candidates = await self._plan_review_candidates(
             provider_id=provider_id,
             model=model,
@@ -180,6 +185,7 @@ class DocxAutoCommenterSkill(Skill):
             review_source=review_source,
         )
         if not planned_candidates:
+            await progress.update(stage="draft_comments", label="コメント案を生成しています")
             finalized_candidates = await self._direct_review_candidates(
                 provider_id=provider_id,
                 model=model,
@@ -188,6 +194,7 @@ class DocxAutoCommenterSkill(Skill):
                 review_source=review_source,
             )
         else:
+            await progress.update(stage="draft_comments", label="コメント案を生成しています")
             finalized_candidates = await self._finalize_review_candidates(
                 provider_id=provider_id,
                 model=model,
@@ -208,6 +215,7 @@ class DocxAutoCommenterSkill(Skill):
                 details=[],
             )
 
+        await progress.update(stage="apply_comments", label="コメントを反映しています")
         applied, skipped = generator.apply_comments(finalized_candidates[:MAX_CANDIDATES])
         if not applied:
             return self._failure_result(
@@ -217,6 +225,7 @@ class DocxAutoCommenterSkill(Skill):
                 details=[f"{item.quote}: {item.reason}" for item in skipped[:5]],
             )
 
+        await progress.update(stage="save_output", label="出力ファイルを保存しています")
         generated_file = self._save_generated_file(
             conversation_id=conversation_id,
             generated_files_root=generated_files_root,

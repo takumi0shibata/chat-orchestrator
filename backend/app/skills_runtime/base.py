@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, Literal, TypeAlias
+from typing import Annotated, Any, Awaitable, Callable, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -200,6 +200,49 @@ class SkillExecutionResult(SkillModel):
 
 def context_only_result(text: str) -> SkillExecutionResult:
     return SkillExecutionResult(llm_context=text)
+
+
+class SkillProgressUpdate(SkillModel):
+    stage: str
+    label: str
+
+
+@dataclass
+class SkillProgressReporter:
+    callback: Callable[[SkillProgressUpdate], Awaitable[None]] | None = None
+    last_update: SkillProgressUpdate | None = None
+
+    async def update(self, *, stage: str, label: str) -> None:
+        normalized_stage = stage.strip()
+        normalized_label = label.strip()
+        if not normalized_stage:
+            raise ValueError("Skill progress stage cannot be empty")
+        if not normalized_label:
+            raise ValueError("Skill progress label cannot be empty")
+
+        update = SkillProgressUpdate(stage=normalized_stage, label=normalized_label)
+        if self.last_update == update:
+            return
+
+        self.last_update = update
+        if self.callback is None:
+            return
+        await self.callback(update)
+
+
+@dataclass(frozen=True)
+class SkillRuntimeContext:
+    progress: SkillProgressReporter = field(default_factory=SkillProgressReporter)
+
+
+SKILL_RUNTIME_CONTEXT_KEY = "__skill_runtime__"
+
+
+def get_skill_progress(skill_context: dict[str, Any] | None) -> SkillProgressReporter:
+    runtime = (skill_context or {}).get(SKILL_RUNTIME_CONTEXT_KEY)
+    if isinstance(runtime, SkillRuntimeContext):
+        return runtime.progress
+    return SkillProgressReporter()
 
 
 class Skill(ABC):

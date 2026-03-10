@@ -99,7 +99,14 @@ readme: README.md
 ```python
 from typing import Any
 
-from app.skills_runtime.base import Skill, SkillCategory, SkillExecutionResult, SkillMetadata, context_only_result
+from app.skills_runtime.base import (
+    Skill,
+    SkillCategory,
+    SkillExecutionResult,
+    SkillMetadata,
+    context_only_result,
+    get_skill_progress,
+)
 
 
 class ExampleSkill(Skill):
@@ -117,13 +124,18 @@ class ExampleSkill(Skill):
         history: list[dict[str, str]],
         skill_context: dict[str, Any] | None = None,
     ) -> SkillExecutionResult:
-        del history, skill_context
+        progress = get_skill_progress(skill_context)
+        await progress.update(stage="inspect_input", label="入力を確認しています")
+        del history
+        await progress.update(stage="build_context", label="結果を整えています")
         return context_only_result(f"Input: {user_text}")
 
 
 def build_skill() -> Skill:
     return ExampleSkill()
 ```
+
+skill 実行中に UI へ進捗ラベルを出したい場合は、`get_skill_progress(skill_context)` で reporter を取得し、`await progress.update(stage="snake_case", label="短い日本語ラベル")` を 2-5 箇所の粗い工程境界で呼んでください。未対応環境では no-op になります。
 
 ### `README.md` テンプレート
 

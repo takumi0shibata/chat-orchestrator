@@ -524,7 +524,29 @@ def test_stream_chat_uses_skill_response_without_provider_call(tmp_path: Path) -
         )
         assert response.status_code == 200
         events = [json.loads(line) for line in response.text.strip().splitlines()]
-        assert [event["type"] for event in events] == ["skill_status", "skill_status", "done"]
+        skill_events = [event for event in events if event["type"] == "skill_status"]
+        assert skill_events[0] == {
+            "type": "skill_status",
+            "status": "running",
+            "skill_id": skill.metadata.id,
+            "stage": "starting",
+            "label": "準備しています",
+        }
+        assert skill_events[-1] == {
+            "type": "skill_status",
+            "status": "done",
+            "skill_id": skill.metadata.id,
+            "stage": "completed",
+            "label": "完了しました",
+        }
+        assert [event["stage"] for event in skill_events[1:-1]] == [
+            "validate_input",
+            "load_document",
+            "plan_comments",
+            "draft_comments",
+            "apply_comments",
+            "save_output",
+        ]
         assert events[-1]["message"]["content"] == "レビューコメントを適用したDOCXを生成しました。適用1件 / スキップ0件。ダウンロードしてください。"
         assert provider.chat_calls == 0
         assert provider.stream_calls == 0

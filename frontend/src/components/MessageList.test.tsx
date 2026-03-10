@@ -18,7 +18,7 @@ describe("MessageList", () => {
         ]}
         loading={false}
         showThinking={false}
-        showSkillRunning={false}
+        skillStatus={null}
         onFeedback={vi.fn()}
       />
     );
@@ -49,7 +49,7 @@ describe("MessageList", () => {
         ]}
         loading={false}
         showThinking={false}
-        showSkillRunning={false}
+        skillStatus={null}
         onFeedback={vi.fn()}
       />
     );
@@ -72,12 +72,64 @@ describe("MessageList", () => {
         ]}
         loading={false}
         showThinking={false}
-        showSkillRunning={false}
+        skillStatus={null}
         onFeedback={vi.fn()}
       />
     );
 
     expect(screen.getByText("report.pdf")).toBeInTheDocument();
     expect(screen.queryByText("[Attached files]")).not.toBeInTheDocument();
+  });
+
+  it("renders a two-line skill activity indicator while a skill is running", () => {
+    render(
+      <MessageList
+        messages={[
+          {
+            role: "assistant",
+            content: "",
+            artifacts: [],
+            skill_id: "docx_auto_commenter",
+            attachments: []
+          }
+        ]}
+        loading
+        showThinking={false}
+        skillStatus={{
+          type: "skill_status",
+          status: "running",
+          skill_id: "docx_auto_commenter",
+          stage: "draft_comments",
+          label: "コメント案を生成しています"
+        }}
+        activeSkillName="DOCX Auto Commenter"
+        onFeedback={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("DOCX Auto Commenter")).toBeInTheDocument();
+    expect(screen.getByText("コメント案を生成しています")).toBeInTheDocument();
+  });
+
+  it("falls back to the plain thinking indicator when no skill status is active", () => {
+    render(
+      <MessageList
+        messages={[
+          {
+            role: "assistant",
+            content: "",
+            artifacts: [],
+            skill_id: null,
+            attachments: []
+          }
+        ]}
+        loading
+        showThinking
+        skillStatus={null}
+        onFeedback={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
   });
 });

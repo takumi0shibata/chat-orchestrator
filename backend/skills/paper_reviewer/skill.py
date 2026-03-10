@@ -1,6 +1,13 @@
 from typing import Any
 
-from app.skills_runtime.base import Skill, SkillCategory, SkillExecutionResult, SkillMetadata, context_only_result
+from app.skills_runtime.base import (
+    Skill,
+    SkillCategory,
+    SkillExecutionResult,
+    SkillMetadata,
+    context_only_result,
+    get_skill_progress,
+)
 
 
 class PaperReviewerSkill(Skill):
@@ -21,6 +28,8 @@ class PaperReviewerSkill(Skill):
         history: list[dict[str, str]],
         skill_context: dict[str, Any] | None = None,
     ) -> SkillExecutionResult:
+        progress = get_skill_progress(skill_context)
+        await progress.update(stage="inspect_input", label="入力を確認しています")
         text = user_text.strip()
         if not text:
             return context_only_result(
@@ -33,6 +42,7 @@ class PaperReviewerSkill(Skill):
         granularity = self._infer_granularity(text)
         language = self._infer_language(text)
         rewrite_mode = self._infer_rewrite_mode(text)
+        await progress.update(stage="build_review_context", label="レビュー指針を組み立てています")
 
         last_user_messages = [
             item.get("content", "").strip()

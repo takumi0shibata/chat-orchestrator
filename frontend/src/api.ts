@@ -8,6 +8,7 @@ import type {
   ProviderInfo,
   ReasoningEffort,
   SkillInfo,
+  StreamSkillStatus,
   StreamDone,
   StreamEvent
 } from "./types";
@@ -116,7 +117,7 @@ export async function streamChat(params: {
   enableWebTool?: boolean;
   signal?: AbortSignal;
   onChunk: (delta: string) => void;
-  onSkillStatus?: (status: "running" | "done", skillId: string) => void;
+  onSkillStatus?: (event: StreamSkillStatus) => void;
 }): Promise<StreamDone> {
   const response = await fetch("/api/chat/stream", {
     method: "POST",
@@ -152,7 +153,7 @@ export async function streamChat(params: {
     buffer += decoder.decode(value, { stream: true });
     const parsed = parseStreamBuffer(buffer, (event) => {
       if (event.type === "chunk") params.onChunk(event.delta);
-      if (event.type === "skill_status") params.onSkillStatus?.(event.status, event.skill_id);
+      if (event.type === "skill_status") params.onSkillStatus?.(event);
     });
     buffer = parsed.rest;
     if (parsed.done) doneEvent = parsed.done;
@@ -161,7 +162,7 @@ export async function streamChat(params: {
   if (!doneEvent) {
     const parsed = parseStreamBuffer(`${buffer}\n`, (event) => {
       if (event.type === "chunk") params.onChunk(event.delta);
-      if (event.type === "skill_status") params.onSkillStatus?.(event.status, event.skill_id);
+      if (event.type === "skill_status") params.onSkillStatus?.(event);
     });
     doneEvent = parsed.done;
   }
