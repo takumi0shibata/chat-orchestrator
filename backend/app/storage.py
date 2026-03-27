@@ -455,6 +455,27 @@ class ChatStore:
             )
 
     def get_messages(self, conversation_id: str) -> list[ChatMessage]:
+        return [message for _, message in self.get_messages_with_ids(conversation_id)]
+
+    def get_message_attachments(self, conversation_id: str) -> dict[int, list[StoredAttachment]]:
+        with self._connect() as conn:
+            attachment_rows = conn.execute(
+                """
+                SELECT id, conversation_id, message_id, name, content_type, size_bytes, original_path, parsed_markdown_path, created_at
+                FROM attachments
+                WHERE conversation_id = ? AND message_id IS NOT NULL
+                ORDER BY created_at ASC, id ASC
+                """,
+                (conversation_id,),
+            ).fetchall()
+
+        attachments_by_message: dict[int, list[StoredAttachment]] = {}
+        for row in attachment_rows:
+            attachment = self._attachment_from_row(row)
+            attachments_by_message.setdefault(int(attachment.message_id), []).append(attachment)
+        return attachments_by_message
+
+    def get_messages_with_ids(self, conversation_id: str) -> list[tuple[int, ChatMessage]]:
         feedback_map = self.feedback_selection_map(conversation_id=conversation_id)
         with self._connect() as conn:
             rows = conn.execute(
@@ -466,39 +487,31 @@ class ChatStore:
                 """,
                 (conversation_id,),
             ).fetchall()
-            attachment_rows = conn.execute(
-                """
-                SELECT id, conversation_id, message_id, name, content_type, size_bytes, original_path, parsed_markdown_path, created_at
-                FROM attachments
-                WHERE conversation_id = ? AND message_id IS NOT NULL
-                ORDER BY created_at ASC, id ASC
-                """,
-                (conversation_id,),
-            ).fetchall()
+        attachments_by_message = self.get_message_attachments(conversation_id)
 
-        attachments_by_message: dict[int, list[AttachmentSummary]] = {}
-        for row in attachment_rows:
-            attachment = self._attachment_from_row(row)
-            attachments_by_message.setdefault(int(attachment.message_id), []).append(
-                AttachmentSummary(
-                    id=attachment.id,
-                    name=attachment.name,
-                    content_type=attachment.content_type,
-                    size_bytes=attachment.size_bytes,
-                )
-            )
-
-        messages: list[ChatMessage] = []
+        messages: list[tuple[int, ChatMessage]] = []
         for row in rows:
             artifacts = self._load_artifacts(row["artifacts_json"])
             self._apply_feedback_selection(artifacts=artifacts, feedback_map=feedback_map)
+            message_id = int(row["id"])
             messages.append(
-                ChatMessage(
-                    role=row["role"],
-                    content=row["content"],
-                    artifacts=artifacts,
-                    skill_id=row["skill_id"],
-                    attachments=attachments_by_message.get(int(row["id"]), []),
+                (
+                    message_id,
+                    ChatMessage(
+                        role=row["role"],
+                        content=row["content"],
+                        artifacts=artifacts,
+                        skill_id=row["skill_id"],
+                        attachments=[
+                            AttachmentSummary(
+                                id=attachment.id,
+                                name=attachment.name,
+                                content_type=attachment.content_type,
+                                size_bytes=attachment.size_bytes,
+                            )
+                            for attachment in attachments_by_message.get(message_id, [])
+                        ],
+                    ),
                 )
             )
         return messages

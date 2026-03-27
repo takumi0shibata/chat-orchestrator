@@ -1,18 +1,37 @@
-function escapeHtml(input: string): string {
+function escapeHtmlText(input: string): string {
   return input
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+    .replace(/"/g, "&quot;");
+}
+
+function escapeHtmlAttribute(input: string): string {
+  return escapeHtmlText(input).replace(/'/g, "&#39;");
 }
 
 function formatInline(text: string): string {
   let out = text;
-  out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
-  out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
-  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  out = out.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  const tokens: string[] = [];
+
+  const stash = (pattern: RegExp, render: (...args: string[]) => string) => {
+    out = out.replace(pattern, (...args) => {
+      const matchArgs = args.slice(0, -2) as string[];
+      const key = `@@INLINE${tokens.length}@@`;
+      tokens.push(render(...matchArgs));
+      return key;
+    });
+  };
+
+  stash(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_match, label, url) => {
+    return `<a href="${escapeHtmlAttribute(url)}" target="_blank" rel="noreferrer">${escapeHtmlText(label)}</a>`;
+  });
+  stash(/`([^`]+)`/g, (_match, code) => `<code>${escapeHtmlText(code)}</code>`);
+  stash(/\*\*([^*]+)\*\*/g, (_match, strong) => `<strong>${escapeHtmlText(strong)}</strong>`);
+  stash(/\*([^*]+)\*/g, (_match, emphasis) => `<em>${escapeHtmlText(emphasis)}</em>`);
+
+  out = escapeHtmlText(out);
+  out = out.replace(/@@INLINE(\d+)@@/g, (_, idx) => tokens[Number(idx)] || "");
   return out;
 }
 
@@ -66,7 +85,7 @@ function renderCodeBlock(rawChunk: string): string {
   const hasLang = /^[a-zA-Z0-9_+-]{1,20}$/.test(langToken);
   const language = hasLang ? langToken : "plain";
   const body = hasLang ? rawChunk.slice(firstBreak + 1) : rawChunk;
-  const escapedBody = escapeHtml(body);
+  const escapedBody = escapeHtmlText(body);
   const highlighted = highlightEscapedCode(language, escapedBody);
   return `<div class="code-wrap"><button class="code-copy-btn" data-copy-btn="1" type="button">Copy</button><pre class="code-block language-${language}"><code>${highlighted}</code></pre></div>`;
 }
@@ -106,7 +125,7 @@ export function markdownToHtml(markdown: string): string {
       continue;
     }
 
-    const lines = escapeHtml(chunk).split("\n");
+    const lines = chunk.split("\n");
     let inList = false;
 
     let lineIndex = 0;

@@ -442,7 +442,7 @@ a {
 
 .message-panel.user {
   max-width: min(78%, 760px);
-  padding: 14px 18px;
+  padding: 11px 18px;
   border-radius: 24px;
   border: 1px solid #dbe4ff;
   background: var(--surface-tint);
@@ -453,7 +453,11 @@ a {
   margin: 0;
   white-space: pre-wrap;
   line-height: 1.68;
-  font-size: 15px;
+  font-size: 14px;
+}
+
+.user-message p {
+  margin: 0;
 }
 
 .assistant-body {
@@ -1025,7 +1029,7 @@ a {
 
 .markdown {
   color: var(--text);
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1.78;
 }
 

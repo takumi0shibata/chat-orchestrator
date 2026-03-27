@@ -155,7 +155,7 @@ def test_image_upload_persists_file_and_placeholder(tmp_path: Path) -> None:
         assert Path(stored[0].parsed_markdown_path).read_text(encoding="utf-8") == "[Image attachment: diagram.png]"
 
 
-def test_normal_chat_injects_attachment_context_without_persisting_body(tmp_path: Path) -> None:
+def test_normal_chat_reinjects_attachment_context_across_turns_without_exposing_body(tmp_path: Path) -> None:
     with TestClient(app) as client:
         provider = _set_state(tmp_path)
         conversation_id = state.store.create_conversation()
@@ -180,12 +180,28 @@ def test_normal_chat_injects_attachment_context_without_persisting_body(tmp_path
         assert messages[-1].role == "user"
         assert messages[-1].content == "Summarize this"
 
+        follow_up = client.post(
+            "/api/chat",
+            json=_chat_payload(conversation_id, user_input="Use the earlier notes again", attachment_ids=[]),
+        )
+        assert follow_up.status_code == 200
+
+        assert len(provider.calls) == 2
+        second_turn_messages = provider.calls[1]["messages"]
+        assert second_turn_messages[0].role == "system"
+        assert "attachment body" in second_turn_messages[0].content
+        assert second_turn_messages[1].role == "user"
+        assert second_turn_messages[1].content == "Summarize this"
+        assert second_turn_messages[-1].role == "user"
+        assert second_turn_messages[-1].content == "Use the earlier notes again"
+
         history = client.get(f"/api/conversations/{conversation_id}/messages")
         assert history.status_code == 200
-        user_message = history.json()[0]
+        messages = history.json()
+        user_message = messages[0]
         assert user_message["content"] == "Summarize this"
         assert user_message["attachments"] == [attachment]
-        assert "attachment body" not in user_message["content"]
+        assert all("attachment body" not in message["content"] for message in messages)
 
 
 def test_skill_chat_uses_attachment_descriptors_without_double_injection(tmp_path: Path) -> None:

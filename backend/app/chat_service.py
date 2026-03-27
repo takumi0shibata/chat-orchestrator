@@ -60,7 +60,11 @@ class ChatOrchestrator:
                 detail=f"Model does not support image input: {payload.model}",
             )
 
-        history = self.store.get_messages(conversation_id)
+        history = (
+            self.store.get_messages(conversation_id)
+            if payload.skill_id
+            else self._history_with_attachment_context(conversation_id)
+        )
         prepared_user_input = user_input or "Please use the attached files as the primary context."
         prepared_messages = [
             *history,
@@ -219,6 +223,24 @@ class ChatOrchestrator:
             text = Path(attachment.parsed_markdown_path).read_text(encoding="utf-8").strip()
             sections.append(f"[Attachment:{attachment.name}]\n{text}")
         return "\n\n".join(sections)
+
+    def _history_with_attachment_context(self, conversation_id: str) -> list[ChatMessage]:
+        history_with_ids = self.store.get_messages_with_ids(conversation_id)
+        attachments_by_message = self.store.get_message_attachments(conversation_id)
+        expanded_history: list[ChatMessage] = []
+
+        for message_id, message in history_with_ids:
+            document_attachments, _ = self._split_attachments(attachments_by_message.get(message_id, []))
+            if message.role == "user" and document_attachments:
+                expanded_history.append(
+                    ChatMessage(
+                        role="system",
+                        content=self._attachment_context(document_attachments),
+                    )
+                )
+            expanded_history.append(message)
+
+        return expanded_history
 
     def _split_attachments(
         self,
