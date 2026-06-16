@@ -4,9 +4,11 @@ import type {
   ChatMessage,
   ConversationInfo,
   ConversationSummary,
+  ExecutionMode,
   ModelInfo,
   ProviderInfo,
   ReasoningEffort,
+  StreamAgentEvent,
   SkillInfo,
   StreamSkillStatus,
   StreamDone,
@@ -111,6 +113,8 @@ export async function streamChat(params: {
   userInput: string;
   attachmentIds?: string[];
   conversationId: string;
+  executionMode?: ExecutionMode;
+  abilityIds?: string[] | null;
   skillId?: string;
   temperature?: number | null;
   reasoningEffort?: ReasoningEffort | null;
@@ -118,6 +122,7 @@ export async function streamChat(params: {
   signal?: AbortSignal;
   onChunk: (delta: string) => void;
   onSkillStatus?: (event: StreamSkillStatus) => void;
+  onAgentEvent?: (event: StreamAgentEvent) => void;
 }): Promise<StreamDone> {
   const response = await fetch("/api/chat/stream", {
     method: "POST",
@@ -129,6 +134,8 @@ export async function streamChat(params: {
       user_input: params.userInput,
       attachment_ids: params.attachmentIds ?? [],
       conversation_id: params.conversationId,
+      execution_mode: params.executionMode ?? "direct",
+      ability_ids: params.abilityIds ?? null,
       skill_id: params.skillId || null,
       temperature: params.temperature ?? null,
       reasoning_effort: params.reasoningEffort ?? null,
@@ -154,6 +161,15 @@ export async function streamChat(params: {
     const parsed = parseStreamBuffer(buffer, (event) => {
       if (event.type === "chunk") params.onChunk(event.delta);
       if (event.type === "skill_status") params.onSkillStatus?.(event);
+      if (
+        event.type === "agent_status" ||
+        event.type === "ability_started" ||
+        event.type === "ability_completed" ||
+        event.type === "artifact" ||
+        event.type === "trace_ref"
+      ) {
+        params.onAgentEvent?.(event);
+      }
     });
     buffer = parsed.rest;
     if (parsed.done) doneEvent = parsed.done;
@@ -163,6 +179,15 @@ export async function streamChat(params: {
     const parsed = parseStreamBuffer(`${buffer}\n`, (event) => {
       if (event.type === "chunk") params.onChunk(event.delta);
       if (event.type === "skill_status") params.onSkillStatus?.(event);
+      if (
+        event.type === "agent_status" ||
+        event.type === "ability_started" ||
+        event.type === "ability_completed" ||
+        event.type === "artifact" ||
+        event.type === "trace_ref"
+      ) {
+        params.onAgentEvent?.(event);
+      }
     });
     doneEvent = parsed.done;
   }

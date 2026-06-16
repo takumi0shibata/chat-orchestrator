@@ -39,6 +39,7 @@ function createControllerState() {
     loading: false,
     showThinking: false,
     skillStatus: null,
+    agentTimeline: [],
     sidebarOpen: true,
     selectedModel: {
       id: "gpt-5.4-2026-03-05",
@@ -62,6 +63,7 @@ function createControllerState() {
       tags: ["audit", "monitoring"]
     },
     canUseWebTool: true,
+    canUseAgentic: true,
     setInput: vi.fn(),
     setSkillId: vi.fn(),
     setTemperature: vi.fn(),
@@ -106,6 +108,7 @@ const { controller, scrollIntoViewMock } = vi.hoisted(() => ({
     loading: false,
     showThinking: false,
     skillStatus: null,
+    agentTimeline: [],
     sidebarOpen: true,
     selectedModel: {
       id: "gpt-5.4-2026-03-05",
@@ -129,6 +132,7 @@ const { controller, scrollIntoViewMock } = vi.hoisted(() => ({
       tags: ["audit", "monitoring"]
     },
     canUseWebTool: true,
+    canUseAgentic: true,
     setInput: vi.fn(),
     setSkillId: vi.fn(),
     setTemperature: vi.fn(),

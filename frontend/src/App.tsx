@@ -120,6 +120,7 @@ export function App() {
               loading={controller.loading}
               showThinking={controller.showThinking}
               skillStatus={controller.skillStatus}
+              agentTimeline={controller.agentTimeline}
               activeSkillName={activeSkillName}
               endRef={messagesEndRef}
               onFeedback={(action, choice) => void controller.onSubmitFeedback(action, choice)}

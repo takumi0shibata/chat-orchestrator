@@ -9,6 +9,32 @@ import yaml
 from app.skills_runtime.base import Skill, SkillCategory, SkillManifest, SkillMetadata
 
 
+def _default_ability_input_schema() -> dict[str, object]:
+    return {
+        "type": "object",
+        "additionalProperties": True,
+        "properties": {
+            "task": {
+                "type": "string",
+                "description": "Optional ability-specific instruction or query.",
+            }
+        },
+    }
+
+
+def _validate_ability_input_schema(raw: object, *, manifest_path: Path) -> dict[str, object]:
+    if raw is None:
+        return _default_ability_input_schema()
+    if not isinstance(raw, dict):
+        raise ValueError(f"Skill ability input_schema must be a mapping: {manifest_path}")
+    if raw.get("type") != "object":
+        raise ValueError(f"Skill ability input_schema.type must be 'object': {manifest_path}")
+    properties = raw.get("properties")
+    if properties is not None and not isinstance(properties, dict):
+        raise ValueError(f"Skill ability input_schema.properties must be a mapping: {manifest_path}")
+    return raw
+
+
 class SkillManager:
     def __init__(self, skills_root: Path) -> None:
         self.skills_root = skills_root
@@ -50,6 +76,13 @@ class SkillManager:
         tags_raw = raw.get("tags") or []
         if not isinstance(tags_raw, list):
             raise ValueError(f"Skill tags must be a list: {manifest_path}")
+        ability_raw = raw.get("ability") or {}
+        if not isinstance(ability_raw, dict):
+            raise ValueError(f"Skill ability must be a mapping: {manifest_path}")
+        input_schema = _validate_ability_input_schema(
+            ability_raw.get("input_schema", raw.get("input_schema")),
+            manifest_path=manifest_path,
+        )
 
         metadata = SkillMetadata(
             id=str(raw.get("id") or ""),
@@ -66,6 +99,7 @@ class SkillManager:
             entrypoint=str(raw.get("entrypoint") or "skill.py"),
             factory=str(raw.get("factory") or "build_skill"),
             readme=str(raw.get("readme") or "README.md"),
+            ability_input_schema=input_schema,
         )
 
         module_path = entry / manifest.module_path
@@ -95,6 +129,7 @@ class SkillManager:
             )
 
         skill.metadata = manifest.metadata
+        skill.ability_input_schema = manifest.ability_input_schema
         return skill
 
     def _load_module(self, *, module_path: Path, module_name: str) -> ModuleType:

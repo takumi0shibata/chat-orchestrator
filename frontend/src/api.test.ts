@@ -38,6 +38,12 @@ describe("api", () => {
         stage: "parse_input",
         label: "入力を分解しています"
       }),
+      JSON.stringify({
+        type: "ability_started",
+        ability_id: "todo_extractor",
+        ability_name: "Todo Extractor",
+        input_summary: "{\"task\":\"Summarize\"}"
+      }),
       JSON.stringify({ type: "chunk", delta: "hello " }),
       JSON.stringify({
         type: "done",
@@ -61,6 +67,7 @@ describe("api", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const onSkillStatus = vi.fn();
+    const onAgentEvent = vi.fn();
 
     const done = await streamChat({
       providerId: "openai",
@@ -69,14 +76,17 @@ describe("api", () => {
       attachmentIds: ["att-1", "att-2"],
       conversationId: "conv-1",
       onChunk: vi.fn(),
-      onSkillStatus
+      onSkillStatus,
+      onAgentEvent
     });
 
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(String(init?.body))).toMatchObject({
       user_input: "Summarize",
       attachment_ids: ["att-1", "att-2"],
-      conversation_id: "conv-1"
+      conversation_id: "conv-1",
+      execution_mode: "direct",
+      ability_ids: null
     });
     expect(done.message.attachments).toEqual([]);
     expect(onSkillStatus).toHaveBeenCalledWith({
@@ -85,6 +95,12 @@ describe("api", () => {
       skill_id: "todo_extractor",
       stage: "parse_input",
       label: "入力を分解しています"
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      type: "ability_started",
+      ability_id: "todo_extractor",
+      ability_name: "Todo Extractor",
+      input_summary: "{\"task\":\"Summarize\"}"
     });
   });
 });

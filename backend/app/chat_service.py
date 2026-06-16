@@ -27,6 +27,8 @@ class PreparedChatTurn:
     skill_result: SkillExecutionResult | None
     effective_web_tool: bool | None
     attachments: list[StoredAttachment]
+    execution_mode: str
+    ability_ids: list[str] | None
 
 
 class ChatOrchestrator:
@@ -60,9 +62,10 @@ class ChatOrchestrator:
                 detail=f"Model does not support image input: {payload.model}",
             )
 
+        run_legacy_skill = payload.execution_mode == "direct" and bool(payload.skill_id)
         history = (
             self.store.get_messages(conversation_id)
-            if payload.skill_id
+            if run_legacy_skill
             else self._history_with_attachment_context(conversation_id)
         )
         prepared_user_input = user_input or "Please use the attached files as the primary context."
@@ -76,13 +79,13 @@ class ChatOrchestrator:
         ]
         skill_result: SkillExecutionResult | None = None
 
-        if document_attachments and not payload.skill_id:
+        if document_attachments and not run_legacy_skill:
             prepared_messages = [
                 ChatMessage(role="system", content=self._attachment_context(document_attachments)),
                 *prepared_messages,
             ]
 
-        if payload.skill_id:
+        if run_legacy_skill:
             skill = self.skills.get(payload.skill_id)
             if not skill:
                 raise HTTPException(status_code=400, detail=f"Unknown skill: {payload.skill_id}")
@@ -123,7 +126,19 @@ class ChatOrchestrator:
             skill_result=skill_result,
             effective_web_tool=effective_web_tool,
             attachments=attachments,
+            execution_mode=payload.execution_mode,
+            ability_ids=self._resolve_payload_ability_ids(payload),
         )
+
+    def _resolve_payload_ability_ids(self, payload: ChatRequest) -> list[str] | None:
+        if payload.execution_mode != "agentic":
+            return None
+        requested = [item.strip() for item in payload.ability_ids or [] if item.strip()]
+        if requested:
+            return requested
+        if payload.skill_id and payload.skill_id.strip():
+            return [payload.skill_id.strip()]
+        return None
 
     def persist_user_message(
         self,

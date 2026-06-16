@@ -91,6 +91,50 @@ beforeEach(() => {
 });
 
 describe("useChatController", () => {
+  it("uses agentic execution by default for OpenAI Responses chats without forcing an ability", async () => {
+    const { result } = await renderController();
+
+    await act(async () => {
+      result.current.setInput("Plan the work");
+    });
+
+    const submitEvent = { preventDefault: vi.fn() } as unknown as Parameters<typeof result.current.onSubmit>[0];
+    await act(async () => {
+      await result.current.onSubmit(submitEvent);
+    });
+
+    expect(apiMocks.streamChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "openai",
+        model: "gpt-5.4-2026-03-05",
+        executionMode: "agentic",
+        abilityIds: null
+      })
+    );
+  });
+
+  it("uses agentic execution when an ability is selected", async () => {
+    const { result } = await renderController();
+
+    await act(async () => {
+      result.current.setSkillId("audit_news_action_brief");
+      result.current.setInput("監査ニュースを調べて");
+    });
+
+    const submitEvent = { preventDefault: vi.fn() } as unknown as Parameters<typeof result.current.onSubmit>[0];
+    await act(async () => {
+      await result.current.onSubmit(submitEvent);
+    });
+
+    expect(apiMocks.streamChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionMode: "agentic",
+        abilityIds: ["audit_news_action_brief"],
+        skillId: "audit_news_action_brief"
+      })
+    );
+  });
+
   it("turns on attachment parsing state immediately and clears it after a successful single-file parse", async () => {
     const deferred = createDeferred<
       { id: string; name: string; content_type: string; size_bytes: number }[]

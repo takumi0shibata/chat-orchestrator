@@ -1,5 +1,6 @@
 export type Role = "system" | "user" | "assistant";
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ExecutionMode = "direct" | "agentic";
 
 export interface Badge {
   label: string;
@@ -170,4 +171,45 @@ export interface StreamSkillStatus {
   label: string;
 }
 
-export type StreamEvent = StreamChunk | StreamDone | StreamError | StreamSkillStatus;
+export interface StreamAgentStatus {
+  type: "agent_status";
+  status: "running" | "done";
+  stage: string;
+  label: string;
+  ability_id?: string;
+}
+
+export interface StreamAbilityStarted {
+  type: "ability_started";
+  ability_id: string;
+  ability_name: string;
+  input_summary: string;
+}
+
+export interface StreamAbilityCompleted {
+  type: "ability_completed";
+  ability_id: string;
+  ability_name: string;
+  result_summary: string;
+}
+
+export interface StreamArtifact {
+  type: "artifact";
+  ability_id: string;
+  ability_name: string;
+  artifact: UiBlock;
+}
+
+export interface StreamTraceRef {
+  type: "trace_ref";
+  trace_id: string;
+}
+
+export type StreamAgentEvent =
+  | StreamAgentStatus
+  | StreamAbilityStarted
+  | StreamAbilityCompleted
+  | StreamArtifact
+  | StreamTraceRef;
+
+export type StreamEvent = StreamChunk | StreamDone | StreamError | StreamSkillStatus | StreamAgentEvent;

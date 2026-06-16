@@ -13,6 +13,7 @@
   --text-faint: #64748b;
   --accent: #2563eb;
   --accent-soft: rgba(37, 99, 235, 0.1);
+  --success: #15803d;
   --danger: #b91c1c;
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
   --shadow-md: 0 12px 32px rgba(15, 23, 42, 0.08);
@@ -498,6 +499,69 @@ a {
   padding: 2px 0 10px;
 }
 
+.ability-activity {
+  min-width: min(100%, 460px);
+  display: inline-grid;
+  gap: 9px;
+  padding: 2px 0 10px;
+}
+
+.ability-activity-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ability-activity-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.ability-activity-state {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ability-activity-state.done {
+  color: var(--success);
+  background: rgba(21, 128, 61, 0.1);
+}
+
+.ability-activity-current {
+  width: fit-content;
+  max-width: 100%;
+  display: inline-block;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.35;
+  background-image: linear-gradient(
+    90deg,
+    rgba(100, 116, 139, 0.42) 0%,
+    rgba(100, 116, 139, 0.7) 28%,
+    rgba(37, 99, 235, 0.96) 50%,
+    rgba(100, 116, 139, 0.72) 72%,
+    rgba(100, 116, 139, 0.42) 100%
+  );
+  background-size: 220% 100%;
+  background-position: -120% 50%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: skill-text-wave 2.1s linear infinite;
+}
+
 .skill-activity-header {
   display: flex;
   align-items: center;
@@ -536,6 +600,37 @@ a {
   background-clip: text;
   -webkit-text-fill-color: transparent;
   animation: skill-text-wave 2.1s linear infinite;
+}
+
+.ability-activity-steps {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ability-activity-steps li {
+  display: grid;
+  grid-template-columns: 12px minmax(0, auto);
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 3px;
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.ability-step-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--line-strong);
+}
+
+.ability-step-dot.done {
+  background: var(--success);
 }
 
 .chat-composer-slot {

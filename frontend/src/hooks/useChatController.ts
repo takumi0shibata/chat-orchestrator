@@ -16,12 +16,14 @@ import {
 import type {
   AttachmentSummary,
   ChatMessage,
+  ExecutionMode,
   FeedbackAction,
   FeedbackChoice,
   ModelInfo,
   ProviderInfo,
   ReasoningEffort,
   SkillInfo,
+  StreamAgentEvent,
   StreamSkillStatus
 } from "../types";
 
@@ -122,6 +124,7 @@ export function useChatController() {
   const [loading, setLoading] = useState<boolean>(false);
   const [showThinking, setShowThinking] = useState<boolean>(false);
   const [skillStatus, setSkillStatus] = useState<StreamSkillStatus | null>(null);
+  const [agentTimeline, setAgentTimeline] = useState<StreamAgentEvent[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -137,6 +140,7 @@ export function useChatController() {
       selectedModel.api_mode === "responses" &&
       (selectedModel.providerId === "openai" || selectedModel.providerId === "azure_openai")
   );
+  const canUseAgentic = canUseWebTool;
   const parsingAttachmentNames = useMemo(
     () => pendingAttachmentBatches.flatMap((batch) => batch.names),
     [pendingAttachmentBatches]
@@ -352,18 +356,22 @@ export function useChatController() {
 
     setLoading(true);
     setError("");
-    setShowThinking(Boolean(selectedModel.supports_reasoning_effort));
+    const executionMode: ExecutionMode = canUseAgentic ? "agentic" : "direct";
+    const abilityIds = executionMode === "agentic" && skillId ? [skillId] : null;
+
+    setShowThinking(Boolean(selectedModel.supports_reasoning_effort) || executionMode === "agentic");
     setSkillStatus(
-      skillId
+      executionMode === "direct" && skillId
         ? {
             type: "skill_status",
             status: "running",
             skill_id: skillId,
             stage: "starting",
             label: "準備しています"
-          }
+        }
         : null
     );
+    setAgentTimeline([]);
 
     const userRaw = trimmed;
     const queuedAttachments = attachments;
@@ -396,6 +404,8 @@ export function useChatController() {
         userInput: userRaw,
         attachmentIds: queuedAttachments.map((attachment) => attachment.id),
         conversationId,
+        executionMode,
+        abilityIds,
         skillId: skillId || undefined,
         temperature,
         reasoningEffort,
@@ -404,6 +414,7 @@ export function useChatController() {
         onChunk: (delta) => {
           if (delta) setShowThinking(false);
           if (delta) setSkillStatus(null);
+          if (delta) setAgentTimeline([]);
           setMessages((prev) => {
             const next = [...prev];
             const lastIndex = next.length - 1;
@@ -415,6 +426,9 @@ export function useChatController() {
         },
         onSkillStatus: (status) => {
           setSkillStatus(status);
+        },
+        onAgentEvent: (event) => {
+          setAgentTimeline((prev) => [...prev, event]);
         }
       });
 
@@ -450,6 +464,7 @@ export function useChatController() {
       setLoading(false);
       setShowThinking(false);
       setSkillStatus(null);
+      setAgentTimeline([]);
     }
   };
 
@@ -474,10 +489,12 @@ export function useChatController() {
     loading,
     showThinking,
     skillStatus,
+    agentTimeline,
     sidebarOpen,
     selectedModel,
     selectedSkill,
     canUseWebTool,
+    canUseAgentic,
     setInput,
     setSkillId,
     setTemperature,

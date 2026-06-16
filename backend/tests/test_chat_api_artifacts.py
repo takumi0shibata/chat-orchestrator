@@ -9,6 +9,7 @@ from app.main import app, state
 from app.skills_runtime.base import (
     LineChartBlock,
     LineChartPoint,
+    MarkdownBlock,
     SkillCategory,
     SkillExecutionResult,
     SkillMetadata,
@@ -79,10 +80,44 @@ class FakeSkills:
         return [self.skill]
 
 
+class FakeAbilities:
+    def resolve(self, *, ability_ids, legacy_skill_id):
+        del legacy_skill_id
+        assert ability_ids == ["chart_skill"]
+        return [object()]
+
+    def list_abilities(self):
+        return []
+
+
+class FakeAgent:
+    def __init__(self):
+        self.calls = []
+
+    async def run(self, **kwargs):
+        self.calls.append(kwargs)
+        return type(
+            "AgentResult",
+            (),
+            {
+                "content": "agentic answer",
+                "skill_result": SkillExecutionResult(
+                    artifacts=[
+                        MarkdownBlock(
+                            content="agentic artifact",
+                        )
+                    ]
+                ),
+            },
+        )()
+
+
 def _set_state(tmp_path: Path) -> None:
     state.store = ChatStore(db_path=tmp_path / "chat-test.db")
     state.providers = FakeProviders(FakeProvider())
     state.skills = FakeSkills(FakeSkill())
+    state.abilities = FakeAbilities()
+    state.agent = FakeAgent()
     state.chat = ChatOrchestrator(store=state.store, skills=state.skills)
 
 
@@ -152,3 +187,29 @@ def test_chat_messages_endpoint_returns_persisted_artifacts() -> None:
             assistant_message = messages_response.json()[-1]
             assert assistant_message["content"] == "assistant result"
             assert assistant_message["artifacts"][0]["type"] == "line_chart"
+
+
+def test_chat_agentic_mode_uses_agent_runner_with_ability_alias() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with TestClient(app) as client:
+            _set_state(Path(tmp))
+            conversation_id = state.store.create_conversation()
+
+            response = client.post(
+                "/api/chat",
+                json={
+                    "provider_id": "openai",
+                    "model": "gpt-5.4-2026-03-05",
+                    "conversation_id": conversation_id,
+                    "user_input": "run agentically",
+                    "execution_mode": "agentic",
+                    "ability_ids": ["chart_skill"],
+                },
+            )
+            assert response.status_code == 200
+            payload = response.json()
+
+            assert payload["output"] == "agentic answer"
+            assert payload["message"]["skill_id"] == "agentic"
+            assert payload["message"]["artifacts"][0]["type"] == "markdown"
+            assert state.agent.calls[0]["provider_id"] == "openai"

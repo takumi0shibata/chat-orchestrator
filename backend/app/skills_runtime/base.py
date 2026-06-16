@@ -70,6 +70,18 @@ class SkillManifest:
     entrypoint: str = "skill.py"
     factory: str = "build_skill"
     readme: str = "README.md"
+    ability_input_schema: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "Optional ability-specific instruction or query.",
+                }
+            },
+        }
+    )
 
     @property
     def module_path(self) -> Path:

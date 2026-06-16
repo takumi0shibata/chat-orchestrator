@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from app.skills_runtime.base import UiBlock
 
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+ExecutionMode = Literal["direct", "agentic"]
 
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant"]
@@ -20,6 +21,8 @@ class ChatRequest(BaseModel):
     user_input: str
     attachment_ids: list[str] = Field(default_factory=list)
     conversation_id: str | None = None
+    execution_mode: ExecutionMode = "direct"
+    ability_ids: list[str] | None = None
     temperature: float | None = None
     max_tokens: int | None = None
     reasoning_effort: ReasoningEffort | None = None
@@ -65,6 +68,10 @@ class SkillInfo(BaseModel):
     description: str
     primary_category: SkillCategoryInfo
     tags: list[str]
+
+
+class AbilityInfo(SkillInfo):
+    input_schema: dict
 
 
 class ConversationInfo(BaseModel):

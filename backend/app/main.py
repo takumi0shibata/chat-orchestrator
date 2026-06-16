@@ -8,6 +8,8 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
+from app.abilities_runtime.registry import AbilityRegistry
+from app.agent_runner import AgentExecutionResult, AgentRunner
 from app.attachments import save_attachment
 from app.chat_service import ChatOrchestrator
 from app.config import Settings, get_settings
@@ -16,6 +18,7 @@ from app.providers.registry import ProviderRegistry
 from app.schemas import (
     AuditNewsFeedbackRequest,
     AuditNewsMetricsResponse,
+    AbilityInfo,
     ChatMessage,
     ChatRequest,
     ChatResponse,
@@ -37,6 +40,8 @@ class AppState:
     settings: Settings
     providers: ProviderRegistry
     skills: SkillManager
+    abilities: AbilityRegistry
+    agent: AgentRunner
     store: ChatStore
     chat: ChatOrchestrator
 
@@ -55,6 +60,8 @@ async def lifespan(_: FastAPI):
     skills_root = project_root / "skills"
     state.skills = SkillManager(skills_root=skills_root)
     state.skills.load()
+    state.abilities = AbilityRegistry.from_skills(state.skills.list_skills())
+    state.agent = AgentRunner(settings=settings)
 
     db_path = project_root / "data" / "chat.db"
     attachments_root = project_root / "data" / "attachments"
@@ -104,6 +111,21 @@ def list_skills() -> list[SkillInfo]:
             tags=list(skill.metadata.tags),
         )
         for skill in state.skills.list_skills()
+    ]
+
+
+@app.get("/api/abilities", response_model=list[AbilityInfo])
+def list_abilities() -> list[AbilityInfo]:
+    return [
+        AbilityInfo(
+            id=ability.metadata.id,
+            name=ability.metadata.name,
+            description=ability.metadata.description,
+            primary_category=ability.metadata.primary_category,
+            tags=list(ability.metadata.tags),
+            input_schema=ability.metadata.input_schema,
+        )
+        for ability in state.abilities.list_abilities()
     ]
 
 
@@ -182,7 +204,37 @@ def get_conversation_messages(conversation_id: str) -> list[ChatMessage]:
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(payload: ChatRequest) -> ChatResponse:
     prepared = await state.chat.prepare_turn(payload)
-    if state.chat.should_skip_model_response(prepared.skill_result):
+    agent_result: AgentExecutionResult | None = None
+    skill_result = prepared.skill_result
+
+    if prepared.execution_mode == "agentic":
+        try:
+            abilities = state.abilities.resolve(
+                ability_ids=prepared.ability_ids,
+                legacy_skill_id=payload.skill_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=400, detail=f"Unknown ability: {exc}") from exc
+        try:
+            agent_result = await state.agent.run(
+                provider_id=payload.provider_id,
+                model=payload.model,
+                messages=prepared.prepared_messages,
+                attachments=prepared.attachments,
+                abilities=abilities,
+                conversation_id=prepared.conversation_id,
+                generated_files_root=str(state.store.generated_files_root),
+                user_text=prepared.user_input,
+                temperature=payload.temperature,
+                max_tokens=payload.max_tokens,
+                reasoning_effort=payload.reasoning_effort,
+                enable_web_tool=prepared.effective_web_tool,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        output = agent_result.content
+        skill_result = agent_result.skill_result
+    elif state.chat.should_skip_model_response(prepared.skill_result):
         output = state.chat.resolve_assistant_content(content="", skill_result=prepared.skill_result)
     else:
         provider = state.providers.get(payload.provider_id)
@@ -198,8 +250,8 @@ async def chat(payload: ChatRequest) -> ChatResponse:
 
     assistant_message = state.chat.build_assistant_message(
         content=output,
-        skill_id=payload.skill_id,
-        skill_result=prepared.skill_result,
+        skill_id=payload.skill_id or ("agentic" if prepared.execution_mode == "agentic" else None),
+        skill_result=skill_result,
     )
     state.chat.persist_user_message(
         conversation_id=prepared.conversation_id,
@@ -209,7 +261,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     state.chat.persist_assistant_message(
         conversation_id=prepared.conversation_id,
         message=assistant_message,
-        skill_result=prepared.skill_result,
+        skill_result=skill_result,
     )
     return ChatResponse(
         provider_id=payload.provider_id,
@@ -281,7 +333,7 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
     async def generate():
         try:
             prepared = None
-            if payload.skill_id:
+            if payload.execution_mode == "direct" and payload.skill_id:
                 startup_update = SkillProgressUpdate(stage="starting", label="準備しています")
                 progress_queue: asyncio.Queue[SkillProgressUpdate] = asyncio.Queue()
 
@@ -340,7 +392,7 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
                 attachments=prepared.attachments,
             )
 
-            if payload.skill_id:
+            if payload.execution_mode == "direct" and payload.skill_id:
                 yield json.dumps(
                     {
                         "type": "skill_status",
@@ -352,7 +404,42 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
                 ) + "\n"
 
             accumulated = ""
-            if state.chat.should_skip_model_response(prepared.skill_result):
+            skill_result = prepared.skill_result
+            if prepared.execution_mode == "agentic":
+                try:
+                    abilities = state.abilities.resolve(
+                        ability_ids=prepared.ability_ids,
+                        legacy_skill_id=payload.skill_id,
+                    )
+                except KeyError as exc:
+                    raise HTTPException(status_code=400, detail=f"Unknown ability: {exc}") from exc
+                agent_result: AgentExecutionResult | None = None
+                async for item in state.agent.stream(
+                    provider_id=payload.provider_id,
+                    model=payload.model,
+                    messages=prepared.prepared_messages,
+                    attachments=prepared.attachments,
+                    abilities=abilities,
+                    conversation_id=prepared.conversation_id,
+                    generated_files_root=str(state.store.generated_files_root),
+                    user_text=prepared.user_input,
+                    temperature=payload.temperature,
+                    max_tokens=payload.max_tokens,
+                    reasoning_effort=payload.reasoning_effort,
+                    enable_web_tool=prepared.effective_web_tool,
+                ):
+                    if isinstance(item, AgentExecutionResult):
+                        agent_result = item
+                        continue
+                    event_payload = item.to_payload()
+                    if item.type == "chunk":
+                        accumulated += str(event_payload.get("delta") or "")
+                    yield json.dumps(event_payload) + "\n"
+                if agent_result is None:
+                    raise RuntimeError("Agent stream ended without a final result")
+                accumulated = agent_result.content or accumulated
+                skill_result = agent_result.skill_result
+            elif state.chat.should_skip_model_response(prepared.skill_result):
                 accumulated = state.chat.resolve_assistant_content(content="", skill_result=prepared.skill_result)
             else:
                 provider = state.providers.get(payload.provider_id)
@@ -370,13 +457,13 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
 
             assistant_message = state.chat.build_assistant_message(
                 content=accumulated,
-                skill_id=payload.skill_id,
-                skill_result=prepared.skill_result,
+                skill_id=payload.skill_id or ("agentic" if prepared.execution_mode == "agentic" else None),
+                skill_result=skill_result,
             )
             state.chat.persist_assistant_message(
                 conversation_id=prepared.conversation_id,
                 message=assistant_message,
-                skill_result=prepared.skill_result,
+                skill_result=skill_result,
             )
             yield json.dumps(
                 {

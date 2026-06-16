@@ -111,6 +111,46 @@ describe("MessageList", () => {
     expect(screen.getByText("コメント案を生成しています")).toBeInTheDocument();
   });
 
+  it("renders agentic ability timeline while an agent is running", () => {
+    render(
+      <MessageList
+        messages={[
+          {
+            role: "assistant",
+            content: "",
+            artifacts: [],
+            skill_id: "agentic",
+            attachments: []
+          }
+        ]}
+        loading
+        showThinking={false}
+        skillStatus={null}
+        agentTimeline={[
+          {
+            type: "ability_started",
+            ability_id: "context_lookup",
+            ability_name: "Context Lookup",
+            input_summary: "{\"task\":\"check\"}"
+          },
+          {
+            type: "agent_status",
+            status: "running",
+            ability_id: "context_lookup",
+            stage: "inspect_context",
+            label: "資料を確認しています"
+          }
+        ]}
+        onFeedback={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("Context Lookup")).toBeInTheDocument();
+    expect(screen.getByText("実行中")).toBeInTheDocument();
+    expect(screen.getByText("資料を確認しています")).toBeInTheDocument();
+    expect(screen.queryByText("Agent")).not.toBeInTheDocument();
+  });
+
   it("falls back to the plain thinking indicator when no skill status is active", () => {
     render(
       <MessageList

@@ -3,7 +3,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.abilities_runtime.registry import AbilityRegistry
 from app.chat_service import ChatOrchestrator
+from app.config import Settings
+from app.agent_runner import AgentRunner
 from app.main import app, state
 from app.skills_runtime.manager import SkillManager
 from app.storage import ChatStore
@@ -22,6 +25,8 @@ def _set_state(tmp_path: Path) -> None:
     state.store = ChatStore(db_path=tmp_path / "chat-test.db")
     state.providers = DummyProviders()
     state.skills = manager
+    state.abilities = AbilityRegistry.from_skills(manager.list_skills())
+    state.agent = AgentRunner(settings=Settings(_env_file=None))
     state.chat = ChatOrchestrator(store=state.store, skills=state.skills)
 
 
@@ -53,3 +58,17 @@ def test_list_skills_returns_category_and_tags() -> None:
         assert item["primary_category"]["label"]
         assert item["tags"]
         assert all(tag.strip() for tag in item["tags"])
+
+
+def test_list_abilities_returns_legacy_skills_with_input_schema() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with TestClient(app) as client:
+            _set_state(Path(tmp))
+
+            response = client.get("/api/abilities")
+            assert response.status_code == 200
+            payload = response.json()
+
+    by_id = {item["id"]: item for item in payload}
+    assert "todo_extractor" in by_id
+    assert by_id["todo_extractor"]["input_schema"]["type"] == "object"

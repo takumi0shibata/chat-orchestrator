@@ -112,6 +112,8 @@ def test_chat_request_accepts_optional_enable_web_tool() -> None:
     )
     assert payload.enable_web_tool is None
     assert payload.reasoning_effort == "xhigh"
+    assert payload.execution_mode == "direct"
+    assert payload.ability_ids is None
 
 
 def test_openai_responses_with_web_tool_adds_tools_and_sources(monkeypatch) -> None:
