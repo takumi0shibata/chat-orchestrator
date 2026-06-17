@@ -32,8 +32,8 @@ OPENAI_MODELS: list[ModelCapability] = [
         reasoning_effort_options=REASONING_EFFORT_OPTIONS_5,
     ),
     ModelCapability(
-        id="gpt-5-mini-2025-08-07",
-        label="GPT-5 mini",
+        id="gpt-5.4-mini-2026-03-05",
+        label="GPT-5.4 mini",
         api_mode="responses",
         supports_temperature=False,
         supports_reasoning_effort=True,

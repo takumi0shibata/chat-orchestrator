@@ -204,7 +204,7 @@ describe("Composer", () => {
       <Composer
         {...props}
         attachments={[{ id: "img-1", name: "photo.png", content_type: "image/png", size_bytes: 5 }]}
-        attachmentWarning="Claude 3.5 Haiku does not support image input. Remove images or switch to GPT-5.4 / GPT-5 mini."
+        attachmentWarning="Claude 3.5 Haiku does not support image input. Remove images or switch to GPT-5.4 / GPT-5.4 mini."
       />
     );
 

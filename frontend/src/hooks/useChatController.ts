@@ -157,7 +157,7 @@ export function useChatController() {
   );
   const imageAttachmentWarning = useMemo(() => {
     if (!selectedModel || !hasQueuedImageAttachments || selectedModel.supports_image_input) return "";
-    return `${selectedModel.label} does not support image input. Remove images or switch to GPT-5.4 / GPT-5 mini.`;
+    return `${selectedModel.label} does not support image input. Remove images or switch to GPT-5.4 / GPT-5.4 mini.`;
   }, [hasQueuedImageAttachments, selectedModel]);
 
   const selectConversation = async (id: string, persist = true) => {
