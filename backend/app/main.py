@@ -1,5 +1,7 @@
 import asyncio
 import json
+import logging
+import traceback
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
@@ -329,6 +331,29 @@ def audit_news_metrics(
     return AuditNewsMetricsResponse(**metrics)
 
 
+logger = logging.getLogger("app.chat_stream")
+
+
+def _format_stream_error(exc: BaseException) -> str:
+    """Build a human-readable message from the full exception chain.
+
+    Some libraries (e.g. the OpenAI Agents SDK) can raise exceptions whose
+    ``str()`` is just an unresolved ``TypeVar`` repr such as ``~TContext``,
+    which is meaningless in the UI. Walking ``__cause__``/``__context__`` and
+    prefixing the exception type keeps the real root cause visible.
+    """
+    parts: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        text = str(current).strip()
+        label = type(current).__name__
+        parts.append(f"{label}: {text}" if text else label)
+        current = current.__cause__ or current.__context__
+    return " <- ".join(parts)
+
+
 @app.post("/api/chat/stream")
 async def stream_chat(payload: ChatRequest) -> StreamingResponse:
     async def generate():
@@ -477,6 +502,13 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
                 }
             ) + "\n"
         except Exception as exc:
-            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
+            logger.error(
+                "chat stream failed (provider=%s model=%s mode=%s)\n%s",
+                payload.provider_id,
+                payload.model,
+                payload.execution_mode,
+                "".join(traceback.format_exception(exc)),
+            )
+            yield json.dumps({"type": "error", "message": _format_stream_error(exc)}) + "\n"
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
