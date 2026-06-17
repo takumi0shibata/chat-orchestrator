@@ -21,10 +21,10 @@ def test_azure_openai_model_capability_for_responses() -> None:
 def test_openai_uses_gpt_54_mini_instead_of_gpt_5_mini() -> None:
     models = list_models("openai")
     model_ids = [model.id for model in models]
-    assert "gpt-5.4-mini-2026-03-05" in model_ids
+    assert "gpt-5.4-mini-2026-03-17" in model_ids
     assert "gpt-5-mini-2025-08-07" not in model_ids
 
-    mini = get_model_capability("openai", "gpt-5.4-mini-2026-03-05")
+    mini = get_model_capability("openai", "gpt-5.4-mini-2026-03-17")
     assert mini.label == "GPT-5.4 mini"
     assert mini.api_mode == "responses"
     assert mini.supports_reasoning_effort is True
