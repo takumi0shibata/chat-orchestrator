@@ -1,0 +1,39 @@
+id: audit_standards_compliance
+name: Audit Standards Compliance
+description: 監査基準、会計基準、IFRS、日本基準、JICPA倫理規則、品質管理基準などのローカル基準文書を検索し、根拠付き回答のための補助コンテキストを生成します。
+primary_category:
+  id: audit
+  label: Audit
+tags:
+  - audit
+  - standards
+  - compliance
+entrypoint: skill.py
+factory: build_skill
+readme: README.md
+ability:
+  input_schema:
+    type: object
+    additionalProperties: false
+    properties:
+      task:
+        type: string
+        description: ユーザー質問。省略時は会話本文を使います。
+      query:
+        type: string
+        description: 検索クエリ。task より優先されます。
+      jurisdictions:
+        type: array
+        items:
+          type: string
+        description: JP、IFRS などの法域・基準圏フィルタ。
+      standard_families:
+        type: array
+        items:
+          type: string
+        description: auditing、ethics、jgaap、ifrs、quality_management などの文書群フィルタ。
+      max_sources:
+        type: integer
+        minimum: 1
+        maximum: 12
+        description: main LLM に渡す根拠候補数。
