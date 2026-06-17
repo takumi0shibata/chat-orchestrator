@@ -11,6 +11,7 @@ from app.skills_runtime.base import (
     LineChartPoint,
     MarkdownBlock,
     SkillCategory,
+    SkillExecutionOptions,
     SkillExecutionResult,
     SkillMetadata,
     get_skill_progress,
@@ -19,12 +20,15 @@ from app.storage import ChatStore
 
 
 class FakeProvider:
+    def __init__(self) -> None:
+        self.calls = []
+
     async def chat(self, **kwargs):
-        del kwargs
+        self.calls.append(kwargs)
         return "assistant result"
 
     async def stream_chat(self, **kwargs):
-        del kwargs
+        self.calls.append(kwargs)
         yield "assistant "
         yield "result"
 
@@ -64,6 +68,15 @@ class FakeSkill:
                     ],
                 )
             ],
+        )
+
+
+class WebDisabledSkill(FakeSkill):
+    async def run(self, user_text: str, history: list[dict[str, str]], skill_context=None):
+        del user_text, history, skill_context
+        return SkillExecutionResult(
+            llm_context="Skill context",
+            options=SkillExecutionOptions(disable_web_tool=True),
         )
 
 
@@ -112,13 +125,15 @@ class FakeAgent:
         )()
 
 
-def _set_state(tmp_path: Path) -> None:
+def _set_state(tmp_path: Path, *, skill=None) -> FakeProvider:
+    provider = FakeProvider()
     state.store = ChatStore(db_path=tmp_path / "chat-test.db")
-    state.providers = FakeProviders(FakeProvider())
-    state.skills = FakeSkills(FakeSkill())
+    state.providers = FakeProviders(provider)
+    state.skills = FakeSkills(skill or FakeSkill())
     state.abilities = FakeAbilities()
     state.agent = FakeAgent()
     state.chat = ChatOrchestrator(store=state.store, skills=state.skills)
+    return provider
 
 
 def _chat_payload(conversation_id: str) -> dict:
@@ -189,6 +204,41 @@ def test_chat_messages_endpoint_returns_persisted_artifacts() -> None:
             assert assistant_message["artifacts"][0]["type"] == "line_chart"
 
 
+def test_chat_defaults_web_tool_on_for_openai_responses_model() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with TestClient(app) as client:
+            provider = _set_state(Path(tmp))
+            conversation_id = state.store.create_conversation()
+
+            response = client.post(
+                "/api/chat",
+                json={
+                    **_chat_payload(conversation_id),
+                    "model": "gpt-5.4-2026-03-05",
+                    "skill_id": None,
+                },
+            )
+            assert response.status_code == 200
+            assert provider.calls[0]["enable_web_tool"] is True
+
+
+def test_skill_disable_web_tool_overrides_default_on() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with TestClient(app) as client:
+            provider = _set_state(Path(tmp), skill=WebDisabledSkill())
+            conversation_id = state.store.create_conversation()
+
+            response = client.post(
+                "/api/chat",
+                json={
+                    **_chat_payload(conversation_id),
+                    "model": "gpt-5.4-2026-03-05",
+                },
+            )
+            assert response.status_code == 200
+            assert provider.calls[0]["enable_web_tool"] is False
+
+
 def test_chat_agentic_mode_uses_agent_runner_with_ability_alias() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with TestClient(app) as client:
@@ -213,3 +263,5 @@ def test_chat_agentic_mode_uses_agent_runner_with_ability_alias() -> None:
             assert payload["message"]["skill_id"] == "agentic"
             assert payload["message"]["artifacts"][0]["type"] == "markdown"
             assert state.agent.calls[0]["provider_id"] == "openai"
+            assert state.agent.calls[0]["enable_web_tool"] is True
+            assert state.agent.calls[0]["require_ability_use"] is True

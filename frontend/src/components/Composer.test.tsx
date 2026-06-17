@@ -145,6 +145,23 @@ describe("Composer", () => {
     expect(screen.queryByRole("dialog", { name: "Select skill" })).not.toBeInTheDocument();
   });
 
+  it("keeps menus open for menu clicks and closes them when the message input is clicked", async () => {
+    const user = userEvent.setup();
+    const props = createProps();
+
+    render(<Composer {...props} />);
+
+    await user.click(screen.getByRole("button", { name: "Select model" }));
+    const modelDialog = screen.getByRole("dialog", { name: "Select model" });
+    expect(modelDialog).toBeInTheDocument();
+
+    await user.click(modelDialog);
+    expect(screen.getByRole("dialog", { name: "Select model" })).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Message input"));
+    expect(screen.queryByRole("dialog", { name: "Select model" })).not.toBeInTheDocument();
+  });
+
   it("shows the cancel action while streaming", () => {
     const props = createProps();
 

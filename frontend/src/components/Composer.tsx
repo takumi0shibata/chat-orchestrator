@@ -173,7 +173,9 @@ export function Composer(props: {
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
       if (!rootRef.current) return;
-      if (rootRef.current.contains(event.target as Node)) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest(".composer-menu, .composer-trigger")) return;
       setActiveMenu(null);
     };
 

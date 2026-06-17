@@ -229,6 +229,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
                 max_tokens=payload.max_tokens,
                 reasoning_effort=payload.reasoning_effort,
                 enable_web_tool=prepared.effective_web_tool,
+                require_ability_use=bool(prepared.ability_ids),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -427,6 +428,7 @@ async def stream_chat(payload: ChatRequest) -> StreamingResponse:
                     max_tokens=payload.max_tokens,
                     reasoning_effort=payload.reasoning_effort,
                     enable_web_tool=prepared.effective_web_tool,
+                    require_ability_use=bool(prepared.ability_ids),
                 ):
                     if isinstance(item, AgentExecutionResult):
                         agent_result = item

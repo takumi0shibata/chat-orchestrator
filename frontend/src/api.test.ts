@@ -86,7 +86,8 @@ describe("api", () => {
       attachment_ids: ["att-1", "att-2"],
       conversation_id: "conv-1",
       execution_mode: "direct",
-      ability_ids: null
+      ability_ids: null,
+      enable_web_tool: true
     });
     expect(done.message.attachments).toEqual([]);
     expect(onSkillStatus).toHaveBeenCalledWith({

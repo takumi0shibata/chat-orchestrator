@@ -112,7 +112,7 @@ export function useChatController() {
   const [skillId, setSkillId] = useState<string>("");
   const [temperature, setTemperature] = useState<number | null>(0.3);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | null>(null);
-  const [enableWebTool, setEnableWebTool] = useState<boolean>(false);
+  const [enableWebTool, setEnableWebTool] = useState<boolean>(true);
 
   const [conversationId, setConversationId] = useState<string>("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -128,6 +128,7 @@ export function useChatController() {
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const webToolPreferenceRef = useRef(true);
   const nextAttachmentBatchIdRef = useRef(0);
 
   const selectedModel = useMemo(
@@ -229,8 +230,22 @@ export function useChatController() {
   }, []);
 
   useEffect(() => {
-    if (!canUseWebTool && enableWebTool) setEnableWebTool(false);
+    if (!canUseWebTool) {
+      if (enableWebTool) setEnableWebTool(false);
+      return;
+    }
+    if (enableWebTool !== webToolPreferenceRef.current) {
+      setEnableWebTool(webToolPreferenceRef.current);
+    }
   }, [canUseWebTool, enableWebTool]);
+
+  const setEnableWebToolPreference = (value: boolean | ((current: boolean) => boolean)) => {
+    setEnableWebTool((current) => {
+      const next = typeof value === "function" ? value(current) : value;
+      webToolPreferenceRef.current = next;
+      return next;
+    });
+  };
 
   const onModelChange = (value: string) => {
     setModelKey(value);
@@ -244,6 +259,8 @@ export function useChatController() {
 
     if (!(item.api_mode === "responses" && (item.providerId === "openai" || item.providerId === "azure_openai"))) {
       setEnableWebTool(false);
+    } else {
+      setEnableWebTool(webToolPreferenceRef.current);
     }
   };
 
@@ -499,7 +516,7 @@ export function useChatController() {
     setSkillId,
     setTemperature,
     setReasoningEffort,
-    setEnableWebTool,
+    setEnableWebTool: setEnableWebToolPreference,
     setSidebarOpen,
     onModelChange,
     onNewChat,

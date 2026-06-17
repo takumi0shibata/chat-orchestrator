@@ -139,7 +139,7 @@ export async function streamChat(params: {
       skill_id: params.skillId || null,
       temperature: params.temperature ?? null,
       reasoning_effort: params.reasoningEffort ?? null,
-      enable_web_tool: params.enableWebTool ?? false
+      enable_web_tool: params.enableWebTool ?? true
     })
   });
 

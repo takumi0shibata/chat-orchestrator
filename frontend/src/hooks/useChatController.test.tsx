@@ -93,6 +93,7 @@ beforeEach(() => {
 describe("useChatController", () => {
   it("uses agentic execution by default for OpenAI Responses chats without forcing an ability", async () => {
     const { result } = await renderController();
+    expect(result.current.enableWebTool).toBe(true);
 
     await act(async () => {
       result.current.setInput("Plan the work");
@@ -108,9 +109,52 @@ describe("useChatController", () => {
         providerId: "openai",
         model: "gpt-5.4-2026-03-05",
         executionMode: "agentic",
-        abilityIds: null
+        abilityIds: null,
+        enableWebTool: true
       })
     );
+  });
+
+  it("defaults web search on for supported models and disables it for unsupported models", async () => {
+    apiMocks.fetchProviderModels.mockResolvedValueOnce([
+      {
+        id: "gpt-5.4-2026-03-05",
+        label: "GPT 5.4",
+        api_mode: "responses",
+        supports_temperature: false,
+        supports_reasoning_effort: true,
+        supports_image_input: true,
+        default_temperature: null,
+        default_reasoning_effort: "medium",
+        reasoning_effort_options: ["none", "minimal", "low", "medium", "high", "xhigh"]
+      },
+      {
+        id: "claude-3-5-haiku-latest",
+        label: "Claude 3.5 Haiku",
+        api_mode: "chat_completions",
+        supports_temperature: true,
+        supports_reasoning_effort: false,
+        supports_image_input: false,
+        default_temperature: 0.3,
+        default_reasoning_effort: null,
+        reasoning_effort_options: []
+      }
+    ]);
+
+    const { result } = await renderController();
+    expect(result.current.enableWebTool).toBe(true);
+
+    await act(async () => {
+      result.current.onModelChange("openai::claude-3-5-haiku-latest");
+    });
+    expect(result.current.canUseWebTool).toBe(false);
+    expect(result.current.enableWebTool).toBe(false);
+
+    await act(async () => {
+      result.current.onModelChange("openai::gpt-5.4-2026-03-05");
+    });
+    expect(result.current.canUseWebTool).toBe(true);
+    expect(result.current.enableWebTool).toBe(true);
   });
 
   it("uses agentic execution when an ability is selected", async () => {

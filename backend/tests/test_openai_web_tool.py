@@ -146,6 +146,8 @@ def test_openai_responses_with_web_tool_adds_tools_and_sources(monkeypatch) -> N
         assert "Sources:" in output
         assert "https://example.com/a" in output
         assert responses_api.calls[0]["tools"] == [EXPECTED_WEB_TOOL]
+        assert responses_api.calls[0]["input"][0]["role"] == "system"
+        assert "fresh public information is needed" in responses_api.calls[0]["input"][0]["content"]
 
     asyncio.run(run())
 

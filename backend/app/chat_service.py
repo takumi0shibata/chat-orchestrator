@@ -19,6 +19,9 @@ from app.skills_runtime.manager import SkillManager
 from app.storage import ChatStore
 
 
+WEB_TOOL_PROVIDER_IDS = {"openai", "azure_openai"}
+
+
 @dataclass
 class PreparedChatTurn:
     conversation_id: str
@@ -108,14 +111,19 @@ class ChatOrchestrator:
                     ChatMessage(
                         role="system",
                         content=(
-                            "You have supplemental context from a local skill. Use it when relevant.\n"
+                            "You have context from a local skill. Treat it as the primary factual basis for the "
+                            "answer when it is relevant to the user's request.\n"
                             f"[Skill:{payload.skill_id}]\n{skill_result.llm_context}"
                         ),
                     ),
                     *prepared_messages,
                 ]
 
-        effective_web_tool = payload.enable_web_tool
+        effective_web_tool = (
+            payload.enable_web_tool
+            if payload.enable_web_tool is not None
+            else self._default_enable_web_tool(provider_id=payload.provider_id, model=payload.model)
+        )
         if skill_result and skill_result.options.disable_web_tool:
             effective_web_tool = False
 
@@ -190,6 +198,10 @@ class ChatOrchestrator:
         if skill_result and skill_result.assistant_response is not None:
             return skill_result.assistant_response
         return content
+
+    def _default_enable_web_tool(self, *, provider_id: str, model: str) -> bool:
+        capability = get_model_capability(provider_id, model)
+        return provider_id in WEB_TOOL_PROVIDER_IDS and capability.api_mode == "responses"
 
     def persist_assistant_message(
         self,

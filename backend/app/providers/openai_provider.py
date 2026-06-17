@@ -18,6 +18,11 @@ class OpenAIProvider(LLMProvider):
         "type": "web_search_preview",
         "user_location": {"type": "approximate", "country": "JP"},
     }
+    _WEB_SEARCH_GUIDANCE = (
+        "Hosted web search is available, but use it only when fresh public information is needed to answer "
+        "accurately. Do not search for stable knowledge or when the provided conversation, attachment, or skill "
+        "context is sufficient."
+    )
     _MAX_SOURCE_URLS = 20
     _URL_PATTERN = re.compile(r"https?://[^\s)>\]}\"']+")
 
@@ -105,6 +110,9 @@ class OpenAIProvider(LLMProvider):
             return None
         return [self._WEB_SEARCH_TOOL]
 
+    def _messages_with_web_guidance(self, messages: list[ChatMessage]) -> list[ChatMessage]:
+        return [ChatMessage(role="system", content=self._WEB_SEARCH_GUIDANCE), *messages]
+
     def _to_jsonable(self, node: Any) -> Any:
         if hasattr(node, "model_dump"):
             return self._to_jsonable(node.model_dump())
@@ -185,7 +193,10 @@ class OpenAIProvider(LLMProvider):
                 kwargs["tools"] = tools
             response = await self.client.responses.create(
                 model=model,
-                input=self._responses_input(messages, attachments),
+                input=self._responses_input(
+                    self._messages_with_web_guidance(messages) if tools else messages,
+                    attachments,
+                ),
                 **kwargs,
             )
             text = response.output_text or ""
@@ -231,7 +242,10 @@ class OpenAIProvider(LLMProvider):
                 kwargs["tools"] = tools
             stream = await self.client.responses.create(
                 model=model,
-                input=self._responses_input(messages, attachments),
+                input=self._responses_input(
+                    self._messages_with_web_guidance(messages) if tools else messages,
+                    attachments,
+                ),
                 stream=True,
                 **kwargs,
             )

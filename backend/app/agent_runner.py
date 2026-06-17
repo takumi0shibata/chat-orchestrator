@@ -123,6 +123,7 @@ class AgentRunner:
         max_tokens: int | None,
         reasoning_effort: str | None,
         enable_web_tool: bool | None,
+        require_ability_use: bool = False,
     ) -> AgentExecutionResult:
         self._ensure_agentic_supported(provider_id=provider_id, model=model)
         sdk = import_agents_sdk()
@@ -143,6 +144,7 @@ class AgentRunner:
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
             enable_web_tool=enable_web_tool,
+            require_ability_use=require_ability_use,
         )
         result = await sdk.Runner.run(
             agent,
@@ -166,6 +168,7 @@ class AgentRunner:
         max_tokens: int | None,
         reasoning_effort: str | None,
         enable_web_tool: bool | None,
+        require_ability_use: bool = False,
     ) -> AsyncGenerator[AgentStreamEvent | AgentExecutionResult, None]:
         self._ensure_agentic_supported(provider_id=provider_id, model=model)
         sdk = import_agents_sdk()
@@ -191,6 +194,7 @@ class AgentRunner:
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
             enable_web_tool=enable_web_tool,
+            require_ability_use=require_ability_use,
         )
 
         streamed_result = sdk.Runner.run_streamed(
@@ -265,6 +269,7 @@ class AgentRunner:
         max_tokens: int | None,
         reasoning_effort: str | None,
         enable_web_tool: bool | None,
+        require_ability_use: bool,
     ) -> tuple[Any, Any]:
         tools = [
             self._build_ability_tool(
@@ -288,7 +293,11 @@ class AgentRunner:
 
         agent = sdk.Agent(
             name="Chat Orchestrator Agent",
-            instructions=self._instructions(abilities=abilities, web_enabled=bool(enable_web_tool)),
+            instructions=self._instructions(
+                abilities=abilities,
+                web_enabled=bool(enable_web_tool),
+                require_ability_use=require_ability_use,
+            ),
             model=model,
             model_settings=self._model_settings(
                 sdk=sdk,
@@ -454,17 +463,29 @@ class AgentRunner:
             payload.append({"role": message.role, "content": content})
         return payload
 
-    def _instructions(self, *, abilities: list[Ability], web_enabled: bool) -> str:
+    def _instructions(self, *, abilities: list[Ability], web_enabled: bool, require_ability_use: bool = False) -> str:
         ability_lines = "\n".join(
             f"- `{_tool_name(ability.metadata.id)}`: {ability.metadata.description}" for ability in abilities
         )
-        web_line = "- Hosted web search is available when fresh public information is needed." if web_enabled else ""
+        selected_ability_line = (
+            "The user selected the available ability for this turn. Invoke it before writing the final answer, "
+            "then use its tool output, including any llm_context and artifacts, as source context for the answer."
+            if require_ability_use and abilities
+            else ""
+        )
+        web_line = (
+            "- Hosted web search is available, but use it only when fresh public information is needed to answer "
+            "accurately. Do not search for stable knowledge or when local ability/context output is sufficient."
+            if web_enabled
+            else ""
+        )
         return (
             "You are an agentic chat orchestrator. Answer the user directly, but use abilities when they can "
             "produce concrete context, artifacts, files, or domain-specific results. Do not expose hidden reasoning. "
             "When using an ability, rely on its tool output and explain the result in the final answer.\n\n"
             "Available abilities:\n"
             f"{ability_lines or '- No local abilities are available.'}\n"
+            f"{selected_ability_line}\n"
             f"{web_line}"
         ).strip()
 

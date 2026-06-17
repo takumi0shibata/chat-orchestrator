@@ -27,6 +27,17 @@ class FakeAbility(Ability):
         )
 
 
+class FakeBojAbility(FakeAbility):
+    metadata = AbilityMetadata(
+        id="boj_timeseries_insight",
+        name="BOJ Timeseries Insight",
+        description="Looks up BOJ time-series context.",
+        primary_category={"id": "finance", "label": "Finance"},
+        tags=["finance", "timeseries", "boj"],
+        input_schema={"type": "object", "properties": {"task": {"type": "string"}}, "additionalProperties": True},
+    )
+
+
 class FakeFunctionTool:
     def __init__(self, **kwargs: Any) -> None:
         self.__dict__.update(kwargs)
@@ -46,8 +57,11 @@ class FakeOpenAIProvider:
 
 
 class FakeAgent:
+    instances: list["FakeAgent"] = []
+
     def __init__(self, **kwargs: Any) -> None:
         self.__dict__.update(kwargs)
+        self.instances.append(self)
 
 
 class FakeRunConfig:
@@ -111,6 +125,7 @@ def fake_sdk() -> Any:
 def test_agent_runner_invokes_ability_tool_and_aggregates_result(monkeypatch) -> None:
     monkeypatch.setattr("app.agent_runner.import_agents_sdk", fake_sdk)
     monkeypatch.setattr("app.agent_runner.build_openai_client", lambda **kwargs: {"client_kwargs": kwargs})
+    FakeAgent.instances.clear()
     runner = AgentRunner(settings=Settings(_env_file=None, openai_api_key="test-key"))
 
     async def run() -> None:
@@ -127,17 +142,53 @@ def test_agent_runner_invokes_ability_tool_and_aggregates_result(monkeypatch) ->
             max_tokens=100,
             reasoning_effort="high",
             enable_web_tool=False,
+            require_ability_use=True,
         )
         assert result.content == "final answer"
         assert result.skill_result.llm_context == "[Ability:context_lookup]\ncontext result"
         assert result.ability_results[0].summary == "looked up customer"
+        assert "Invoke it before writing the final answer" in FakeAgent.instances[-1].instructions
+        assert "llm_context" in FakeAgent.instances[-1].instructions
 
     asyncio.run(run())
+
+
+def test_agent_runner_instructions_require_selected_boj_ability_context(monkeypatch) -> None:
+    monkeypatch.setattr("app.agent_runner.import_agents_sdk", fake_sdk)
+    monkeypatch.setattr("app.agent_runner.build_openai_client", lambda **kwargs: {"client_kwargs": kwargs})
+    FakeAgent.instances.clear()
+    runner = AgentRunner(settings=Settings(_env_file=None, openai_api_key="test-key"))
+
+    async def run() -> None:
+        await runner.run(
+            provider_id="openai",
+            model="gpt-5.4-2026-03-05",
+            messages=[ChatMessage(role="user", content="日銀の政策金利を分析して")],
+            attachments=[],
+            abilities=[FakeBojAbility()],
+            conversation_id="conv-1",
+            generated_files_root="/tmp/generated",
+            user_text="日銀の政策金利を分析して",
+            temperature=None,
+            max_tokens=None,
+            reasoning_effort=None,
+            enable_web_tool=True,
+            require_ability_use=True,
+        )
+
+    asyncio.run(run())
+
+    instructions = FakeAgent.instances[-1].instructions
+    assert "`boj_timeseries_insight`" in instructions
+    assert "Invoke it before writing the final answer" in instructions
+    assert "llm_context" in instructions
+    assert "use it only when fresh public information is needed" in instructions
 
 
 def test_agent_runner_streams_agent_and_ability_events(monkeypatch) -> None:
     monkeypatch.setattr("app.agent_runner.import_agents_sdk", fake_sdk)
     monkeypatch.setattr("app.agent_runner.build_openai_client", lambda **kwargs: {"client_kwargs": kwargs})
+    FakeAgent.instances.clear()
     runner = AgentRunner(settings=Settings(_env_file=None, openai_api_key="test-key"))
 
     async def run() -> None:
@@ -173,6 +224,7 @@ def test_agent_runner_streams_agent_and_ability_events(monkeypatch) -> None:
         assert final is not None
         assert final.content == "stream final"
         assert final.trace_id == "trace_stream"
+        assert "use it only when fresh public information is needed" in FakeAgent.instances[-1].instructions
 
     asyncio.run(run())
 
