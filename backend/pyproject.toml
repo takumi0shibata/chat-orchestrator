@@ -3,7 +3,7 @@ name = "chat-orchestrator-backend"
 version = "0.1.2"
 description = "Extensible multi-provider chatbot backend"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11.4"
 dependencies = [
   "fastapi>=0.116.0",
   "uvicorn[standard]>=0.35.0",
