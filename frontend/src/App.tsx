@@ -40,6 +40,18 @@ const legacySystemLabels: Record<string, string> = {
 };
 const systemText = (value: unknown) => legacySystemLabels[text(value)] || text(value);
 
+function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "check" | "close" | "spark"; size?: number }) {
+  const paths = {
+    refresh: <><path d="M20 11a8 8 0 1 0-2.2 6.4" /><path d="M20 4v7h-7" /></>,
+    paperclip: <path d="m20.5 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5l9.5-9.5a4 4 0 0 1 5.7 5.7l-9.5 9.5a2 2 0 0 1-2.8-2.8l8.8-8.8" />,
+    globe: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" /></>,
+    check: <path d="m5 12 4 4L19 6" />,
+    close: <path d="M6 6l12 12M18 6 6 18" />,
+    spark: <><path d="m12 2 1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2Z" /><path d="m19 17 .6 1.4L21 19l-1.4.6L19 21l-.6-1.4L17 19l1.4-.6L19 17Z" /></>,
+  };
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
+}
+
 function Choices({
   label,
   items,
@@ -58,20 +70,20 @@ function Choices({
     <fieldset disabled={disabled}>
       <legend>{label}</legend>
       {items.map((item) => (
-        <label className="check" key={item.id}>
-          <input
-            type="checkbox"
-            checked={selected.includes(item.id)}
-            onChange={(e) =>
-              change(
-                e.target.checked
-                  ? [...selected, item.id]
-                  : selected.filter((id) => id !== item.id),
-              )
-            }
-          />
-          {item.label}
-        </label>
+        <button
+          className={`tool-option ${selected.includes(item.id) ? "is-selected" : ""}`}
+          key={item.id}
+          type="button"
+          aria-pressed={selected.includes(item.id)}
+          disabled={disabled}
+          onClick={() => change(selected.includes(item.id)
+            ? selected.filter((id) => id !== item.id)
+            : [...selected, item.id])}
+        >
+          <Icon name="spark" />
+          <span>{item.label}</span>
+          {selected.includes(item.id) && <Icon name="check" size={16} />}
+        </button>
       ))}
     </fieldset>
   );
@@ -318,6 +330,12 @@ export function App() {
   const configReady = Boolean(config);
   const models = selectedProvider?.models || [];
   const selectedModel = models.find((m) => m.id === model);
+  const selectedTools = [
+    ...(web ? [{ key: "web", label: "Web Search", icon: "globe" as const, remove: () => setWeb(false) }] : []),
+    ...skills.map((id) => ({ key: `skill-${id}`, label: config?.skills.find((item) => item.id === id)?.label || id, icon: "spark" as const, remove: () => setSkills((old) => old.filter((value) => value !== id)) })),
+    ...resources.map((id) => ({ key: `resource-${id}`, label: config?.resources.find((item) => item.id === id)?.label || id, icon: "spark" as const, remove: () => setResources((old) => old.filter((value) => value !== id)) })),
+    ...mcps.map((id) => ({ key: `mcp-${id}`, label: config?.mcp_servers.find((item) => item.id === id)?.label || id, icon: "spark" as const, remove: () => setMcps((old) => old.filter((value) => value !== id)) })),
+  ];
   const canSend = Boolean(
     selectedProvider?.enabled && selectedModel && cid && loadedCid === cid &&
     !busy && !active && (input.trim() || attachments.length),
@@ -756,20 +774,18 @@ export function App() {
                     +
                   </button>
                   {plusOpen && (
-                    <div className="plus-menu" onKeyDown={(e) => {
+                    <div className="plus-menu" aria-label="Attachments and tools" onKeyDown={(e) => {
                       if (e.key === "Escape") setPlusOpen(false);
                     }}>
-                      <button type="button" onClick={() => fileInput.current?.click()}>
-                        Attach files
+                      <button className="tool-option attach-option" type="button" onClick={() => fileInput.current?.click()}>
+                        <Icon name="paperclip" />
+                        <span>Attach files</span>
                       </button>
-                      <label className="check">
-                        <input
-                          type="checkbox"
-                          checked={web}
-                          onChange={(e) => setWeb(e.target.checked)}
-                        />
-                        Web Search
-                      </label>
+                      <button className={`tool-option ${web ? "is-selected" : ""}`} type="button" aria-pressed={web} onClick={() => setWeb((value) => !value)}>
+                        <Icon name="globe" />
+                        <span>Web Search</span>
+                        {web && <Icon name="check" size={16} />}
+                      </button>
                       <Choices
                         label="Skills"
                         items={config?.skills || []}
@@ -817,6 +833,19 @@ export function App() {
                     </div>
                   )}
                 </div>
+                {selectedTools.length > 0 && (
+                  <div className="selected-tools" aria-label="Selected tools">
+                    {selectedTools.map((tool) => (
+                      <span className="selected-tool" key={tool.key}>
+                        <Icon name={tool.icon} size={14} />
+                        <span>{tool.label}</span>
+                        <button type="button" aria-label={`Remove ${tool.label}`} title={`Remove ${tool.label}`} disabled={active || busy} onClick={tool.remove}>
+                          <Icon name="close" size={13} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <input
                   ref={fileInput}
                   className="visually-hidden"
@@ -897,8 +926,8 @@ export function App() {
           >
             Close
           </button>
-          <button disabled={!cid} onClick={() => setFileRevision((v) => v + 1)}>
-            Refresh
+          <button className="refresh-files" type="button" aria-label="Refresh files" title="Refresh files" disabled={!cid} onClick={() => setFileRevision((v) => v + 1)}>
+            <Icon name="refresh" size={17} />
           </button>
         </div>
         <p className="workspace-path">

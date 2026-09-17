@@ -175,8 +175,15 @@ it("restores selected conversation and replays persistent events on reload", asy
   expect(screen.queryByText("元ファイルを直接編集")).not.toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "Message" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Add attachments and tools" }));
-  fireEvent.click(await screen.findByRole("checkbox", { name: "academic-writing" }));
-  fireEvent.click(screen.getByRole("checkbox", { name: "Web Search" }));
+  fireEvent.click(await screen.findByRole("button", { name: "academic-writing" }));
+  fireEvent.click(screen.getByRole("button", { name: "Web Search" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add attachments and tools" }));
+  expect(screen.getByRole("button", { name: "Remove academic-writing" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Remove Web Search" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Remove Web Search" }));
+  expect(screen.queryByRole("button", { name: "Remove Web Search" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Add attachments and tools" }));
+  fireEvent.click(screen.getByRole("button", { name: "Web Search" }));
   fireEvent.change(screen.getByRole("combobox", { name: "Model" }), { target: { value: "gpt-5.6-luna" } });
   fireEvent.change(screen.getByRole("combobox", { name: "Reasoning effort" }), { target: { value: "high" } });
   const message = screen.getByRole("textbox", { name: "Message" });
