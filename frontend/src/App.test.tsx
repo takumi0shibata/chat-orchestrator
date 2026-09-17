@@ -138,6 +138,7 @@ it("restores selected conversation and replays persistent events on reload", asy
     title: "Existing task",
     updated_at: run.updated_at,
   };
+  let configCalls = 0;
   const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = String(input);
     if (url.includes("/events?"))
@@ -153,7 +154,12 @@ it("restores selected conversation and replays persistent events on reload", asy
           "\n",
       );
     let body: unknown = {};
-    if (url === "/api/config") body = config;
+    if (url === "/api/config") {
+      configCalls += 1;
+      body = configCalls === 1
+        ? config
+        : { ...config, skills: [{ id: "academic-writing", label: "academic-writing", name: "academic-writing", description: "Review drafts" }] };
+    }
     else if (url === "/api/conversations") body = [conversation];
     else if (url === "/api/conversations/c")
       body = { ...conversation, runs: [run] };
@@ -169,6 +175,7 @@ it("restores selected conversation and replays persistent events on reload", asy
   expect(screen.queryByText("元ファイルを直接編集")).not.toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "Message" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Add attachments and tools" }));
+  fireEvent.click(await screen.findByRole("checkbox", { name: "academic-writing" }));
   fireEvent.click(screen.getByRole("checkbox", { name: "Web Search" }));
   fireEvent.change(screen.getByRole("combobox", { name: "Model" }), { target: { value: "gpt-5.6-luna" } });
   fireEvent.change(screen.getByRole("combobox", { name: "Reasoning effort" }), { target: { value: "high" } });
@@ -179,7 +186,7 @@ it("restores selected conversation and replays persistent events on reload", asy
   fireEvent.keyDown(message, { key: "Enter" });
   await waitFor(() => expect(fetchMock.mock.calls.filter(([url, options]) => url === "/api/runs" && options?.method === "POST")).toHaveLength(1));
   const sent = fetchMock.mock.calls.find(([url, options]) => url === "/api/runs" && options?.method === "POST");
-  expect(JSON.parse(String(sent?.[1]?.body))).toMatchObject({ model: "gpt-5.6-luna", reasoning_effort: "high", web_search: true, input: "Analyze the report" });
+  expect(JSON.parse(String(sent?.[1]?.body))).toMatchObject({ model: "gpt-5.6-luna", reasoning_effort: "high", web_search: true, skill_ids: ["academic-writing"], input: "Analyze the report" });
   expect(screen.getByRole("link", { name: /report.csv/ })).toHaveAttribute(
     "href",
     "/api/conversations/c/download?path=report.csv",

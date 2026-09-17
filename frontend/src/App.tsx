@@ -315,6 +315,7 @@ export function App() {
   const activeRun = runs.find((r) => !terminal(r.status));
   const active = Boolean(activeRun);
   const selectedProvider = config?.providers.find((p) => p.id === provider);
+  const configReady = Boolean(config);
   const models = selectedProvider?.models || [];
   const selectedModel = models.find((m) => m.id === model);
   const canSend = Boolean(
@@ -324,6 +325,13 @@ export function App() {
 
   async function refreshConversations() {
     setConversations(await api<Conversation[]>("/conversations"));
+  }
+  async function refreshConfig() {
+    try {
+      setConfig(await api<Config>("/config"));
+    } catch (e) {
+      setError(String(e));
+    }
   }
   useEffect(() => {
     let alive = true;
@@ -424,7 +432,7 @@ export function App() {
         if (!abort.signal.aborted) setError(String(e));
       });
     return () => abort.abort();
-  }, [cid, revision, config]);
+  }, [cid, revision, configReady]);
 
   useEffect(() => {
     setFolder("");
@@ -739,7 +747,10 @@ export function App() {
                     type="button"
                     aria-label="Add attachments and tools"
                     aria-expanded={plusOpen}
-                    onClick={() => setPlusOpen((v) => !v)}
+                    onClick={() => {
+                      setPlusOpen((v) => !v);
+                      if (!plusOpen) void refreshConfig();
+                    }}
                     disabled={active || busy}
                   >
                     +
