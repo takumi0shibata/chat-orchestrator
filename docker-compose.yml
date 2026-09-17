@@ -1,25 +1,11 @@
-version: "3.9"
-
+# Only the sandbox image is built with Compose. FastAPI runs on the host and
+# creates restricted per-run containers; never mount docker.sock into a sandbox.
 services:
-  backend:
-    build:
-      context: ./backend
-    env_file:
-      - .env
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./backend/app:/app/app
-      - ./backend/skills:/app/skills
-      - ./backend/data:/app/data
-
-  frontend:
-    build:
-      context: ./frontend
-    ports:
-      - "5173:5173"
-    depends_on:
-      - backend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+  sandbox:
+    image: chat-orchestrator-sandbox:local
+    build: ./sandbox
+    profiles: [build]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]

@@ -1,121 +1,165 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
-from functools import lru_cache
-from pathlib import Path
+import base64
+import os
+import stat
+from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
-from fastapi import HTTPException, UploadFile
+from fastapi import UploadFile
 
 
-MAX_FILE_BYTES = 10 * 1024 * 1024
-MAX_TEXT_CHARS = 12000
-MAX_PDF_PAGES = 30
-DOCLING_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".html", ".htm", ".md", ".csv"}
-PLAIN_TEXT_EXTENSIONS = {".txt", ".json"}
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-ALLOWED_EXTENSIONS = DOCLING_EXTENSIONS | PLAIN_TEXT_EXTENSIONS | IMAGE_EXTENSIONS
+def safe_path(root: Path, relative: str, *, directory=False):
+    path = PurePosixPath(relative)
+    if path.is_absolute() or ".." in path.parts or "\\" in relative:
+        raise ValueError("Invalid file path")
+    root = root.resolve()
+    current = root
+    for part in path.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("Symbolic links are not accessible")
+    resolved = current.resolve(strict=True)
+    if not resolved.is_relative_to(root) or (not directory and not resolved.is_file()):
+        raise ValueError("Not an allowed regular file")
+    return resolved
 
 
-@dataclass(frozen=True)
-class PendingAttachment:
-    id: str
-    name: str
-    content_type: str
-    size_bytes: int
-    original_path: str
-    parsed_markdown_path: str
-
-
-async def _read_bytes(upload: UploadFile) -> bytes:
-    raw = await upload.read()
-    if len(raw) > MAX_FILE_BYTES:
-        raise HTTPException(status_code=400, detail=f"File too large: {upload.filename}")
-    return raw
-
-
-def _extract_text_from_plain(raw: bytes, filename: str) -> str:
-    for encoding in ("utf-8", "utf-8-sig", "latin-1"):
-        try:
-            text = raw.decode(encoding)
-            return text[:MAX_TEXT_CHARS]
-        except UnicodeDecodeError:
-            continue
-    raise HTTPException(status_code=400, detail=f"Unsupported encoding: {filename}")
-
-
-def is_image_attachment(*, name: str, content_type: str | None = None) -> bool:
-    normalized_type = (content_type or "").lower()
-    if normalized_type.startswith("image/"):
-        return True
-    return Path(name).suffix.lower() in IMAGE_EXTENSIONS
-
-
-@lru_cache(maxsize=1)
-def _docling_converter():
+def open_regular(root: Path, relative: str):
+    # Open each component relative to an already-open directory (no symlink race).
+    parts = PurePosixPath(relative).parts
+    if (
+        not parts
+        or PurePosixPath(relative).is_absolute()
+        or ".." in parts
+        or "\\" in relative
+    ):
+        raise ValueError("Invalid file path")
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        from docling.document_converter import DocumentConverter
-    except Exception as exc:  # pragma: no cover
-        raise HTTPException(
-            status_code=500,
-            detail="Docling is not installed in the backend environment.",
-        ) from exc
-    return DocumentConverter()
-
-
-def _extract_text_with_docling(path: Path, filename: str) -> str:
-    converter = _docling_converter()
-    try:
-        result = converter.convert(
-            path,
-            max_num_pages=MAX_PDF_PAGES,
-            max_file_size=MAX_FILE_BYTES,
+        for part in parts[:-1]:
+            next_fd = os.open(
+                part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
+            )
+            os.close(fd)
+            fd = next_fd
+        result = os.open(
+            parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd
         )
-    except HTTPException:
+        if not stat.S_ISREG(os.fstat(result).st_mode):
+            os.close(result)
+            raise ValueError("Not a regular file")
+        return os.fdopen(result, "rb")
+    finally:
+        os.close(fd)
+
+
+def list_files(root: Path, relative=""):
+    parts = PurePosixPath(relative).parts
+    if PurePosixPath(relative).is_absolute() or ".." in parts or "\\" in relative:
+        raise ValueError("Invalid directory path")
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts:
+            child = os.open(
+                part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
+            )
+            os.close(fd)
+            fd = child
+        entries = []
+        for name in os.listdir(fd):
+            try:
+                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+                continue
+            directory = stat.S_ISDIR(info.st_mode)
+            entries.append(
+                dict(
+                    name=name,
+                    path=str(PurePosixPath(relative) / name),
+                    directory=directory,
+                    size=0 if directory else info.st_size,
+                )
+            )
+        return sorted(entries, key=lambda e: (not e["directory"], e["name"].lower()))
+    finally:
+        os.close(fd)
+
+
+async def save_upload(store, cid, upload: UploadFile, limit):
+    store.conversation(cid)
+    aid = uuid4().hex
+    name = Path((upload.filename or "attachment").replace("\\", "/")).name
+    name = "".join(c for c in name if c.isprintable())[:200] or "attachment"
+    path = store.root / "attachments" / cid / aid / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    size = 0
+    try:
+        with path.open("xb") as f:
+            while chunk := await upload.read(1024 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise ValueError("Attachment exceeds upload size limit")
+                f.write(chunk)
+        data = dict(
+            id=aid,
+            conversation_id=cid,
+            name=name,
+            content_type=upload.content_type or "application/octet-stream",
+            size=size,
+            path=str(path),
+        )
+        store.add_attachment(data)
+        return {k: v for k, v in data.items() if k != "path"}
+    except BaseException:
+        path.unlink(missing_ok=True)
         raise
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to parse attachment: {filename}") from exc
-
-    text = result.document.export_to_markdown().strip()
-    if not text:
-        text = f"[No extractable text in {filename}]"
-    return text[:MAX_TEXT_CHARS]
+    finally:
+        await upload.close()
 
 
-async def save_attachment(
-    *,
-    conversation_id: str,
-    upload: UploadFile,
-    attachments_root: Path,
-) -> PendingAttachment:
-    filename = upload.filename or "unnamed"
-    suffix = Path(filename).suffix.lower()
-    if suffix not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail=f"Unsupported file type: {filename}")
+def direct_input(attachment):
+    path = Path(attachment["path"])
+    suffix = path.suffix.lower()
+    mime = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".pdf": "application/pdf",
+    }.get(suffix)
+    if not mime or attachment["size"] > 20 * 1024 * 1024:
+        raise ValueError(
+            "Direct model input supports PNG, JPEG, WebP and PDF up to 20 MiB each"
+        )
+    raw = path.read_bytes()
+    signatures = {
+        ".png": b"\x89PNG\r\n\x1a\n",
+        ".jpg": b"\xff\xd8\xff",
+        ".jpeg": b"\xff\xd8\xff",
+        ".pdf": b"%PDF-",
+    }
+    if suffix in signatures and not raw.startswith(signatures[suffix]):
+        raise ValueError("File signature does not match its extension")
+    if suffix == ".webp" and not (raw.startswith(b"RIFF") and raw[8:12] == b"WEBP"):
+        raise ValueError("Invalid WebP")
+    data = f"data:{mime};base64," + base64.b64encode(raw).decode()
+    if suffix == ".pdf":
+        return dict(type="input_file", filename=attachment["name"], file_data=data)
+    return dict(type="input_image", image_url=data, detail="auto")
 
-    raw = await _read_bytes(upload)
-    attachment_id = str(uuid4())
-    attachment_dir = attachments_root / conversation_id / attachment_id
-    attachment_dir.mkdir(parents=True, exist_ok=True)
 
-    original_path = attachment_dir / f"original{suffix}"
-    original_path.write_bytes(raw)
-
-    if suffix in IMAGE_EXTENSIONS:
-        parsed_markdown = f"[Image attachment: {filename}]"
-    elif suffix in PLAIN_TEXT_EXTENSIONS:
-        parsed_markdown = _extract_text_from_plain(raw, filename)
-    else:
-        parsed_markdown = _extract_text_with_docling(original_path, filename)
-
-    parsed_markdown_path = attachment_dir / "parsed.md"
-    parsed_markdown_path.write_text(parsed_markdown, encoding="utf-8")
-
-    return PendingAttachment(
-        id=attachment_id,
-        name=filename,
-        content_type=upload.content_type or "application/octet-stream",
-        size_bytes=len(raw),
-        original_path=str(original_path),
-        parsed_markdown_path=str(parsed_markdown_path),
-    )
+def file_snapshot(root: Path):
+    """Metadata only: never reads document contents or follows directory symlinks."""
+    result = {}
+    for folder, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = [d for d in dirs if not (Path(folder) / d).is_symlink()]
+        for name in files:
+            p = Path(folder) / name
+            try:
+                info = p.lstat()
+                if stat.S_ISREG(info.st_mode):
+                    result[str(p.relative_to(root))] = (info.st_size, info.st_mtime_ns)
+            except FileNotFoundError:
+                continue
+    return result

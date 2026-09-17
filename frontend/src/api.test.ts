@@ -1,107 +1,30 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-import { extractAttachments, streamChat } from "./api";
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-});
-
-describe("api", () => {
-  it("uploads attachments with conversation_id and returns metadata only", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          files: [{ id: "att-1", name: "brief.md", content_type: "text/markdown", size_bytes: 42 }]
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const file = new File(["hello"], "brief.md", { type: "text/markdown" });
-    const result = await extractAttachments({ conversationId: "conv-1", files: [file] });
-
-    const [, init] = fetchMock.mock.calls[0];
-    const body = init?.body as FormData;
-    expect(body.get("conversation_id")).toBe("conv-1");
-    expect(body.getAll("files")).toHaveLength(1);
-    expect(result).toEqual([{ id: "att-1", name: "brief.md", content_type: "text/markdown", size_bytes: 42 }]);
-  });
-
-  it("sends attachment_ids separately from user_input during chat streaming", async () => {
-    const lines = [
-      JSON.stringify({
-        type: "skill_status",
-        status: "running",
-        skill_id: "todo_extractor",
-        stage: "parse_input",
-        label: "入力を分解しています"
+import { afterEach, expect, it, vi } from "vitest";
+import { events } from "./api";
+afterEach(() => vi.restoreAllMocks());
+it("decodes split UTF-8 NDJSON and a final unterminated line", async () => {
+  const bytes = new TextEncoder().encode(
+    "\n" +
+      JSON.stringify({ seq: 4, type: "text_delta", data: { text: "日本語" } }),
+  );
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          for (const byte of bytes) controller.enqueue(new Uint8Array([byte]));
+          controller.close();
+        },
       }),
-      JSON.stringify({
-        type: "ability_started",
-        ability_id: "todo_extractor",
-        ability_name: "Todo Extractor",
-        input_summary: "{\"task\":\"Summarize\"}"
-      }),
-      JSON.stringify({ type: "chunk", delta: "hello " }),
-      JSON.stringify({
-        type: "done",
-        conversation_id: "conv-1",
-        provider_id: "openai",
-        model: "gpt-5.4-2026-03-05",
-        message: {
-          role: "assistant",
-          content: "hello world",
-          artifacts: [],
-          skill_id: null,
-          attachments: []
-        }
-      })
-    ].join("\n");
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(lines, {
-        status: 200,
-        headers: { "Content-Type": "application/x-ndjson" }
-      })
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const onSkillStatus = vi.fn();
-    const onAgentEvent = vi.fn();
-
-    const done = await streamChat({
-      providerId: "openai",
-      model: "gpt-5.4-2026-03-05",
-      userInput: "Summarize",
-      attachmentIds: ["att-1", "att-2"],
-      conversationId: "conv-1",
-      onChunk: vi.fn(),
-      onSkillStatus,
-      onAgentEvent
-    });
-
-    const [, init] = fetchMock.mock.calls[0];
-    expect(JSON.parse(String(init?.body))).toMatchObject({
-      user_input: "Summarize",
-      attachment_ids: ["att-1", "att-2"],
-      conversation_id: "conv-1",
-      execution_mode: "direct",
-      ability_ids: null,
-      enable_web_tool: true
-    });
-    expect(done.message.attachments).toEqual([]);
-    expect(onSkillStatus).toHaveBeenCalledWith({
-      type: "skill_status",
-      status: "running",
-      skill_id: "todo_extractor",
-      stage: "parse_input",
-      label: "入力を分解しています"
-    });
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      type: "ability_started",
-      ability_id: "todo_extractor",
-      ability_name: "Todo Extractor",
-      input_summary: "{\"task\":\"Summarize\"}"
-    });
+    ),
+  );
+  const receive = vi.fn();
+  await events("r", 3, new AbortController().signal, receive);
+  expect(receive).toHaveBeenCalledWith({
+    seq: 4,
+    type: "text_delta",
+    data: { text: "日本語" },
   });
+  expect(fetch).toHaveBeenCalledWith(
+    "/api/runs/r/events?after=3",
+    expect.anything(),
+  );
 });

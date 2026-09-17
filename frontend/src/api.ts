@@ -1,237 +1,58 @@
-import type {
-  AttachmentSummary,
-  AuditNewsMetricsResponse,
-  ChatMessage,
-  ConversationInfo,
-  ConversationSummary,
-  ExecutionMode,
-  ModelInfo,
-  ProviderInfo,
-  ReasoningEffort,
-  StreamAgentEvent,
-  SkillInfo,
-  StreamSkillStatus,
-  StreamDone,
-  StreamEvent
-} from "./types";
+import type { AgentEvent } from "./types";
 
-export async function fetchProviders(): Promise<ProviderInfo[]> {
-  const response = await fetch("/api/providers");
-  if (!response.ok) throw new Error("Failed to load providers");
-  return response.json();
-}
-
-export async function fetchProviderModels(providerId: string): Promise<ModelInfo[]> {
-  const response = await fetch(`/api/providers/${providerId}/models`);
-  if (!response.ok) throw new Error("Failed to load models");
-  return response.json();
-}
-
-export async function fetchSkills(): Promise<SkillInfo[]> {
-  const response = await fetch("/api/skills");
-  if (!response.ok) throw new Error("Failed to load skills");
-  return response.json();
-}
-
-export async function fetchConversations(): Promise<ConversationSummary[]> {
-  const response = await fetch("/api/conversations");
-  if (!response.ok) throw new Error("Failed to load conversations");
-  return response.json();
-}
-
-export async function createConversation(): Promise<ConversationInfo> {
-  const response = await fetch("/api/conversations", { method: "POST" });
-  if (!response.ok) throw new Error("Failed to create conversation");
-  return response.json();
-}
-
-export async function deleteConversation(conversationId: string): Promise<void> {
-  const response = await fetch(`/api/conversations/${conversationId}`, { method: "DELETE" });
-  if (!response.ok) throw new Error("Failed to delete conversation");
-}
-
-export async function deleteAllConversations(): Promise<void> {
-  const response = await fetch("/api/conversations", { method: "DELETE" });
-  if (!response.ok) throw new Error("Failed to delete all conversations");
-}
-
-export async function fetchConversationMessages(conversationId: string): Promise<ChatMessage[]> {
-  const response = await fetch(`/api/conversations/${conversationId}/messages`);
-  if (!response.ok) throw new Error("Failed to load conversation messages");
-  return response.json();
-}
-
-export async function extractAttachments(params: {
-  conversationId: string;
-  files: File[];
-}): Promise<AttachmentSummary[]> {
-  const formData = new FormData();
-  formData.append("conversation_id", params.conversationId);
-  for (const file of params.files) formData.append("files", file);
-
-  const response = await fetch("/api/attachments/extract", {
-    method: "POST",
-    body: formData
+export async function api<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const response = await fetch(`/api${path}`, {
+    ...options,
+    headers: {
+      ...(options.body instanceof FormData
+        ? {}
+        : { "Content-Type": "application/json" }),
+      ...options.headers,
+    },
   });
-
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(body || "Failed to extract attachments");
+    const body = await response.json().catch(() => ({}));
+    throw new Error(
+      typeof body.detail === "string"
+        ? body.detail
+        : `Request failed (${response.status})`,
+    );
   }
-
-  const data = (await response.json()) as { files: AttachmentSummary[] };
-  return data.files;
+  return response.json();
 }
 
-function parseStreamBuffer(
-  buffer: string,
-  onEvent: (event: StreamEvent) => void
-): { rest: string; done: StreamDone | null } {
-  const lines = buffer.split("\n");
-  let doneEvent: StreamDone | null = null;
-
-  for (let i = 0; i < lines.length - 1; i += 1) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    const event = JSON.parse(line) as StreamEvent;
-    onEvent(event);
-
-    if (event.type === "done") doneEvent = event;
-    if (event.type === "error") throw new Error(event.message);
-  }
-
-  return {
-    rest: lines[lines.length - 1] ?? "",
-    done: doneEvent
-  };
-}
-
-export async function streamChat(params: {
-  providerId: string;
-  model: string;
-  userInput: string;
-  attachmentIds?: string[];
-  conversationId: string;
-  executionMode?: ExecutionMode;
-  abilityIds?: string[] | null;
-  skillId?: string;
-  temperature?: number | null;
-  reasoningEffort?: ReasoningEffort | null;
-  enableWebTool?: boolean;
-  signal?: AbortSignal;
-  onChunk: (delta: string) => void;
-  onSkillStatus?: (event: StreamSkillStatus) => void;
-  onAgentEvent?: (event: StreamAgentEvent) => void;
-}): Promise<StreamDone> {
-  const response = await fetch("/api/chat/stream", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    signal: params.signal,
-    body: JSON.stringify({
-      provider_id: params.providerId,
-      model: params.model,
-      user_input: params.userInput,
-      attachment_ids: params.attachmentIds ?? [],
-      conversation_id: params.conversationId,
-      execution_mode: params.executionMode ?? "direct",
-      ability_ids: params.abilityIds ?? null,
-      skill_id: params.skillId || null,
-      temperature: params.temperature ?? null,
-      reasoning_effort: params.reasoningEffort ?? null,
-      enable_web_tool: params.enableWebTool ?? true
-    })
+export async function events(
+  runId: string,
+  after: number,
+  signal: AbortSignal,
+  receive: (event: AgentEvent) => void,
+) {
+  const response = await fetch(`/api/runs/${runId}/events?after=${after}`, {
+    signal,
   });
-
-  if (!response.ok || !response.body) {
-    const body = await response.text();
-    throw new Error(body || "Streaming request failed");
-  }
-
+  if (!response.ok || !response.body)
+    throw new Error("実行履歴に接続できません");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let doneEvent: StreamDone | null = null;
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const parsed = parseStreamBuffer(buffer, (event) => {
-      if (event.type === "chunk") params.onChunk(event.delta);
-      if (event.type === "skill_status") params.onSkillStatus?.(event);
-      if (
-        event.type === "agent_status" ||
-        event.type === "ability_started" ||
-        event.type === "ability_completed" ||
-        event.type === "artifact" ||
-        event.type === "trace_ref"
-      ) {
-        params.onAgentEvent?.(event);
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += done
+        ? decoder.decode()
+        : decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) if (line.trim()) receive(JSON.parse(line));
+      if (done) {
+        if (buffer.trim()) receive(JSON.parse(buffer));
+        break;
       }
-    });
-    buffer = parsed.rest;
-    if (parsed.done) doneEvent = parsed.done;
+    }
+  } finally {
+    reader.releaseLock();
   }
-
-  if (!doneEvent) {
-    const parsed = parseStreamBuffer(`${buffer}\n`, (event) => {
-      if (event.type === "chunk") params.onChunk(event.delta);
-      if (event.type === "skill_status") params.onSkillStatus?.(event);
-      if (
-        event.type === "agent_status" ||
-        event.type === "ability_started" ||
-        event.type === "ability_completed" ||
-        event.type === "artifact" ||
-        event.type === "trace_ref"
-      ) {
-        params.onAgentEvent?.(event);
-      }
-    });
-    doneEvent = parsed.done;
-  }
-
-  if (!doneEvent) throw new Error("Stream ended without done event");
-  return doneEvent;
-}
-
-export async function submitSkillFeedback(params: {
-  conversationId: string;
-  runId: string;
-  itemId: string;
-  decision: string;
-  note?: string;
-}): Promise<void> {
-  const response = await fetch("/api/skill-feedback", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      conversation_id: params.conversationId,
-      run_id: params.runId,
-      item_id: params.itemId,
-      decision: params.decision,
-      note: params.note ?? null
-    })
-  });
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(body || "Failed to submit feedback");
-  }
-}
-
-export async function fetchAuditNewsMetrics(params?: {
-  from?: string;
-  to?: string;
-}): Promise<AuditNewsMetricsResponse> {
-  const query = new URLSearchParams();
-  if (params?.from) query.set("from", params.from);
-  if (params?.to) query.set("to", params.to);
-  const suffix = query.toString() ? `?${query.toString()}` : "";
-  const response = await fetch(`/api/skills/audit_news_action_brief/metrics${suffix}`);
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(body || "Failed to load metrics");
-  }
-  return response.json();
 }

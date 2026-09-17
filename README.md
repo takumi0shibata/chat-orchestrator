@@ -1,220 +1,107 @@
-# Chat Orchestrator
+# Local Responses Workspace
 
-OpenAI / Azure OpenAI / Anthropic / Google / DeepSeek など複数 Provider に対応した、拡張しやすいチャット基盤です。フロントエンドは TypeScript + Vite + React、バックエンドは Python + FastAPI です。
+OpenAI / Azure OpenAI **Responses API** とローカルDockerサンドボックスで動く、個人向けのファイル作業チャットです。React + FastAPI + SQLite。
 
-## 特徴
+モデルが作業フォルダを探索し、必要なファイルを読み、Shellで分析・編集・検証します。指定したフォルダはコンテナの `/workspace` と共有され、**編集は元ファイルに即時反映**されます。200ファイルを最初から全文抽出してモデルへ送る構成ではありません。
 
-- 会話履歴を SQLite (`backend/data/chat.db`) に永続化
-- Provider 抽象化: `backend/app/providers/` にクラスを追加すれば拡張可能
-- Skill 抽象化: `backend/skills/<skill_id>/skill.yaml` を正本としてローカル skill を追加可能
-- Ability 抽象化: 既存 skill を agentic runtime から呼び出せる能力単位として公開
-- OpenAI / Azure OpenAI の Responses API モデルに対応
-- OpenAI Agents SDK による agentic orchestration に対応
-- モデル能力差分を `backend/app/model_catalog.py` で一元管理
+## 起動
 
-## ディレクトリ構成
-
-- `backend/app`: API 本体
-- `backend/app/abilities_runtime`: Ability contract / legacy Skill wrapper
-- `backend/app/agent_runner.py`: OpenAI Agents SDK による agentic 実行
-- `backend/app/providers`: LLM Provider 実装
-- `backend/app/model_catalog.py`: モデル能力定義
-- `backend/app/skills_runtime`: Skill loader / validation
-- `backend/skills`: ローカル skill 実装
-- `docs/skill-template`: skill 追加用テンプレート
-- `frontend/src`: Vite フロントエンド
-
-## セットアップ
-
-前提: Python 3.11+, Node 20+, `uv`
+前提: macOS / Linux、Python 3.11以上、Node 20以上、uv、起動済みDocker DesktopまたはDocker Engine。標準ではCPU 4コア・メモリ8 GiBをコンテナに割り当てます。Windowsネイティブは対象外です。
 
 ```bash
 cp .env.example .env
+cp runtime.example.toml runtime.toml
+# .env にAPIキー、runtime.toml に既存作業フォルダの絶対パスを設定
 make setup-backend
-make dev-backend
 make setup-frontend
+make sandbox-build
+```
+
+2つのターミナルで起動します。
+
+```bash
+make dev-backend
 make dev-frontend
 ```
 
-アクセス先:
+[チャット](http://127.0.0.1:5173) / [API仕様](http://127.0.0.1:8000/docs)
 
-- Frontend: http://localhost:5173
-- Backend: http://localhost:8000
-- Backend Docs: http://localhost:8000/docs
+バックエンドはホスト上の単一プロセスで起動してください。複数ワーカーは禁止です。同一データディレクトリを使う二重起動はロックで拒否します。通常起動ではreloadを使わず、実行中の再起動を避けます。設定変更後は再起動してください。
 
-## モデル管理
+Docker Composeはイメージのビルド専用です (`docker compose --profile build build sandbox`)。バックエンドをDocker内で動かしたり、サンドボックスにDockerソケットを渡したりしません。
 
-OpenAI / Azure OpenAI のモデルは `backend/app/model_catalog.py` で管理します。
+## 使い方
 
-Responses API モデル例:
+1. サイドバーから登録済み作業フォルダを選び「新しい作業」。
+2. モデル・推論の深さを選び、必要なら標準Skills、モデル／データ、Remote MCP、Web検索を有効化。
+3. ファイル名や完成形を自然言語で指示。添付も利用できます。
+4. 現在工程と実行履歴で、実行コマンド・出力・所要時間・終了コードを確認。
+5. ファイルパネルを更新して成果物を確認・ダウンロード。
 
-```python
-ModelCapability(
-    id="gpt-5.4-2026-03-05",
-    label="GPT-5.4",
-    api_mode="responses",
-    supports_temperature=False,
-    supports_reasoning_effort=True,
-    default_temperature=None,
-    default_reasoning_effort="medium",
-    reasoning_effort_options=("none", "low", "medium", "high", "xhigh"),
-)
+ブラウザを閉じても実行はバックエンドで続きます。同じ会話を開くとイベントを再取得します。「停止」はバックエンドの処理とコンテナを停止します。停止・失敗時も反映済みの変更は残り、自動ロールバックはしません。同じ作業フォルダへの実行は順番待ちになり、別フォルダなら並行実行できます。別会話への切り替えは実行を停止しません。
+
+会話を削除しても元ファイルは削除されません。アプリ管理の添付も自動削除せず保持するため、不要になったものは停止中に `backend/data/agent/attachments/` から管理してください。
+
+## 設定
+
+`runtime.toml` はGit管理外です。[設定例](runtime.example.toml)を参照してください。
+
+- `workspaces`: ID・表示名・絶対パス。相互に重なるディレクトリは禁止。APIキーやアプリ設定・状態を含むフォルダは登録しないでください。
+- `skills`: 外部で用意した標準 `SKILL.md` を含むフォルダ。front matterの `name` / `description` を読み、Responsesのlocal shellへ渡します。読み取り専用の `/skills/<id>` に配置します。
+- `resources`: 事前ダウンロードしたNLPモデルやデータ等。実行ごとに選択し、読み取り専用の `/resources/<id>` に配置します。
+- `azure_models`: `model` に実際のモデルID、`deployment` にAzureのデプロイ名を記載。UIの名前とAPIへ渡すデプロイ名を分離しています。
+- `mcp_servers`: HTTPS URL、明示的な `allowed_tools`、任意の `authorization_env`。トークンはバックエンドの環境変数としてexportします。MCP実行はAPIの承認要求をチャットで許可／拒否します。
+
+Remote MCPはプロバイダ側から接続されるため、ローカルの `localhost` URLは利用できません。このリポジトリにMCPサーバーや業務API本体は含みません。モデルAPI・MCP・Web検索の通信と、ネットワーク無効のローカルサンドボックスは別経路です。
+
+ローカルShellではホスト型Skillsの `skill_reference` IDは使いません。標準Skills本体はユーザーが別途用意します。旧skill.yaml / skill.py のローダーや互換機能はありません。
+
+OpenAIの標準モデルは `gpt-5.6-sol`、追加モデルは `gpt-6-astra`。推論は標準 `medium`。Solは `none/low/medium/high/xhigh/max`、Astraは `low/medium/high/xhigh/max`。モデルの利用権限やAzureの対応状況は契約・デプロイに依存し、エラー時に別モデルへ自動切替しません。同じ会話内でのプロバイダ変更はできません。
+
+## 実行環境と添付
+
+[sandbox/](sandbox/)にアプリとは独立したPython依存ロックがあります。LibreOffice、Poppler、日本語フォント、Office/PDFライブラリ、NumPy、Pandas、Polars、SciPy、CPU版PyTorch、scikit-learn、Matplotlib、Seaborn、Transformers、Datasetsを含みます。初回ビルドは大きなダウンロードが発生します。
+
+- `/workspace`: 元ファイルを直接読み書きする領域。
+- `/input/<attachment-id>/<filename>`: アプリに添付した原本。読み取り専用。加工結果は `/workspace` に保存。
+- `/skills/<id>`、`/resources/<id>`: 選択したSkills／モデル・データ。読み取り専用。
+- `/tmp`: 実行終了で破棄される一時領域。
+
+コンテナは非root・ネットワーク無効・root filesystem読み取り専用・追加capabilityなしで起動します。APIキーやホストの環境変数は渡しません。コマンドは非対話実行です。NLPモデルは事前配置し、Transformers等はofflineモードで動かします。追加ライブラリは `sandbox/pyproject.toml` を変更し、`uv lock --project sandbox` とイメージ再ビルドで導入します。macOS DockerからMetal/MPSは利用しません。
+
+Doclingによる自動抽出はありません。通常の添付はShellで必要な部分を読みます。PNG/JPEG/WebP/PDFはUIで「モデルに直接添付」を選べます（1ファイル20 MiB、合計40 MiBまで、通常アップロードは1ファイル50 MiB）。直接添付するとその内容をResponsesへ送ります。ローカルShellで読んだ内容・出力もモデルに返されるため、ローカル実行は完全オフラインではありません。
+
+サンドボックスのルートfilesystemは隔離されていますが、登録した作業フォルダ内のファイルは編集・削除可能です。バックアップや版管理が必要な場合は別途用意してください。
+
+## 実行上限・保存
+
+`.env`で `COMMAND_TIMEOUT=600`、`RUN_TIMEOUT=3600`、`MAX_MODEL_ROUNDS=100`、`MAX_OUTPUT_CHARS=64000` 等を変更できます。出力はstdout/stderrごとに上限を設け、切り詰めを明示します。コマンドのタイムアウトはプロセスを残さずコンテナごと停止し、その実行を失敗として終了します。
+
+新しい保存先は `backend/data/agent/agent.db`。会話、実行、連番付きイベント、Responsesの完全な入出力（暗号化reasoningを含む）を保存します。旧 `backend/data/chat.db` は読み込み・移行・削除しません。
+
+Responsesは `store=false` で完全な入出力を再送し、既定100,000トークンを超えると次の往復前に `/responses/compact` を使います。未完了のShell呼び出しを再実行しないよう、文脈のチェックポイントはツール結果が揃ってから保存します。サーバー再起動時は中断実行を失敗扱いとし、そのコンテナを回収します。外部ファイルへの変更は維持されるため、再開時はファイルの現状を確認してください。
+
+## API
+
+- `GET /api/config`: プロバイダ・モデル・登録済み作業フォルダ／Skills／resources／MCP一覧。認証情報は返さない。
+- `GET/POST /api/conversations`、`GET/DELETE /api/conversations/{id}`
+- `POST /api/attachments`: `conversation_id` と複数 `files` のmultipart。
+- `GET /api/conversations/{id}/files?path=...`: フォルダ内のファイル一覧。
+- `GET /api/conversations/{id}/download?path=...`: 許可領域の通常ファイルを取得。
+- `POST /api/runs`、`GET /api/runs/{id}`
+- `GET /api/runs/{id}/events?after=<seq>`: NDJSONイベント購読・再取得。
+- `POST /api/runs/{id}/stop`
+- `POST /api/runs/{id}/approvals`: `request_id`、`approve`。
+
+ファイルAPIでは絶対パス・領域外参照・シンボリックリンクを拒否します。loopbackバインド、Host/Origin検証を行います。信頼された個人利用向けで、インターネット公開やマルチユーザー用の認証は実装していません。
+
+## 検証
+
+```bash
+make test
+make test-docker
+# 設定済みAPIキーを使う有料の最小実APIテスト
+cd backend && RUN_LIVE_TESTS=1 uv run pytest -m live -rs
 ```
 
-`POST /api/chat` / `POST /api/chat/stream` では `reasoning_effort` に `none | low | medium | high | xhigh` を指定できます。
-
-## Agentic 実行
-
-OpenAI / Azure OpenAI の Responses API モデルでは、`execution_mode: "agentic"` を指定すると OpenAI Agents SDK ベースの runtime が動きます。
-
-- `ability_ids: null`: 登録済み Ability をすべて候補として agent に渡し、必要なものを agent が選択します。
-- `ability_ids: ["todo_extractor"]`: 指定した Ability だけを agent に渡します。
-- `skill_id`: 後方互換の alias です。`execution_mode: "agentic"` では単一 Ability 指定として扱い、`execution_mode: "direct"` では従来の skill 先実行として扱います。
-- Anthropic / Google / DeepSeek は当面 `execution_mode: "direct"` の通常チャット経路で動きます。
-
-streaming では通常の `chunk` / `done` に加えて、Ability が実際に起動したときだけ次の agentic event が流れます。
-
-- `ability_started`: Ability 実行開始
-- `agent_status`: Ability に紐づく進捗
-- `ability_completed`: Ability 実行完了
-- `artifact`: Ability が生成した UI artifact
-- `trace_ref`: Agents SDK trace id
-
-UI は、通常応答では Thinking 表示だけを出し、Ability が実際に呼ばれた場合だけ Ability 名と現在工程を表示します。
-
-## Skill 追加方法
-
-skill は次の3点セットを必須にします。
-
-- `backend/skills/<skill_id>/skill.yaml`
-- `backend/skills/<skill_id>/skill.py`
-- `backend/skills/<skill_id>/README.md`
-
-`skill.yaml` が正本です。loader は manifest を読み込み、`skill.py` の factory を呼び、`README.md` の存在と metadata 整合性を検証します。欠落や不整合がある skill は起動時に失敗します。
-
-既存 skill は自動的に Ability としても公開されます。Ability は「1つの能力」を表す実行単位で、agentic runtime から function tool として呼び出されます。v1 では既存 `Skill.run()` を wrapper 経由で呼び出すため、既存 skill 実装はそのまま動きます。
-
-### 追加手順
-
-1. `docs/skill-template/` をコピーして新しい skill ディレクトリを作る
-2. `skill.yaml` の `id / name / description / primary_category / tags` を更新する
-3. `skill.py` に `build_skill()` と `run()` を実装する
-4. `README.md` に人間向けの使い方を書く
-5. `GET /api/skills` と対象テストで読み込みを確認する
-
-### `skill.yaml` テンプレート
-
-```yaml
-id: example_skill
-name: Example Skill
-description: 何をする skill かを1文で書く。
-primary_category:
-  id: general
-  label: General
-tags:
-  - general
-  - example
-entrypoint: skill.py
-factory: build_skill
-readme: README.md
-ability:
-  input_schema:
-    type: object
-    additionalProperties: true
-    properties:
-      task:
-        type: string
-        description: Ability に渡す補足指示。
-```
-
-`ability.input_schema` は任意です。未指定の場合は `task: string` を受け取れる緩い schema が使われます。agent が structured params を渡す必要がある Ability では、ここに JSON schema を定義してください。
-
-### `skill.py` テンプレート
-
-```python
-from typing import Any
-
-from app.skills_runtime.base import (
-    Skill,
-    SkillCategory,
-    SkillExecutionResult,
-    SkillMetadata,
-    context_only_result,
-    get_skill_progress,
-)
-
-
-class ExampleSkill(Skill):
-    metadata = SkillMetadata(
-        id="example_skill",
-        name="Example Skill",
-        description="何をする skill かを1文で書く。",
-        primary_category=SkillCategory(id="general", label="General"),
-        tags=["general", "example"],
-    )
-
-    async def run(
-        self,
-        user_text: str,
-        history: list[dict[str, str]],
-        skill_context: dict[str, Any] | None = None,
-    ) -> SkillExecutionResult:
-        progress = get_skill_progress(skill_context)
-        await progress.update(stage="inspect_input", label="入力を確認しています")
-        del history
-        await progress.update(stage="build_context", label="結果を整えています")
-        return context_only_result(f"Input: {user_text}")
-
-
-def build_skill() -> Skill:
-    return ExampleSkill()
-```
-
-skill 実行中に UI へ進捗ラベルを出したい場合は、`get_skill_progress(skill_context)` で reporter を取得し、`await progress.update(stage="snake_case", label="短い日本語ラベル")` を 2-5 箇所の粗い工程境界で呼んでください。未対応環境では no-op になります。
-
-### `README.md` テンプレート
-
-`docs/skill-template/README.md` を使ってください。少なくとも次の見出しを揃えます。
-
-- `概要`
-- `使う場面`
-- `必要設定`
-- `入力`
-- `出力 / Artifacts`
-- `実装メモ`
-
-## API 概要
-
-- `GET /api/providers`
-- `GET /api/providers/{provider_id}/models`
-- `GET /api/skills`
-- `GET /api/abilities`
-- `GET /api/conversations`
-- `POST /api/conversations`
-- `GET /api/conversations/{id}/messages`
-- `POST /api/attachments/extract`
-- `POST /api/chat`
-- `POST /api/chat/stream`
-- `POST /api/skill-feedback`
-
-`POST /api/chat/stream` body 例:
-
-```json
-{
-  "provider_id": "openai",
-  "model": "gpt-5.4-2026-03-05",
-  "conversation_id": "<conversation-id>",
-  "user_input": "こんにちは",
-  "attachment_ids": [],
-  "execution_mode": "agentic",
-  "ability_ids": null,
-  "reasoning_effort": "medium",
-  "temperature": null,
-  "enable_web_tool": false,
-  "skill_id": "todo_extractor"
-}
-```
-
-`POST /api/attachments/extract` は `multipart/form-data` で `conversation_id` と `files[]` を受け取り、原本ファイルと抽出 Markdown を backend の管理ディレクトリに保存します。通常チャットでは抽出 Markdown を LLM 文脈へ自動注入し、skill 実行時は自動注入せず `skill_context["attachments"]` 経由で `original_path` / `parsed_markdown_path` を参照できます。
-
-添付抽出は [Docling](https://docling-project.github.io/docling/) を優先利用します。初回のフォーマットによってはローカルモデル取得が走るので、Docker/本番環境では起動後最初の添付処理が少し遅くなる可能性があります。
+Dockerテストは200ファイル・元ファイル編集・Office/PDF・CPU分析・日本語グラフ・隔離・タイムアウト／停止を検証します。実APIテストは一時フォルダ内だけを編集します。指定モデルが利用できないアカウントでは理由付きでskipします。Azureの実APIテストは実デプロイを設定した環境で別途行ってください。

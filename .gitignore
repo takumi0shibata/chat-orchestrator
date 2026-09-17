@@ -18,3 +18,7 @@ frontend/dist/
 
 # OS
 .DS_Store
+
+# Local agent configuration and private state
+runtime.toml
+backend/data/agent/

@@ -1,215 +1,70 @@
-export type Role = "system" | "user" | "assistant";
-export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
-export type ExecutionMode = "direct" | "agentic";
-
-export interface Badge {
-  label: string;
-  tone: "neutral" | "low" | "medium" | "high";
-}
-
-export interface MetadataItem {
-  label: string;
-  value: string;
-}
-
-export interface CardLine {
-  label: string;
-  value: string;
-}
-
-export interface LinkItem {
-  label: string;
-  url: string;
-}
-
-export interface FeedbackChoice {
-  value: string;
-  label: string;
-}
-
-export interface FeedbackAction {
-  type: "feedback";
-  run_id: string;
-  item_id: string;
-  choices: FeedbackChoice[];
-  selected: string | null;
-}
-
-export interface CardItem {
-  id: string;
-  title: string;
-  badge?: Badge | null;
-  metadata: MetadataItem[];
-  lines: CardLine[];
-  links: LinkItem[];
-  actions: FeedbackAction[];
-}
-
-export interface CardSection {
-  id: string;
-  title: string;
-  badge?: Badge | null;
-  summary?: string | null;
-  empty_message?: string | null;
-  items: CardItem[];
-}
-
-export interface MarkdownBlock {
-  type: "markdown";
-  content: string;
-}
-
-export interface LineChartPoint {
-  time: string;
-  value: number;
-  raw: string | null;
-}
-
-export interface LineChartBlock {
-  type: "line_chart";
-  title: string;
-  frequency: string;
-  points: LineChartPoint[];
-}
-
-export interface CardListBlock {
-  type: "card_list";
-  title?: string | null;
-  sections: CardSection[];
-}
-
-export type UiBlock = MarkdownBlock | LineChartBlock | CardListBlock;
-
-export interface ChatMessage {
-  role: Role;
-  content: string;
-  artifacts: UiBlock[];
-  skill_id?: string | null;
-  attachments: AttachmentSummary[];
-}
-
-export interface ProviderInfo {
-  id: string;
-  label: string;
-  enabled: boolean;
-  default_model: string;
-}
-
-export interface ModelInfo {
-  id: string;
-  label: string;
-  api_mode: string;
-  supports_temperature: boolean;
-  supports_reasoning_effort: boolean;
-  supports_image_input: boolean;
-  default_temperature: number | null;
-  default_reasoning_effort: ReasoningEffort | null;
-  reasoning_effort_options: ReasoningEffort[];
-}
-
-export interface SkillCategoryInfo {
+export interface Named {
   id: string;
   label: string;
 }
-
-export interface SkillInfo {
+export interface Model {
   id: string;
-  name: string;
-  description: string;
-  primary_category: SkillCategoryInfo;
-  tags: string[];
-}
-
-export interface AuditNewsMetricsResponse {
-  total_alerts: number;
-  total_feedback: number;
-  acted_count: number;
-  action_rate: number;
-}
-
-export interface ConversationInfo {
-  id: string;
-}
-
-export interface ConversationSummary {
-  id: string;
-  title: string;
-  updated_at: string;
-  message_count: number;
-}
-
-export interface AttachmentSummary {
-  id: string;
-  name: string;
-  content_type: string;
-  size_bytes: number;
-}
-
-export interface StreamDone {
-  type: "done";
-  conversation_id: string;
-  provider_id: string;
   model: string;
-  message: ChatMessage;
-}
-
-export interface StreamChunk {
-  type: "chunk";
-  delta: string;
-}
-
-export interface StreamError {
-  type: "error";
-  message: string;
-}
-
-export interface StreamSkillStatus {
-  type: "skill_status";
-  status: "running" | "done";
-  skill_id: string;
-  stage: string;
   label: string;
+  efforts: string[];
 }
-
-export interface StreamAgentStatus {
-  type: "agent_status";
-  status: "running" | "done";
-  stage: string;
-  label: string;
-  ability_id?: string;
+export interface Provider extends Named {
+  enabled: boolean;
+  models: Model[];
 }
-
-export interface StreamAbilityStarted {
-  type: "ability_started";
-  ability_id: string;
-  ability_name: string;
-  input_summary: string;
+export interface Config {
+  providers: Provider[];
+  workspaces: (Named & { path: string })[];
+  skills: (Named & { name: string; description: string })[];
+  resources: Named[];
+  mcp_servers: Named[];
 }
-
-export interface StreamAbilityCompleted {
-  type: "ability_completed";
-  ability_id: string;
-  ability_name: string;
-  result_summary: string;
+export interface Conversation {
+  id: string;
+  title: string;
+  workspace_id: string;
+  provider?: string;
+  updated_at: string;
 }
-
-export interface StreamArtifact {
-  type: "artifact";
-  ability_id: string;
-  ability_name: string;
-  artifact: UiBlock;
+export interface RunRequest {
+  conversation_id: string;
+  provider: string;
+  model: string;
+  reasoning_effort: string;
+  input: string;
+  attachment_ids: string[];
+  direct_attachment_ids: string[];
+  skill_ids: string[];
+  resource_ids: string[];
+  mcp_ids: string[];
+  web_search: boolean;
 }
-
-export interface StreamTraceRef {
-  type: "trace_ref";
-  trace_id: string;
+export interface Run {
+  id: string;
+  conversation_id: string;
+  status: string;
+  request: RunRequest;
+  created_at: string;
+  updated_at: string;
 }
-
-export type StreamAgentEvent =
-  | StreamAgentStatus
-  | StreamAbilityStarted
-  | StreamAbilityCompleted
-  | StreamArtifact
-  | StreamTraceRef;
-
-export type StreamEvent = StreamChunk | StreamDone | StreamError | StreamSkillStatus | StreamAgentEvent;
+export interface AgentEvent {
+  run_id: string;
+  seq: number;
+  type: string;
+  data: Record<string, unknown>;
+  created_at: string;
+}
+export interface WorkspaceFile {
+  name: string;
+  path: string;
+  directory: boolean;
+  size: number;
+}
+export interface Attachment {
+  id: string;
+  name: string;
+  size: number;
+  content_type: string;
+}
+export const terminal = (status: string) =>
+  ["completed", "failed", "stopped"].includes(status);

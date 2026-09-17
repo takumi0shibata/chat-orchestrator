@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- OpenAI / Azure Responses API とローカルDockerサンドボックスに統一。
+- 標準Skills・Remote MCP・元ファイル編集・永続化した実行履歴と停止UIを追加。
+- 独自Skill/Ability、他社プロバイダ、Docling、旧API互換を削除。
+- 研究用CPU実行環境と200ファイルのDocker統合テストを追加。
+
 このプロジェクトの主な変更履歴を記録します。
 
 ## [Unreleased]
