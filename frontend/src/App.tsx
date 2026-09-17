@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import { api, events } from "./api";
 import { MarkdownContent } from "./components/MarkdownContent";
 import { terminal } from "./types";
@@ -13,16 +13,32 @@ import type {
 } from "./types";
 
 const statusLabels: Record<string, string> = {
-  preparing: "準備中",
-  model_wait: "モデル応答待ち",
-  command_running: "実行中",
-  approval_wait: "承認待ち",
-  completed: "完了",
-  failed: "失敗",
-  stopped: "停止",
+  preparing: "Preparing",
+  model_wait: "Waiting for model",
+  command_running: "Running command",
+  approval_wait: "Approval needed",
+  completed: "Completed",
+  failed: "Failed",
+  stopped: "Stopped",
 };
 const text = (value: unknown) =>
   typeof value === "string" ? value : JSON.stringify(value ?? "");
+const legacySystemLabels: Record<string, string> = {
+  "準備中": "Preparing",
+  "モデル応答待ち": "Waiting for model",
+  "コマンドを実行しています": "Running command",
+  "次の操作を判断しています": "Deciding the next action",
+  "作業が完了しました": "Work completed",
+  "作業フォルダの実行順を待っています": "Waiting for workspace availability",
+  "サンドボックスを起動しています": "Starting sandbox",
+  "長い会話の作業文脈を整理しています": "Organizing conversation context",
+  "作業文脈を圧縮しました": "Conversation context compacted",
+  "外部ツールの実行承認を待っています": "Waiting for external tool approval",
+  "停止しました。既に反映された変更は残ります": "Stopped. Applied changes remain.",
+  "実行時間の上限に達しました。変更済みファイルは保持されます": "Time limit reached. Modified files remain.",
+  "実行に失敗しました。履歴を確認してください": "Run failed. Check the activity log.",
+};
+const systemText = (value: unknown) => legacySystemLabels[text(value)] || text(value);
 
 function Choices({
   label,
@@ -64,12 +80,10 @@ function Choices({
 export function RunView({
   run,
   timeline,
-  onStop,
   onApproval,
 }: {
   run: Run;
   timeline: AgentEvent[];
-  onStop: () => void;
   onApproval: (id: string, approve: boolean) => Promise<void>;
 }) {
   const [clock, setClock] = useState(Date.now());
@@ -81,6 +95,7 @@ export function RunView({
     return () => clearInterval(timer);
   }, [run.status]);
   const lastStatus = [...timeline].reverse().find((e) => e.type === "status");
+  const currentStep = lastStatus ? systemText(lastStatus.data.label) : "Loading activity";
   const answer = timeline
     .filter((e) => e.type === "text_delta")
     .map((e) => text(e.data.text))
@@ -116,9 +131,9 @@ export function RunView({
     <article className="turn">
       <div className="user-message">
         <span className="eyebrow">YOU</span>
-        <p>{run.request.input || "添付ファイルを使用した作業"}</p>
+        <p>{run.request.input || "Work with attached files"}</p>
         {run.request.attachment_ids.length > 0 && (
-          <small>添付 {run.request.attachment_ids.length} 件</small>
+          <small>{run.request.attachment_ids.length} attachments</small>
         )}
       </div>
       <div className="assistant-message">
@@ -130,22 +145,17 @@ export function RunView({
           <span className="muted">
             {run.request.model} · {seconds}s
           </span>
-          {!terminal(run.status) && (
-            <button className="stop" onClick={onStop}>
-              停止
-            </button>
-          )}
         </div>
-        <div className="current-step" role="status">
-          {lastStatus
-            ? text(lastStatus.data.label)
-            : "実行履歴を読み込んでいます"}
-        </div>
+        {!terminal(run.status) && currentStep !== statusLabels[run.status] && (
+          <div className="current-step" role="status">
+            {currentStep}
+          </div>
+        )}
         {answer && <MarkdownContent content={answer} />}
         {!terminal(run.status) &&
           approvals.map((e) => (
             <div className="approval" key={e.seq}>
-              <strong>外部ツールの実行承認</strong>
+              <strong>Approve external tool</strong>
               <p>
                 {text(e.data.server_label)} / {text(e.data.name)}
               </p>
@@ -154,13 +164,13 @@ export function RunView({
                 disabled={pending !== null}
                 onClick={() => void approve(text(e.data.id), true)}
               >
-                許可
+                Allow
               </button>
               <button
                 disabled={pending !== null}
                 onClick={() => void approve(text(e.data.id), false)}
               >
-                拒否
+                Deny
               </button>
             </div>
           ))}
@@ -183,14 +193,14 @@ export function RunView({
               {((e.data.files as { path: string; change: string }[]) || []).map(
                 (f) =>
                   f.change === "deleted" ? (
-                    <span key={f.path}>{f.path} · 削除</span>
+                    <span key={f.path}>{f.path} · deleted</span>
                   ) : (
                     <a
                       key={f.path}
                       href={`/api/conversations/${run.conversation_id}/download?path=${encodeURIComponent(f.path)}`}
                       download
                     >
-                      ▤ {f.path} · {f.change === "created" ? "作成" : "更新"} ↓
+                      ▤ {f.path} · {f.change === "created" ? "created" : "updated"} ↓
                     </a>
                   ),
               )}
@@ -198,7 +208,7 @@ export function RunView({
           ))}
         <details className="activity">
           <summary>
-            実行履歴{" "}
+            Activity{" "}
             <span>
               {timeline.filter((e) => e.type === "command").length} commands
             </span>
@@ -234,8 +244,8 @@ export function RunView({
                         {done
                           ? `${text(done.data.outcome)} · ${Number(done.data.elapsed).toFixed(1)}s`
                           : terminal(run.status)
-                            ? "中断"
-                            : "実行中…"}
+                            ? "Interrupted"
+                            : "Running…"}
                       </small>
                     </div>
                   );
@@ -245,7 +255,7 @@ export function RunView({
                   <div className="activity-row" key={e.seq}>
                     <time>{new Date(e.created_at).toLocaleTimeString()}</time>
                     <span>
-                      {text(
+                      {systemText(
                         e.data.label || e.data.message || e.data.name || e.type,
                       )}
                     </span>
@@ -291,7 +301,10 @@ export function App() {
   const [error, setError] = useState("");
   const [connection, setConnection] = useState("");
   const [busy, setBusy] = useState(false);
+  const [plusOpen, setPlusOpen] = useState(false);
   const [loadedCid, setLoadedCid] = useState("");
+  const fileInput = useRef<HTMLInputElement>(null);
+  const plusWrap = useRef<HTMLDivElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
@@ -301,14 +314,13 @@ export function App() {
   );
   const activeRun = runs.find((r) => !terminal(r.status));
   const active = Boolean(activeRun);
-  const currentEvent = activeRun
-    ? [...(timelines[activeRun.id] || [])]
-        .reverse()
-        .find((e) => ["status", "command"].includes(e.type))
-    : undefined;
   const selectedProvider = config?.providers.find((p) => p.id === provider);
   const models = selectedProvider?.models || [];
   const selectedModel = models.find((m) => m.id === model);
+  const canSend = Boolean(
+    selectedProvider?.enabled && selectedModel && cid && loadedCid === cid &&
+    !busy && !active && (input.trim() || attachments.length),
+  );
 
   async function refreshConversations() {
     setConversations(await api<Conversation[]>("/conversations"));
@@ -349,10 +361,11 @@ export function App() {
           await events(run.id, cursor, abort.signal, (event) => {
             if (abort.signal.aborted || event.seq <= cursor) return;
             cursor = event.seq;
-            setTimelines((old) => ({
-              ...old,
-              [run.id]: [...(old[run.id] || []), event],
-            }));
+            setTimelines((old) => {
+              const existing = old[run.id] || [];
+              if (existing.some((item) => item.seq === event.seq)) return old;
+              return { ...old, [run.id]: [...existing, event] };
+            });
             if (event.type === "status") {
               setRuns((old) =>
                 old.map((r) =>
@@ -382,7 +395,7 @@ export function App() {
         } catch {
           if (abort.signal.aborted) return;
           setConnection(
-            "接続を復旧しています。実行はバックエンドで継続しています。",
+            "Reconnecting. The run continues on the server.",
           );
           await new Promise((resolve) => setTimeout(resolve, 1500));
         }
@@ -418,6 +431,8 @@ export function App() {
     setAttachments([]);
     setDirect([]);
     setInput("");
+    setPlusOpen(false);
+    setError("");
     follow.current = true;
   }, [cid]);
   useEffect(() => {
@@ -439,6 +454,14 @@ export function App() {
   useEffect(() => {
     if (follow.current) bottom.current?.scrollIntoView?.({ block: "end" });
   }, [timelines]);
+  useEffect(() => {
+    if (!plusOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!plusWrap.current?.contains(event.target as Node)) setPlusOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [plusOpen]);
 
   async function newConversation() {
     setBusy(true);
@@ -458,6 +481,7 @@ export function App() {
   }
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (!canSend) return;
     setError("");
     setBusy(true);
     follow.current = true;
@@ -487,6 +511,19 @@ export function App() {
       setError(String(e));
     } finally {
       setBusy(false);
+    }
+  }
+  function handleComposerKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    if (canSend) e.currentTarget.form?.requestSubmit();
+  }
+  async function stopRun() {
+    if (!activeRun) return;
+    try {
+      await api(`/runs/${activeRun.id}/stop`, { method: "POST" });
+    } catch (e) {
+      setError(String(e));
     }
   }
   async function upload(selected: FileList | null) {
@@ -528,7 +565,7 @@ export function App() {
           </span>
         </a>
         <label className="field-label" htmlFor="workspace">
-          作業フォルダ
+          Workspace
         </label>
         <select
           id="workspace"
@@ -546,9 +583,9 @@ export function App() {
           disabled={!workspace || busy}
           onClick={() => void newConversation()}
         >
-          ＋ 新しい作業
+          + New chat
         </button>
-        <div className="eyebrow section-label">履歴</div>
+        <div className="eyebrow section-label">History</div>
         <nav>
           {conversations.map((c) => (
             <div
@@ -557,16 +594,10 @@ export function App() {
             >
               <button disabled={busy} onClick={() => setCid(c.id)}>
                 {c.title}
-                <small>
-                  {
-                    config?.workspaces.find((w) => w.id === c.workspace_id)
-                      ?.label
-                  }
-                </small>
               </button>
               <button
                 className="delete"
-                aria-label={`${c.title}を削除`}
+                aria-label={`Delete ${c.title}`}
                 disabled={busy || (c.id === cid && active)}
                 onClick={() => void removeConversation(c.id)}
               >
@@ -578,28 +609,21 @@ export function App() {
         <div className="sidebar-footer">
           LOCAL EXECUTION
           <br />
-          <span>Docker · ネットワーク無効 · CPU</span>
+          <span>Docker · Network off · CPU</span>
         </div>
       </aside>
       <main className="main">
         <header className="topbar">
           <div>
-            <span className="eyebrow">LOCAL WORKSPACE</span>
-            <h1>{current?.title || "ファイルから、次の成果へ。"}</h1>
+            <h1>{current?.title || "Your workspace"}</h1>
           </div>
-          {currentWorkspace && (
-            <div className="workspace-badge">
-              <strong>{currentWorkspace.label}</strong>
-              <span>元ファイルを直接編集</span>
-            </div>
-          )}
           <button
             className="files-toggle"
             type="button"
             aria-expanded={showFiles}
             onClick={() => setShowFiles((v) => !v)}
           >
-            ファイル
+            Files
           </button>
         </header>
         <div
@@ -615,30 +639,30 @@ export function App() {
           {!cid ? (
             <div className="welcome">
               <div className="welcome-icon">◈</div>
-              <h2>調べる。分析する。仕上げる。</h2>
+              <h2>Explore, analyze, create.</h2>
               <p>
-                作業フォルダを選んで、新しい作業を始めましょう。
+                Choose a workspace and start a new chat.
                 <br />
-                必要なファイルを探索し、編集と検証まで進めます。
+                Ask the agent to inspect, edit, and check your files.
               </p>
               {!config?.workspaces.length && (
                 <p className="setup-note">
-                  runtime.example.toml を runtime.toml
-                  にコピーし、作業フォルダの絶対パスを設定してください。
+                  Copy runtime.example.toml to runtime.toml and set an absolute
+                  workspace path.
                 </p>
               )}
               <div className="examples">
-                <span>論文フォルダを調べて比較表を作成</span>
-                <span>CSVを分析して日本語グラフを保存</span>
-                <span>Word・Excelの内容を確認して修正</span>
+                <span>Compare papers in a research folder</span>
+                <span>Analyze a CSV and save a chart</span>
+                <span>Review and edit a Word or Excel file</span>
               </div>
             </div>
           ) : (
             <div className="chat-column">
               {runs.length === 0 && (
                 <div className="welcome compact">
-                  <h2>何に取り組みますか？</h2>
-                  <p>対象ファイルや完成形を自然言語で指示してください。</p>
+                  <h2>What would you like to work on?</h2>
+                  <p>Describe the files and the result you want.</p>
                 </div>
               )}
               {runs.map((run) => (
@@ -646,11 +670,6 @@ export function App() {
                   key={run.id}
                   run={run}
                   timeline={timelines[run.id] || []}
-                  onStop={() => {
-                    void api(`/runs/${run.id}/stop`, { method: "POST" }).catch(
-                      (e) => setError(String(e)),
-                    );
-                  }}
                   onApproval={async (id, approve) => {
                     await api(`/runs/${run.id}/approvals`, {
                       method: "POST",
@@ -665,196 +684,193 @@ export function App() {
         </div>
         {cid && (
           <form className="composer" onSubmit={submit}>
-            {activeRun && (
-              <div className="active-banner" role="status">
-                <span className="status command_running">
-                  <i />
-                  {statusLabels[activeRun.status]}
-                </span>
-                <span className="active-label">
-                  {currentEvent
-                    ? text(currentEvent.data.label || currentEvent.data.command)
-                    : "準備しています"}
-                </span>
-                <button
-                  type="button"
-                  className="stop"
-                  onClick={() => {
-                    void api(`/runs/${activeRun.id}/stop`, {
-                      method: "POST",
-                    }).catch((e) => setError(String(e)));
-                  }}
-                >
-                  停止
-                </button>
-              </div>
-            )}
             {connection && (
               <p className="connection" role="status">
                 {connection}
               </p>
             )}
-            <div className="attachments">
-              {attachments.map((a) => (
-                <div className="attachment" key={a.id}>
-                  <span>{a.name}</span>
-                  {/\.(pdf|png|jpe?g|webp)$/i.test(a.name) && (
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={direct.includes(a.id)}
-                        onChange={(e) =>
-                          setDirect((old) =>
-                            e.target.checked
-                              ? [...old, a.id]
-                              : old.filter((id) => id !== a.id),
-                          )
-                        }
-                      />
-                      モデルに直接添付
-                    </label>
-                  )}
+            <div className="composer-box">
+              <div className="attachments">
+                {attachments.map((a) => (
+                  <div className="attachment" key={a.id}>
+                    <span>{a.name}</span>
+                    {/\.(pdf|png|jpe?g|webp)$/i.test(a.name) && (
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={direct.includes(a.id)}
+                          onChange={(e) =>
+                            setDirect((old) =>
+                              e.target.checked
+                                ? [...old, a.id]
+                                : old.filter((id) => id !== a.id),
+                            )
+                          }
+                        />
+                        Send directly to model
+                      </label>
+                    )}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${a.name}`}
+                      onClick={() => {
+                        setAttachments((old) => old.filter((f) => f.id !== a.id));
+                        setDirect((old) => old.filter((id) => id !== a.id));
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <textarea
+                aria-label="Message"
+                placeholder="Ask anything"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleComposerKeyDown}
+                disabled={busy || active}
+                rows={3}
+              />
+              <div className="composer-actions">
+                <div className="plus-wrap" ref={plusWrap}>
                   <button
+                    className="plus-button"
                     type="button"
-                    aria-label={`${a.name}の添付を解除`}
-                    onClick={() => {
-                      setAttachments((old) => old.filter((f) => f.id !== a.id));
-                      setDirect((old) => old.filter((id) => id !== a.id));
-                    }}
+                    aria-label="Add attachments and tools"
+                    aria-expanded={plusOpen}
+                    onClick={() => setPlusOpen((v) => !v)}
+                    disabled={active || busy}
                   >
-                    ×
+                    +
                   </button>
+                  {plusOpen && (
+                    <div className="plus-menu" onKeyDown={(e) => {
+                      if (e.key === "Escape") setPlusOpen(false);
+                    }}>
+                      <button type="button" onClick={() => fileInput.current?.click()}>
+                        Attach files
+                      </button>
+                      <label className="check">
+                        <input
+                          type="checkbox"
+                          checked={web}
+                          onChange={(e) => setWeb(e.target.checked)}
+                        />
+                        Web Search
+                      </label>
+                      <Choices
+                        label="Skills"
+                        items={config?.skills || []}
+                        selected={skills}
+                        change={setSkills}
+                        disabled={active}
+                      />
+                      <Choices
+                        label="Resources"
+                        items={config?.resources || []}
+                        selected={resources}
+                        change={setResources}
+                        disabled={active}
+                      />
+                      <Choices
+                        label="Remote MCP"
+                        items={config?.mcp_servers || []}
+                        selected={mcps}
+                        change={setMcps}
+                        disabled={active}
+                      />
+                      <label className="provider-choice">
+                        Provider
+                        <select
+                          aria-label="Provider"
+                          value={provider}
+                          disabled={active || runs.length > 0}
+                          onChange={(e) => {
+                            setProvider(e.target.value);
+                            setModel(
+                              config?.providers.find((p) => p.id === e.target.value)
+                                ?.models[0]?.id || "",
+                            );
+                            setEffort("medium");
+                          }}
+                        >
+                          {config?.providers.map((p) => (
+                            <option key={p.id} value={p.id} disabled={!p.enabled}>
+                              {p.label}
+                              {!p.enabled ? " (unavailable)" : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  )}
                 </div>
-              ))}
-            </div>
-            <textarea
-              aria-label="指示"
-              placeholder="このフォルダで、何を進めますか？"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              disabled={busy || active}
-              rows={3}
-            />
-            <div className="composer-actions">
-              <label className="attach-button">
-                ＋ 添付
                 <input
+                  ref={fileInput}
+                  className="visually-hidden"
                   type="file"
                   multiple
                   disabled={!cid || busy || active}
                   onChange={(e) => {
                     void upload(e.target.files);
                     e.target.value = "";
+                    setPlusOpen(false);
                   }}
                 />
-              </label>
-              <select
-                aria-label="プロバイダ"
-                value={provider}
-                disabled={active || runs.length > 0}
-                onChange={(e) => {
-                  setProvider(e.target.value);
-                  setModel(
-                    config?.providers.find((p) => p.id === e.target.value)
-                      ?.models[0]?.id || "",
-                  );
-                  setEffort("medium");
-                }}
-              >
-                {config?.providers.map((p) => (
-                  <option key={p.id} value={p.id} disabled={!p.enabled}>
-                    {p.label}
-                    {!p.enabled ? "（未設定）" : ""}
-                  </option>
-                ))}
-              </select>
-              <select
-                aria-label="モデル"
-                value={model}
-                disabled={active}
-                onChange={(e) => {
-                  setModel(e.target.value);
-                  setEffort("medium");
-                }}
-              >
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-              <button
-                className="send"
-                disabled={
-                  !selectedProvider?.enabled ||
-                  !selectedModel ||
-                  !cid ||
-                  loadedCid !== cid ||
-                  busy ||
-                  active ||
-                  (!input.trim() && !attachments.length)
-                }
-              >
-                実行 ↑
-              </button>
-            </div>
-            <details className="settings">
-              <summary>推論・Skills・外部ツール</summary>
-              <div className="settings-grid">
-                <label>
-                  推論の深さ{" "}
+                <div className="composer-selection">
                   <select
-                    aria-label="推論の深さ"
+                    aria-label="Model"
+                    value={model}
+                    disabled={active}
+                    onChange={(e) => {
+                      setModel(e.target.value);
+                      setEffort("medium");
+                    }}
+                  >
+                    {models.map((m) => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                  <select
+                    aria-label="Reasoning effort"
                     value={effort}
                     disabled={active}
                     onChange={(e) => setEffort(e.target.value)}
                   >
                     {selectedModel?.efforts.map((v) => (
-                      <option key={v}>{v}</option>
+                      <option key={v} value={v}>{v}</option>
                     ))}
                   </select>
-                </label>
-                <label className="check">
-                  <input
-                    type="checkbox"
-                    checked={web}
-                    disabled={active}
-                    onChange={(e) => setWeb(e.target.checked)}
-                  />
-                  Web検索
-                </label>
-                <Choices
-                  label="Skills"
-                  items={config?.skills || []}
-                  selected={skills}
-                  change={setSkills}
-                  disabled={active}
-                />
-                <Choices
-                  label="モデル・データ"
-                  items={config?.resources || []}
-                  selected={resources}
-                  change={setResources}
-                  disabled={active}
-                />
-                <Choices
-                  label="Remote MCP"
-                  items={config?.mcp_servers || []}
-                  selected={mcps}
-                  change={setMcps}
-                  disabled={active}
-                />
+                </div>
+                {activeRun ? (
+                  <button
+                    className="send stop-send"
+                    type="button"
+                    aria-label="Stop"
+                    onClick={() => void stopRun()}
+                  >
+                    <span className="stop-square" />
+                  </button>
+                ) : (
+                  <button
+                    className="send"
+                    type="submit"
+                    aria-label="Send"
+                    disabled={!canSend}
+                  >
+                    ↑
+                  </button>
+                )}
               </div>
-            </details>
-            <p className="composer-note">
-              指定フォルダに直接保存します。停止しても反映済みの変更は残ります。
-            </p>
+            </div>
+            <p className="composer-note">Responses may contain mistakes.</p>
           </form>
         )}
         {error && (
           <div className="error-banner" role="alert">
             {error}
-            <button aria-label="エラーを閉じる" onClick={() => setError("")}>
+            <button aria-label="Dismiss error" onClick={() => setError("")}>
               ×
             </button>
           </div>
@@ -862,20 +878,20 @@ export function App() {
       </main>
       <aside className={`files-panel ${showFiles ? "is-open" : ""}`}>
         <div className="files-header">
-          <h2>ファイル</h2>
+          <h2>Files</h2>
           <button
             className="files-toggle"
             type="button"
             onClick={() => setShowFiles(false)}
           >
-            閉じる
+            Close
           </button>
           <button disabled={!cid} onClick={() => setFileRevision((v) => v + 1)}>
-            更新
+            Refresh
           </button>
         </div>
         <p className="workspace-path">
-          {currentWorkspace?.path || "作業フォルダ未選択"}
+          {currentWorkspace?.path || "No workspace selected"}
         </p>
         <div className="folder-path">/workspace{folder && `/${folder}`}</div>
         {folder && (
@@ -883,7 +899,7 @@ export function App() {
             className="file-row"
             onClick={() => setFolder(folder.split("/").slice(0, -1).join("/"))}
           >
-            ↰ 親フォルダへ
+            ↰ Parent folder
           </button>
         )}
         <div className="file-list">
@@ -911,7 +927,7 @@ export function App() {
           )}
         </div>
         <p className="files-note">
-          生成した成果物もここに表示されます。ファイル名を押すとダウンロードできます。
+          Created files appear here. Select a file to download it.
         </p>
       </aside>
     </div>

@@ -56,7 +56,7 @@ Remote MCPはプロバイダ側から接続されるため、ローカルの `lo
 
 ローカルShellではホスト型Skillsの `skill_reference` IDは使いません。標準Skills本体はユーザーが別途用意します。旧skill.yaml / skill.py のローダーや互換機能はありません。
 
-OpenAIの標準モデルは `gpt-5.6-sol`、追加モデルは `gpt-6-astra`。推論は標準 `medium`。Solは `none/low/medium/high/xhigh/max`、Astraは `low/medium/high/xhigh/max`。モデルの利用権限やAzureの対応状況は契約・デプロイに依存し、エラー時に別モデルへ自動切替しません。同じ会話内でのプロバイダ変更はできません。
+OpenAIの標準モデルは `gpt-5.6-sol`、追加モデルは `gpt-5.6-luna` と `gpt-6-astra`。推論は標準 `medium`。Solは `none/low/medium/high/xhigh/max`、LunaとAstraは `low/medium/high/xhigh/max`。モデルの利用権限やAzureの対応状況は契約・デプロイに依存し、エラー時に別モデルへ自動切替しません。同じ会話内でのプロバイダ変更はできません。
 
 ## 実行環境と添付
 

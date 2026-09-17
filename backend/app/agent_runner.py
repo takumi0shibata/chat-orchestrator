@@ -125,7 +125,7 @@ class RunManager:
             await asyncio.gather(task, return_exceptions=True)
         if self.store.run(rid)["status"] not in TERMINAL:
             self.store.status(
-                rid, "stopped", "停止しました。既に反映された変更は残ります"
+                rid, "stopped", "Stopped. Applied changes remain."
             )
 
     def approve(self, rid, approval):
@@ -171,7 +171,7 @@ class RunManager:
                     self.store.status(
                         run["id"],
                         "failed",
-                        "サーバー再起動により中断しました。変更済みファイルを確認してください",
+                        "Interrupted by a server restart. Check modified files.",
                     )
 
     async def shutdown(self):
@@ -199,14 +199,14 @@ class RunManager:
         lock = None
         workspace = None
         before_files = None
-        final_status, final_label = "completed", "作業が完了しました"
+        final_status, final_label = "completed", "Work completed"
         try:
             conversation = self.store.conversation(request.conversation_id)
             workspace = self.select(
                 self.config.workspaces, [conversation["workspace_id"]]
             )[0]
             lock = self.locks.setdefault(str(workspace.path), asyncio.Lock())
-            self.store.status(rid, "preparing", "作業フォルダの実行順を待っています")
+            self.store.status(rid, "preparing", "Waiting for workspace availability")
             await lock.acquire()
             acquired = True
             if str(workspace.path) in self.poisoned_workspaces:
@@ -225,24 +225,24 @@ class RunManager:
                     resources,
                     self.store.root / "attachments" / request.conversation_id,
                 )
-                self.store.status(rid, "preparing", "サンドボックスを起動しています")
+                self.store.status(rid, "preparing", "Starting sandbox")
                 await sandbox.start()
                 await self.loop(rid, request, sandbox, skills, resources)
         except asyncio.CancelledError:
             final_status, final_label = (
                 "stopped",
-                "停止しました。既に反映された変更は残ります",
+                "Stopped. Applied changes remain.",
             )
         except TimeoutError:
             final_status, final_label = (
                 "failed",
-                "実行時間の上限に達しました。変更済みファイルは保持されます",
+                "Time limit reached. Modified files remain.",
             )
         except Exception as error:
             self.store.event(rid, "error", dict(message=self.redact(str(error))[:4000]))
             final_status, final_label = (
                 "failed",
-                "実行に失敗しました。履歴を確認してください",
+                "Run failed. Check the activity log.",
             )
         finally:
             for key in list(self.approvals):
@@ -255,7 +255,7 @@ class RunManager:
                 except Exception:
                     final_status, final_label = (
                         "failed",
-                        "サンドボックスの終了を確認できません。Dockerの状態を確認してください",
+                        "Could not confirm sandbox shutdown. Check Docker status.",
                     )
                     self.store.event(rid, "error", dict(message=final_label))
                     self.poisoned_workspaces.add(str(workspace.path))
@@ -279,13 +279,13 @@ class RunManager:
                     self.store.event(
                         rid,
                         "artifacts",
-                        dict(files=changed, label=f"{len(changed)}件のファイル変更"),
+                        dict(files=changed, label=f"{len(changed)} file changes"),
                     )
                 except OSError:
                     self.store.event(
                         rid,
                         "error",
-                        dict(message="ファイル変更一覧を取得できませんでした"),
+                        dict(message="Could not list file changes"),
                     )
             if acquired:
                 lock.release()
@@ -336,7 +336,7 @@ class RunManager:
         for round_index in range(self.settings.max_model_rounds):
             if needs_compact:
                 self.store.status(
-                    rid, "model_wait", "長い会話の作業文脈を整理しています"
+                    rid, "model_wait", "Organizing the context of a long conversation"
                 )
                 compacted = await client.responses.compact(
                     model=request.model, input=context, instructions=instructions
@@ -346,9 +346,9 @@ class RunManager:
                     request.conversation_id, context, request.provider, request.model
                 )
                 self.store.event(
-                    rid, "compaction", dict(label="作業文脈を圧縮しました")
+                    rid, "compaction", dict(label="Conversation context compacted")
                 )
-            self.store.status(rid, "model_wait", "次の操作を判断しています")
+            self.store.status(rid, "model_wait", "Deciding the next action")
             self.store.event(rid, "round", dict(number=round_index + 1))
             stream = await client.responses.create(
                 model=request.model,
@@ -449,7 +449,7 @@ class RunManager:
                     future = asyncio.get_running_loop().create_future()
                     self.approvals[rid, approval_id] = future
                     self.store.status(
-                        rid, "approval_wait", "外部ツールの実行承認を待っています"
+                        rid, "approval_wait", "Waiting for external tool approval"
                     )
                     self.store.event(
                         rid,
@@ -473,7 +473,7 @@ class RunManager:
                 results = []
                 for index, command in enumerate(action["commands"]):
                     self.store.status(
-                        rid, "command_running", "コマンドを実行しています"
+                        rid, "command_running", "Running command"
                     )
                     self.store.event(
                         rid,
@@ -542,5 +542,5 @@ class RunManager:
             if not calls:
                 return
         raise RuntimeError(
-            "モデル往復の上限に達しました。変更済みファイルは保持されます"
+            "Model round limit reached. Modified files remain."
         )

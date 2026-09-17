@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -36,10 +37,16 @@ class Store:
                   content_type TEXT NOT NULL, size INTEGER NOT NULL, path TEXT NOT NULL);
             """)
 
+    @contextmanager
     def connect(self):
         c = sqlite3.connect(self.db, timeout=20)
-        c.row_factory = sqlite3.Row
-        return c
+        try:
+            c.row_factory = sqlite3.Row
+            # SQLite's context manager commits/rolls back but does not close.
+            with c:
+                yield c
+        finally:
+            c.close()
 
     def conversations(self):
         with self.connect() as c:

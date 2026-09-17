@@ -268,6 +268,7 @@ def test_same_workspace_serialized(tmp_path):
 
 def test_unknown_or_unsupported_models_rejected(tmp_path):
     m, _, _, req = setup(tmp_path, [])
+    m.validate(req.model_copy(update={"model": "gpt-5.6-luna", "reasoning_effort": "high"}))
     with pytest.raises(ValueError):
         m.validate(req.model_copy(update={"model": "other"}))
     with pytest.raises(ValueError):
