@@ -11,6 +11,10 @@ class ConversationCreate(Request):
     workspace_id: str
 
 
+class ConversationUpdate(Request):
+    pinned: bool
+
+
 class RunCreate(Request):
     conversation_id: str
     provider: Literal["openai", "azure_openai"] = "openai"

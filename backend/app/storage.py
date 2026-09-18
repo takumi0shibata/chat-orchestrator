@@ -37,6 +37,12 @@ class Store:
                   content_type TEXT NOT NULL, size INTEGER NOT NULL, path TEXT NOT NULL);
             """)
 
+            columns = {row[1] for row in c.execute("PRAGMA table_info(conversations)")}
+            if "pinned" not in columns:
+                c.execute(
+                    "ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
+                )
+
     @contextmanager
     def connect(self):
         c = sqlite3.connect(self.db, timeout=20)
@@ -48,14 +54,53 @@ class Store:
         finally:
             c.close()
 
-    def conversations(self):
+    def conversations(self, query=""):
+        needle = query.strip().casefold()
         with self.connect() as c:
-            return [
-                dict(r)
-                for r in c.execute(
-                    "SELECT id,workspace_id,title,updated_at FROM conversations ORDER BY updated_at DESC"
-                )
-            ]
+            rows = [dict(r) for r in c.execute(
+                "SELECT id,workspace_id,title,updated_at,pinned FROM conversations "
+                "ORDER BY pinned DESC,updated_at DESC,id"
+            )]
+            if needle:
+                matches = set()
+                for run in c.execute("SELECT id,conversation_id,request FROM runs"):
+                    if needle in json.loads(run["request"]).get("input", "").casefold():
+                        matches.add(run["conversation_id"])
+                        continue
+                    blocks = {}
+                    boundary = 0
+                    round_number = 0
+                    for event in c.execute(
+                        "SELECT type,data FROM events WHERE run_id=? "
+                        "AND type IN ('text_delta','round','response','command','tool','approval') "
+                        "ORDER BY seq", (run["id"],)
+                    ):
+                        data = json.loads(event["data"])
+                        if event["type"] == "round":
+                            round_number = data.get("number") or round_number + 1
+                            boundary += 1
+                        elif event["type"] == "response":
+                            round_number += 1
+                            boundary += 1
+                        elif event["type"] in ("command", "tool", "approval"):
+                            boundary += 1
+                        elif event["type"] == "text_delta":
+                            key = (
+                                data.get("round") or round_number,
+                                data.get("item_id") or f"anonymous-{boundary}",
+                            )
+                            blocks[key] = blocks.get(key, "") + data.get("text", "")
+                    if any(needle in value.casefold() for value in blocks.values()):
+                        matches.add(run["conversation_id"])
+                rows = [r for r in rows if needle in r["title"].casefold() or r["id"] in matches]
+        return [{**r, "pinned": bool(r["pinned"])} for r in rows]
+
+    def pin_conversation(self, cid, pinned):
+        with self.connect() as c:
+            result = c.execute("UPDATE conversations SET pinned=? WHERE id=?", (pinned, cid))
+            if not result.rowcount:
+                raise KeyError("Conversation not found")
+        return self.conversation(cid)
 
     def conversation(self, cid):
         with self.connect() as c:
@@ -64,6 +109,7 @@ class Store:
             raise KeyError("Conversation not found")
         result = dict(row)
         result["context"] = json.loads(result["context"])
+        result["pinned"] = bool(result["pinned"])
         return result
 
     def create_conversation(self, workspace_id):

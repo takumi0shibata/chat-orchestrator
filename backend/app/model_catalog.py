@@ -3,6 +3,10 @@ MODELS = {
         "label": "GPT-5.6 Sol",
         "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
     },
+    "gpt-5.6-terra": {
+        "label": "GPT-5.6 Terra",
+        "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+    },
     "gpt-5.6-luna": {
         "label": "GPT-5.6 Luna",
         "efforts": ["low", "medium", "high", "xhigh", "max"],

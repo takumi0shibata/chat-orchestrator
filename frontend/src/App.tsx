@@ -1,6 +1,7 @@
-import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, events } from "./api";
 import { MarkdownContent } from "./components/MarkdownContent";
+import { activityLabel, messageBlocks } from "./lib/timeline";
 import { terminal } from "./types";
 import type {
   AgentEvent,
@@ -25,6 +26,7 @@ const text = (value: unknown) =>
   typeof value === "string" ? value : JSON.stringify(value ?? "");
 const legacySystemLabels: Record<string, string> = {
   "準備中": "Preparing",
+  "実行を準備しています": "Preparing",
   "モデル応答待ち": "Waiting for model",
   "コマンドを実行しています": "Running command",
   "次の操作を判断しています": "Deciding the next action",
@@ -40,8 +42,10 @@ const legacySystemLabels: Record<string, string> = {
 };
 const systemText = (value: unknown) => legacySystemLabels[text(value)] || text(value);
 
-function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "check" | "close" | "spark"; size?: number }) {
+function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "check" | "close" | "spark" | "pin" | "panel-right"; size?: number }) {
   const paths = {
+    "panel-right": <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M15 4v16" /></>,
+    pin: <><path d="m8 3 8 0-1 6 3 3v2H6v-2l3-3-1-6Z" /><path d="M12 14v7" /></>,
     refresh: <><path d="M20 11a8 8 0 1 0-2.2 6.4" /><path d="M20 4v7h-7" /></>,
     paperclip: <path d="m20.5 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5l9.5-9.5a4 4 0 0 1 5.7 5.7l-9.5 9.5a2 2 0 0 1-2.8-2.8l8.8-8.8" />,
     globe: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" /></>,
@@ -106,12 +110,15 @@ export function RunView({
     const timer = setInterval(() => setClock(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [run.status]);
-  const lastStatus = [...timeline].reverse().find((e) => e.type === "status");
-  const currentStep = lastStatus ? systemText(lastStatus.data.label) : "Loading activity";
-  const answer = timeline
-    .filter((e) => e.type === "text_delta")
-    .map((e) => text(e.data.text))
-    .join("");
+  const blocks = messageBlocks(timeline, run.status);
+  const currentStep = systemText(activityLabel(timeline, run.status, blocks));
+  const activityEvents = [
+    ...timeline.filter((e) => !["text_delta", "command_output"].includes(e.type)),
+    ...blocks.filter((block) => block.progress).map((block) => ({
+      run_id: run.id, seq: block.seq, created_at: block.created_at,
+      type: "progress_message", data: { text: block.content } as Record<string, unknown>,
+    })),
+  ].sort((a, b) => a.seq - b.seq);
   const approvals = timeline.filter(
     (e) =>
       e.type === "approval" &&
@@ -152,18 +159,84 @@ export function RunView({
         <div className="run-heading">
           <span className={`status ${run.status}`}>
             <i />
-            {statusLabels[run.status] || run.status}
+            {terminal(run.status) ? statusLabels[run.status] : "Working"}
           </span>
           <span className="muted">
             {run.request.model} · {seconds}s
           </span>
         </div>
-        {!terminal(run.status) && currentStep !== statusLabels[run.status] && (
-          <div className="current-step" role="status">
-            {currentStep}
+        <details className="activity">
+          <summary>
+            <span className="activity-label" role={terminal(run.status) ? undefined : "status"}>{currentStep}</span>
+            <span className="activity-hint">{terminal(run.status) ? "View history" : "Activity"}</span>
+          </summary>
+          <div className="activity-body">
+            {activityEvents.map((e) => {
+                if (e.type === "progress_message") return (
+                  <div className="activity-message" key={e.seq}>
+                    <time>{new Date(e.created_at).toLocaleTimeString()}</time>
+                    <MarkdownContent content={text(e.data.text)} />
+                  </div>
+                );
+                if (e.type === "command") {
+                  const output = timeline.filter(
+                    (o) =>
+                      o.type === "command_output" &&
+                      o.data.call_id === e.data.call_id &&
+                      o.data.index === e.data.index,
+                  );
+                  const done = timeline.find(
+                    (o) =>
+                      o.type === "command_done" &&
+                      o.data.call_id === e.data.call_id &&
+                      o.data.index === e.data.index,
+                  );
+                  return (
+                    <div className="command" key={e.seq}>
+                      <pre className="command-code">
+                        $ {text(e.data.command)}
+                      </pre>
+                      {output.length > 0 && (
+                        <pre className="command-output">
+                          {output.map((o) => text(o.data.text)).join("")}
+                        </pre>
+                      )}
+                      <small>
+                        {done
+                          ? `${text(done.data.outcome)} · ${Number(done.data.elapsed).toFixed(1)}s`
+                          : terminal(run.status)
+                            ? "Interrupted"
+                            : "Running…"}
+                      </small>
+                    </div>
+                  );
+                }
+                if (e.type === "command_done") return null;
+                return (
+                  <div className="activity-row" key={e.seq}>
+                    <time>{new Date(e.created_at).toLocaleTimeString()}</time>
+                    <span>
+                      {systemText(
+                        e.type === "round" ? `Model turn ${text(e.data.number)}` :
+                        e.type === "response" ? (e.data.continues ? "Response received · continuing" : "Response received") :
+                        e.type === "tool" ? (e.data.type === "web_search_call" ? "Web search" : `Tool: ${text(e.data.name || e.data.server_label || e.data.type)}`) :
+                        e.type === "tool_result" ? `Tool result: ${text(e.data.name || e.data.type)}` :
+                        e.data.label || e.data.message || e.data.name || e.type,
+                      )}
+                    </span>
+                    {e.type === "tool_result" && (
+                      <pre>
+                        {text(e.data.output || e.data.error || e.data.status)}
+                      </pre>
+                    )}
+                  </div>
+                );
+              })}
           </div>
-        )}
-        {answer && <MarkdownContent content={answer} />}
+        </details>
+        {blocks.filter((block) => !block.progress).map((block) => (
+          <div className="answer-block" key={block.key}><MarkdownContent content={block.content} /></div>
+        ))}
         {!terminal(run.status) &&
           approvals.map((e) => (
             <div className="approval" key={e.seq}>
@@ -218,69 +291,7 @@ export function RunView({
               )}
             </div>
           ))}
-        <details className="activity">
-          <summary>
-            Activity{" "}
-            <span>
-              {timeline.filter((e) => e.type === "command").length} commands
-            </span>
-          </summary>
-          <div className="activity-body">
-            {timeline
-              .filter((e) => !["text_delta", "command_output"].includes(e.type))
-              .map((e) => {
-                if (e.type === "command") {
-                  const output = timeline.filter(
-                    (o) =>
-                      o.type === "command_output" &&
-                      o.data.call_id === e.data.call_id &&
-                      o.data.index === e.data.index,
-                  );
-                  const done = timeline.find(
-                    (o) =>
-                      o.type === "command_done" &&
-                      o.data.call_id === e.data.call_id &&
-                      o.data.index === e.data.index,
-                  );
-                  return (
-                    <div className="command" key={e.seq}>
-                      <pre className="command-code">
-                        $ {text(e.data.command)}
-                      </pre>
-                      {output.length > 0 && (
-                        <pre className="command-output">
-                          {output.map((o) => text(o.data.text)).join("")}
-                        </pre>
-                      )}
-                      <small>
-                        {done
-                          ? `${text(done.data.outcome)} · ${Number(done.data.elapsed).toFixed(1)}s`
-                          : terminal(run.status)
-                            ? "Interrupted"
-                            : "Running…"}
-                      </small>
-                    </div>
-                  );
-                }
-                if (e.type === "command_done") return null;
-                return (
-                  <div className="activity-row" key={e.seq}>
-                    <time>{new Date(e.created_at).toLocaleTimeString()}</time>
-                    <span>
-                      {systemText(
-                        e.data.label || e.data.message || e.data.name || e.type,
-                      )}
-                    </span>
-                    {e.type === "tool_result" && (
-                      <pre>
-                        {text(e.data.output || e.data.error || e.data.status)}
-                      </pre>
-                    )}
-                  </div>
-                );
-              })}
-          </div>
-        </details>
+
       </div>
     </article>
   );
@@ -289,6 +300,12 @@ export function RunView({
 export function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<Conversation[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const [pinPending, setPinPending] = useState<string[]>([]);
+  const [historyRevision, setHistoryRevision] = useState(0);
   const [cid, setCid] = useState(
     localStorage.getItem("workspace-conversation") || "",
   );
@@ -308,13 +325,15 @@ export function App() {
   const [revision, setRevision] = useState(0);
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [folder, setFolder] = useState("");
-  const [showFiles, setShowFiles] = useState(false);
+  const [showFiles, setShowFiles] = useState(() => window.innerWidth > 1100);
   const [fileRevision, setFileRevision] = useState(0);
   const [error, setError] = useState("");
   const [connection, setConnection] = useState("");
   const [busy, setBusy] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
   const [loadedCid, setLoadedCid] = useState("");
+  const filesToggle = useRef<HTMLButtonElement>(null);
+  const messageInput = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const plusWrap = useRef<HTMLDivElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
@@ -343,7 +362,57 @@ export function App() {
 
   async function refreshConversations() {
     setConversations(await api<Conversation[]>("/conversations"));
+    setHistoryRevision((value) => value + 1);
   }
+  useEffect(() => {
+    const abort = new AbortController();
+    setSearchResults(null);
+    setSearchError("");
+    if (!query.trim()) { setSearching(false); return; }
+    setSearching(true);
+    const timer = setTimeout(() => {
+      api<Conversation[]>(`/conversations?q=${encodeURIComponent(query.trim())}`, { signal: abort.signal })
+        .then((results) => { if (!abort.signal.aborted) setSearchResults(results); })
+        .catch((e) => { if (!abort.signal.aborted) setSearchError(String(e)); })
+        .finally(() => { if (!abort.signal.aborted) setSearching(false); });
+    }, 250);
+    return () => { clearTimeout(timer); abort.abort(); };
+  }, [query, historyRevision]);
+
+  useLayoutEffect(() => {
+    const element = messageInput.current;
+    if (!element) return;
+    const resize = () => {
+      const max = Math.min(240, window.innerHeight * 0.35);
+      element.style.height = "0px";
+      element.style.height = `${Math.min(max, Math.max(Math.min(82, max), element.scrollHeight))}px`;
+      element.style.overflowY = element.scrollHeight > max ? "auto" : "hidden";
+    };
+    resize();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(resize) : null;
+    if (element.parentElement) observer?.observe(element.parentElement);
+    window.addEventListener("resize", resize);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", resize); };
+  }, [input, cid]);
+
+  async function togglePin(conversation: Conversation) {
+    const pinned = !conversation.pinned;
+    const update = (items: Conversation[] | null, value: boolean) => items?.map((item) => item.id === conversation.id ? { ...item, pinned: value } : item) ?? null;
+    setPinPending((ids) => [...ids, conversation.id]);
+    setConversations((items) => update(items, pinned) || []);
+    setSearchResults((items) => update(items, pinned));
+    try {
+      await api(`/conversations/${conversation.id}`, { method: "PATCH", body: JSON.stringify({ pinned }) });
+      setHistoryRevision((value) => value + 1);
+    } catch (e) {
+      setConversations((items) => update(items, !pinned) || []);
+      setSearchResults((items) => update(items, !pinned));
+      setError(String(e));
+    } finally {
+      setPinPending((ids) => ids.filter((id) => id !== conversation.id));
+    }
+  }
+
   async function refreshConfig() {
     try {
       setConfig(await api<Config>("/config"));
@@ -582,7 +651,20 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${showFiles ? "with-files" : "without-files"}`}>
+      <button
+        ref={filesToggle}
+        className="panel-toggle"
+        type="button"
+        aria-label={showFiles ? "Hide files panel" : "Show files panel"}
+        title={showFiles ? "Hide files panel" : "Show files panel"}
+        aria-controls="files-panel"
+        aria-expanded={showFiles}
+        onClick={() => setShowFiles((value) => !value)}
+        onKeyDown={(event) => { if (event.key === "Escape") setShowFiles(false); }}
+      >
+        <Icon name="panel-right" size={20} />
+      </button>
       <aside className="sidebar">
         <a className="brand" href="/">
           ◈{" "}
@@ -612,25 +694,24 @@ export function App() {
           + New chat
         </button>
         <div className="eyebrow section-label">History</div>
-        <nav>
-          {conversations.map((c) => (
-            <div
-              className={`conversation ${c.id === cid ? "selected" : ""}`}
-              key={c.id}
-            >
-              <button disabled={busy} onClick={() => setCid(c.id)}>
-                {c.title}
-              </button>
-              <button
-                className="delete"
-                aria-label={`Delete ${c.title}`}
-                disabled={busy || (c.id === cid && active)}
-                onClick={() => void removeConversation(c.id)}
-              >
-                ×
-              </button>
-            </div>
-          ))}
+        <input className="history-search" type="search" aria-label="Search history" placeholder="Search history" value={query} onChange={(e) => setQuery(e.target.value)} />
+        {searching && <small role="status">Searching…</small>}
+        {searchError && <small role="alert">{searchError}</small>}
+        <nav aria-label="History">
+          {[true, false].map((pinned) => {
+            const items = (query.trim() ? searchResults || [] : conversations)
+              .filter((c) => Boolean(c.pinned) === pinned)
+              .sort((a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id));
+            return items.length > 0 && <div className="history-group" key={String(pinned)}>
+              <div className="eyebrow history-group-label">{pinned ? "Pinned" : "Recent"}</div>
+              {items.map((c) => <div className={`conversation ${c.id === cid ? "selected" : ""}`} key={c.id}>
+                <button disabled={busy} onClick={() => setCid(c.id)}>{c.title}</button>
+                <button className="history-action pin" aria-label={`${c.pinned ? "Unpin" : "Pin"} ${c.title}`} aria-pressed={Boolean(c.pinned)} disabled={pinPending.includes(c.id)} onClick={() => void togglePin(c)}><Icon name="pin" size={14} /></button>
+                <button className="history-action delete" aria-label={`Delete ${c.title}`} disabled={busy || pinPending.includes(c.id) || (c.id === cid && active)} onClick={() => void removeConversation(c.id)}>×</button>
+              </div>)}
+            </div>;
+          })}
+          {query.trim() && !searching && !searchError && searchResults?.length === 0 && <p className="muted">No matching conversations</p>}
         </nav>
         <div className="sidebar-footer">
           LOCAL EXECUTION
@@ -639,19 +720,7 @@ export function App() {
         </div>
       </aside>
       <main className="main">
-        <header className="topbar">
-          <div>
-            <h1>{current?.title || "Your workspace"}</h1>
-          </div>
-          <button
-            className="files-toggle"
-            type="button"
-            aria-expanded={showFiles}
-            onClick={() => setShowFiles((v) => !v)}
-          >
-            Files
-          </button>
-        </header>
+
         <div
           className="chat-scroll"
           ref={scroll}
@@ -750,6 +819,7 @@ export function App() {
                 ))}
               </div>
               <textarea
+                ref={messageInput}
                 aria-label="Message"
                 placeholder="Ask anything"
                 value={input}
@@ -916,16 +986,19 @@ export function App() {
           </div>
         )}
       </main>
-      <aside className={`files-panel ${showFiles ? "is-open" : ""}`}>
+      <aside
+        id="files-panel"
+        aria-label="Files"
+        className={`files-panel ${showFiles ? "is-open" : ""}`}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            setShowFiles(false);
+            filesToggle.current?.focus();
+          }
+        }}
+      >
         <div className="files-header">
           <h2>Files</h2>
-          <button
-            className="files-toggle"
-            type="button"
-            onClick={() => setShowFiles(false)}
-          >
-            Close
-          </button>
           <button className="refresh-files" type="button" aria-label="Refresh files" title="Refresh files" disabled={!cid} onClick={() => setFileRevision((v) => v + 1)}>
             <Icon name="refresh" size={17} />
           </button>

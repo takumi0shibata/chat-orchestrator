@@ -221,3 +221,88 @@ it("uses the composer button as the only stop control for an active run", async 
   fireEvent.click(stop);
   await waitFor(() => expect(fetchMock.mock.calls.some(([url, options]) => url === "/api/runs/r/stop" && options?.method === "POST")).toBe(true));
 });
+
+it("moves provisional text to expandable Activity and keeps the final Markdown separate", () => {
+  const initial = [event(1, "round", { number: 1 }), event(2, "text_delta", { item_id: "a", text: "Checking files" })];
+  const { container, rerender } = render(<RunView run={{ ...run, status: "model_wait" }} timeline={initial} onApproval={vi.fn()} />);
+  expect(container.querySelector(".answer-block")).toHaveTextContent("Checking files");
+  const timeline = [...initial, event(3, "response", { round: 1, continues: true, final_item_ids: [] }),
+    event(4, "round", { number: 2 }), event(5, "text_delta", { item_id: "b", text: "**Final result**" }),
+    event(6, "response", { round: 2, final_item_ids: ["b"], continues: false })];
+  rerender(<RunView run={run} timeline={timeline} onApproval={vi.fn()} />);
+  expect(container.querySelectorAll(".answer-block")).toHaveLength(1);
+  expect(container.querySelector(".answer-block strong")).toHaveTextContent("Final result");
+  expect(container.querySelector(".activity-message")).toHaveTextContent("Checking files");
+  fireEvent.click(screen.getByText("Activity"));
+  expect(container.querySelector("details")).toHaveAttribute("open");
+});
+
+it("searches with debounce, ignores stale responses, preserves the open chat, and rolls back failed pinning", async () => {
+  const c = { id: "c", title: "Current chat", workspace_id: "w", updated_at: run.updated_at, pinned: false };
+  const other = { ...c, id: "other", title: "Matched by body" };
+  localStorage.setItem("workspace-conversation", "c");
+  let finishOld: ((response: Response) => void) | undefined;
+  let failPin = false;
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
+    const url = String(input);
+    let body: unknown = {};
+    if (url === "/api/config") body = { providers: [], workspaces: [{ id: "w", label: "Work" }], skills: [], resources: [], mcp_servers: [] };
+    else if (url === "/api/conversations") body = [c, other];
+    else if (url === "/api/conversations?q=old") return new Promise<Response>((resolve) => { finishOld = resolve; });
+    else if (url === "/api/conversations?q=new") body = [other];
+    else if (url === "/api/conversations/c" && options?.method === "PATCH") {
+      if (failPin) return new Response(JSON.stringify({ detail: "Pin failed" }), { status: 500 });
+      body = { ...c, pinned: true };
+    }
+    else if (url === "/api/conversations/c") body = { ...c, runs: [] };
+    else if (url.includes("/files")) body = [];
+    return new Response(JSON.stringify(body));
+  });
+  render(<App />);
+  await screen.findByRole("button", { name: "Current chat" });
+  await screen.findByRole("textbox", { name: "Message" });
+  expect(screen.queryByRole("heading", { name: "Current chat" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Pin Current chat" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Unpin Current chat" })).toBeEnabled());
+  failPin = true;
+  fireEvent.click(screen.getByRole("button", { name: "Unpin Current chat" }));
+  await screen.findByText(/Pin failed/);
+  expect(screen.getByRole("button", { name: "Unpin Current chat" })).toBeInTheDocument();
+  const search = screen.getByRole("searchbox", { name: "Search history" });
+  fireEvent.change(search, { target: { value: "old" } });
+  expect(fetchMock.mock.calls.some(([url]) => url === "/api/conversations?q=old")).toBe(false);
+  await waitFor(() => expect(finishOld).toBeDefined());
+  fireEvent.change(search, { target: { value: "new" } });
+  await screen.findByRole("button", { name: "Matched by body" });
+  finishOld!(new Response(JSON.stringify([c])));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Current chat" })).not.toBeInTheDocument());
+  expect(localStorage.getItem("workspace-conversation")).toBe("c");
+  expect(screen.getByRole("textbox", { name: "Message" })).toBeInTheDocument();
+  fireEvent.change(search, { target: { value: "" } });
+  await screen.findByRole("button", { name: "Current chat" });
+});
+
+it("opens and closes Files from the same panel icon even before selecting a chat", async () => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => new Response(JSON.stringify(
+    String(input) === "/api/config"
+      ? { providers: [], workspaces: [], skills: [], resources: [], mcp_servers: [] }
+      : [],
+  )));
+  const { container } = render(<App />);
+  const toggle = screen.getByRole("button", { name: /files panel/ });
+  expect(toggle).toHaveAttribute("aria-controls", "files-panel");
+  expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
+  expect(container.querySelector(".composer .panel-toggle")).toBeNull();
+  if (toggle.getAttribute("aria-expanded") === "true") fireEvent.click(toggle);
+  expect(toggle).toHaveAccessibleName("Show files panel");
+  fireEvent.click(toggle);
+  expect(screen.getByRole("button", { name: "Hide files panel" })).toBe(toggle);
+  expect(container.querySelector("#files-panel")).toHaveClass("is-open");
+  fireEvent.keyDown(container.querySelector("#files-panel")!, { key: "Escape" });
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(toggle).toHaveFocus();
+  fireEvent.click(toggle);
+  fireEvent.click(toggle);
+  expect(container.querySelector("#files-panel")).not.toHaveClass("is-open");
+  await waitFor(() => expect(screen.getByText("Explore, analyze, create.")).toBeInTheDocument());
+});

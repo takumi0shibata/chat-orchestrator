@@ -369,7 +369,9 @@ class RunManager:
                             rid,
                             "text_delta",
                             dict(
-                                text=event.delta, item_id=getattr(event, "item_id", "")
+                                text=event.delta,
+                                item_id=getattr(event, "item_id", ""),
+                                round=round_index + 1,
                             ),
                         )
                     elif kind == "response.output_item.added":
@@ -435,14 +437,36 @@ class RunManager:
                 usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
                 >= self.settings.compact_token_threshold
             )
-            self.store.event(
-                rid, "response", dict(response_id=response.id, usage=usage)
-            )
             calls = [
                 item
                 for item in output
                 if item["type"] in ("shell_call", "mcp_approval_request")
             ]
+            last_tool_index = max(
+                (
+                    i for i, item in enumerate(output)
+                    if item["type"] in (
+                        "shell_call", "mcp_approval_request", "web_search_call",
+                        "mcp_call", "mcp_list_tools",
+                    )
+                ),
+                default=-1,
+            )
+            self.store.event(
+                rid,
+                "response",
+                dict(
+                    response_id=response.id,
+                    usage=usage,
+                    round=round_index + 1,
+                    final_item_ids=[
+                        item["id"] for i, item in enumerate(output)
+                        if item["type"] == "message" and i > last_tool_index
+                        and item.get("phase") != "commentary"
+                    ] if not calls else [],
+                    continues=bool(calls),
+                ),
+            )
             for item in calls:
                 if item["type"] == "mcp_approval_request":
                     approval_id = item["id"]

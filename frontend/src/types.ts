@@ -20,6 +20,7 @@ export interface Config {
   mcp_servers: Named[];
 }
 export interface Conversation {
+  pinned?: boolean;
   id: string;
   title: string;
   workspace_id: string;

@@ -75,3 +75,39 @@ def test_repeated_event_polling_does_not_exhaust_file_descriptors(tmp_path):
         timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_history_search_and_pin_persistence(tmp_path):
+    store = Store(tmp_path)
+    first = store.create_conversation("work")["id"]
+    second = store.create_conversation("work")["id"]
+    run = store.create_run({"conversation_id": first, "input": "Review PAPER " + "x" * 70 + "本文のみ検索"})
+    store.event(run["id"], "text_delta", {"item_id": "a", "text": "日本語の"})
+    store.event(run["id"], "text_delta", {"item_id": "a", "text": "添削結果"})
+    store.event(run["id"], "command_output", {"text": "output-only-secret"})
+    store.event(run["id"], "text_delta", {"item_id": "b", "text": "別の発言"})
+    assert [c["id"] for c in store.conversations("語の添削")] == [first]
+    assert [c["id"] for c in store.conversations("paper")] == [first]
+    assert [c["id"] for c in store.conversations("本文のみ検索")] == [first]
+    assert store.conversations("output-only-secret") == []
+    assert store.conversations("結果別の") == []
+    stamp = store.conversation(second)["updated_at"]
+    store.pin_conversation(second, True)
+    restored = Store(tmp_path)
+    assert restored.conversations()[0]["id"] == second
+    assert restored.conversation(second)["pinned"] is True
+    assert restored.conversation(second)["updated_at"] == stamp
+    restored.pin_conversation(second, False)
+    assert restored.conversation(second)["pinned"] is False
+    with pytest.raises(KeyError):
+        restored.pin_conversation("missing", True)
+
+
+def test_migrates_existing_history_without_data_loss(tmp_path):
+    with sqlite3.connect(tmp_path / "agent.db") as c:
+        c.execute("CREATE TABLE conversations (id TEXT PRIMARY KEY, workspace_id TEXT, title TEXT, created_at TEXT, updated_at TEXT, context TEXT, provider TEXT, model TEXT)")
+        c.execute("INSERT INTO conversations VALUES ('old','work','Existing','2026','2026','[]',NULL,NULL)")
+    store = Store(tmp_path)
+    assert store.conversations()[0]["title"] == "Existing"
+    assert store.conversation("old")["pinned"] is False
+    Store(tmp_path)  # Migration is safe to run again.

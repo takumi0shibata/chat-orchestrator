@@ -371,3 +371,31 @@ def test_repeated_stop_waits_for_cleanup(tmp_path):
         assert not next(iter(manager.locks.values())).locked()
 
     asyncio.run(scenario())
+
+
+def test_response_events_identify_final_messages(tmp_path):
+    async def scenario():
+        m, store, _, req = setup(tmp_path, [[message(), shell("ls")], [message()]])
+        run = m.start(req)
+        await m.tasks[run["id"]]
+        events = store.events(run["id"])
+        responses = [e["data"] for e in events if e["type"] == "response"]
+        assert [(e["round"], e["continues"], e["final_item_ids"]) for e in responses] == [
+            (1, True, []), (2, False, ["msg_1"])
+        ]
+        assert [e["data"]["round"] for e in events if e["type"] == "text_delta"] == [1, 2]
+    asyncio.run(scenario())
+
+
+def test_builtin_tool_commentary_is_not_a_final_message(tmp_path):
+    async def scenario():
+        before = {**message(), "id": "before", "phase": "commentary"}
+        after = {**message(), "id": "after"}
+        output = [before, {"id": "web", "type": "web_search_call"}, after]
+        m, store, _, req = setup(tmp_path, [output])
+        run = m.start(req)
+        await m.tasks[run["id"]]
+        response = next(e["data"] for e in store.events(run["id"]) if e["type"] == "response")
+        assert response["continues"] is False
+        assert response["final_item_ids"] == ["after"]
+    asyncio.run(scenario())

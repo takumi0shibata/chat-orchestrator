@@ -191,3 +191,18 @@ def test_upload_limits_and_signature(tmp_path):
     )
     with pytest.raises(ValueError, match="20 MiB"):
         direct_input(dict(path=str(pdf), size=21 * 1024 * 1024, name="file.pdf"))
+
+
+def test_search_and_pin_api(app_client):
+    http, _, _ = app_client
+    c = http.post("/api/conversations", json={"workspace_id": "work"}).json()
+    assert c["pinned"] is False
+    result = http.patch(f"/api/conversations/{c['id']}", json={"pinned": True})
+    assert result.status_code == 200
+    assert result.json()["pinned"] is True
+    assert result.json()["updated_at"] == c["updated_at"]
+    assert "context" not in result.json()
+    assert http.get("/api/conversations", params={"q": "新しい"}).json()[0]["id"] == c["id"]
+    assert http.get("/api/conversations?q=missing").json() == []
+    assert http.patch("/api/conversations/missing", json={"pinned": True}).status_code == 404
+    assert http.patch(f"/api/conversations/{c['id']}", json={"unknown": True}).status_code == 422

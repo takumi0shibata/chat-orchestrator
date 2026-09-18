@@ -15,7 +15,7 @@ from app.agent_runner import RunManager
 from app.attachments import list_files, open_regular, save_upload
 from app.config import get_settings
 from app.model_catalog import models_for
-from app.schemas import Approval, ConversationCreate, RunCreate
+from app.schemas import Approval, ConversationCreate, ConversationUpdate, RunCreate
 from app.storage import TERMINAL, Store
 
 
@@ -141,8 +141,8 @@ def create_app(settings=None, manager_factory=RunManager):
         )
 
     @app.get("/api/conversations")
-    async def conversations():
-        return app.state.store.conversations()
+    async def conversations(q: str = ""):
+        return app.state.store.conversations(q)
 
     @app.post("/api/conversations")
     async def new_conversation(body: ConversationCreate):
@@ -157,6 +157,11 @@ def create_app(settings=None, manager_factory=RunManager):
             **{k: v for k, v in c.items() if k != "context"},
             "runs": app.state.store.runs(cid),
         }
+
+    @app.patch("/api/conversations/{cid}")
+    async def update_conversation(cid: str, body: ConversationUpdate):
+        c = app.state.store.pin_conversation(cid, body.pinned)
+        return {k: v for k, v in c.items() if k != "context"}
 
     @app.delete("/api/conversations/{cid}")
     async def delete_conversation(cid: str):
