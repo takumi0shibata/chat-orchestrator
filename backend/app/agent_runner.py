@@ -7,6 +7,7 @@ from time import monotonic
 from app.attachments import direct_input, file_snapshot
 from app.model_catalog import validate_model
 from app.openai_client import build_openai_client
+from app.project_instructions import load_project_instructions
 from app.sandbox import Sandbox, docker
 from app.storage import TERMINAL
 
@@ -217,6 +218,26 @@ class RunManager:
             async with asyncio.timeout(self.settings.run_timeout):
                 skills = self.select(self.config.skills, request.skill_ids)
                 resources = self.select(self.config.resources, request.resource_ids)
+                project_instructions = load_project_instructions(
+                    workspace.path, self.config
+                )
+                if project_instructions:
+                    self.store.event(
+                        rid,
+                        "project_instructions",
+                        dict(
+                            label=(
+                                f"Loaded {project_instructions.filename}"
+                                + (
+                                    " (truncated)"
+                                    if project_instructions.truncated
+                                    else ""
+                                )
+                            ),
+                            filename=project_instructions.filename,
+                            truncated=project_instructions.truncated,
+                        ),
+                    )
                 sandbox = self.sandbox_factory(
                     self.settings,
                     workspace,
@@ -227,7 +248,14 @@ class RunManager:
                 )
                 self.store.status(rid, "preparing", "Starting sandbox")
                 await sandbox.start()
-                await self.loop(rid, request, sandbox, skills, resources)
+                await self.loop(
+                    rid,
+                    request,
+                    sandbox,
+                    skills,
+                    resources,
+                    project_instructions,
+                )
         except asyncio.CancelledError:
             final_status, final_label = (
                 "stopped",
@@ -291,7 +319,9 @@ class RunManager:
                 lock.release()
             self.store.status(rid, final_status, final_label)
 
-    async def loop(self, rid, request, sandbox, skills, resources):
+    async def loop(
+        self, rid, request, sandbox, skills, resources, project_instructions=None
+    ):
         client = self.client(request.provider)
         context = list(self.store.conversation(request.conversation_id)["context"])
         content = []
@@ -352,7 +382,11 @@ class RunManager:
             self.store.event(rid, "round", dict(number=round_index + 1))
             stream = await client.responses.create(
                 model=request.model,
-                input=context,
+                input=(
+                    [project_instructions.message(), *context]
+                    if project_instructions
+                    else context
+                ),
                 instructions=instructions,
                 tools=tools,
                 store=False,

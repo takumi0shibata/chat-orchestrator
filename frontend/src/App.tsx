@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { DragEvent as ReactDragEvent, FormEvent, KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, events } from "./api";
 import { MarkdownContent } from "./components/MarkdownContent";
 import { activityLabel, messageBlocks } from "./lib/timeline";
@@ -330,11 +330,13 @@ export function App() {
   const [error, setError] = useState("");
   const [connection, setConnection] = useState("");
   const [busy, setBusy] = useState(false);
+  const [draggingFiles, setDraggingFiles] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
   const [loadedCid, setLoadedCid] = useState("");
   const filesToggle = useRef<HTMLButtonElement>(null);
   const messageInput = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const dragDepth = useRef(0);
   const plusWrap = useRef<HTMLDivElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
@@ -359,6 +361,7 @@ export function App() {
     selectedProvider?.enabled && selectedModel && cid && loadedCid === cid &&
     !busy && !active && (input.trim() || attachments.length),
   );
+  const canDropFiles = Boolean(cid && loadedCid === cid && !busy && !active);
 
   async function refreshConversations() {
     setConversations(await api<Conversation[]>("/conversations"));
@@ -557,6 +560,23 @@ export function App() {
     document.addEventListener("pointerdown", closeOutside);
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, [plusOpen]);
+  useEffect(() => {
+    if (canDropFiles) return;
+    dragDepth.current = 0;
+    setDraggingFiles(false);
+  }, [canDropFiles]);
+  useEffect(() => {
+    const preventFileNavigation = (event: globalThis.DragEvent) => {
+      if (Array.from(event.dataTransfer?.types || []).includes("Files"))
+        event.preventDefault();
+    };
+    window.addEventListener("dragover", preventFileNavigation);
+    window.addEventListener("drop", preventFileNavigation);
+    return () => {
+      window.removeEventListener("dragover", preventFileNavigation);
+      window.removeEventListener("drop", preventFileNavigation);
+    };
+  }, []);
 
   async function newConversation() {
     setBusy(true);
@@ -621,8 +641,8 @@ export function App() {
       setError(String(e));
     }
   }
-  async function upload(selected: FileList | null) {
-    if (!selected?.length) return;
+  async function upload(selected: FileList | readonly File[] | null) {
+    if (!selected?.length || !canDropFiles) return;
     setBusy(true);
     setError("");
     try {
@@ -639,6 +659,53 @@ export function App() {
     } finally {
       setBusy(false);
     }
+  }
+  function isFileDrag(event: ReactDragEvent<HTMLElement>) {
+    return Array.from(event.dataTransfer.types).includes("Files");
+  }
+  function droppedFiles(event: ReactDragEvent<HTMLElement>) {
+    const items = Array.from(event.dataTransfer.items || []);
+    if (!items.length) return Array.from(event.dataTransfer.files);
+    return items.flatMap((item) => {
+      if (item.kind !== "file") return [];
+      const entry = (
+        item as DataTransferItem & {
+          webkitGetAsEntry?: () => { isDirectory: boolean } | null;
+        }
+      ).webkitGetAsEntry?.();
+      const file = item.getAsFile();
+      return file && !entry?.isDirectory ? [file] : [];
+    });
+  }
+  function handleDragEnter(event: ReactDragEvent<HTMLElement>) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!canDropFiles) return;
+    dragDepth.current += 1;
+    setDraggingFiles(true);
+  }
+  function handleDragOver(event: ReactDragEvent<HTMLElement>) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = canDropFiles ? "copy" : "none";
+  }
+  function handleDragLeave(event: ReactDragEvent<HTMLElement>) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDraggingFiles(false);
+  }
+  function handleDrop(event: ReactDragEvent<HTMLElement>) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepth.current = 0;
+    setDraggingFiles(false);
+    if (!canDropFiles) return;
+    void upload(droppedFiles(event));
   }
   async function removeConversation(id: string) {
     try {
@@ -719,7 +786,20 @@ export function App() {
           <span>Docker · Network off · CPU</span>
         </div>
       </aside>
-      <main className="main">
+      <main
+        className={`main ${draggingFiles ? "is-file-dragging" : ""}`}
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+
+        {draggingFiles && (
+          <div className="file-drop-overlay" role="status" aria-live="polite">
+            <Icon name="paperclip" size={28} />
+            <strong>Drop files to attach</strong>
+          </div>
+        )}
 
         <div
           className="chat-scroll"

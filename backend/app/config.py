@@ -5,7 +5,7 @@ from pathlib import Path
 
 import tomllib
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -87,11 +87,33 @@ class Deployment(BaseModel):
 
 
 class RuntimeConfig(BaseModel):
+    project_doc_max_bytes: int = Field(default=32 * 1024, ge=1)
+    project_doc_fallback_filenames: list[str] = Field(default_factory=list)
     workspaces: list[Folder] = Field(default_factory=list)
     skills: list[Skill] = Field(default_factory=list)
     resources: list[Folder] = Field(default_factory=list)
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     azure_models: list[Deployment] = Field(default_factory=list)
+
+    @field_validator("project_doc_fallback_filenames")
+    @classmethod
+    def validate_project_doc_fallbacks(cls, names):
+        reserved = {"AGENTS.override.md", "AGENTS.md"}
+        if len(set(names)) != len(names):
+            raise ValueError("Project instruction fallback filenames must be unique")
+        for name in names:
+            if (
+                not name.strip()
+                or not name.isprintable()
+                or name in (".", "..")
+                or "/" in name
+                or "\\" in name
+                or name in reserved
+            ):
+                raise ValueError(
+                    "Project instruction fallback filenames must be unique basenames"
+                )
+        return names
 
     @model_validator(mode="after")
     def unique_ids(self):

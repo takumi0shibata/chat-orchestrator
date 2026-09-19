@@ -186,6 +186,23 @@ h2 {
   position: relative;
   background: #ffffff;
 }
+.file-drop-overlay {
+  position: absolute;
+  inset: 12px;
+  z-index: 15;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  border: 2px dashed #718979;
+  border-radius: 18px;
+  background: #f1f7f3e8;
+  color: #31513d;
+  pointer-events: none;
+  backdrop-filter: blur(2px);
+}
+.file-drop-overlay strong { font-size: 15px; }
+.main.is-file-dragging .composer-box { border-color: #8ca495; }
 .topbar {
   min-height: 92px;
   padding: 22px 30px;

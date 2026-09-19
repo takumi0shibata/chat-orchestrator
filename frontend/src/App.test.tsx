@@ -214,10 +214,14 @@ it("uses the composer button as the only stop control for an active run", async 
       : url === "/api/runs/r" ? activeRun : [];
     return new Response(JSON.stringify(body));
   });
-  render(<App />);
+  const { container } = render(<App />);
   const stop = await screen.findByRole("button", { name: "Stop" });
   expect(screen.getAllByText("Waiting for model")).toHaveLength(1);
   expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
+  fireEvent.dragEnter(container.querySelector(".main")!, {
+    dataTransfer: { types: ["Files"], files: [new File(["x"], "x.txt")], items: [] },
+  });
+  expect(screen.queryByText("Drop files to attach")).not.toBeInTheDocument();
   fireEvent.click(stop);
   await waitFor(() => expect(fetchMock.mock.calls.some(([url, options]) => url === "/api/runs/r/stop" && options?.method === "POST")).toBe(true));
 });
@@ -305,4 +309,87 @@ it("opens and closes Files from the same panel icon even before selecting a chat
   fireEvent.click(toggle);
   expect(container.querySelector("#files-panel")).not.toHaveClass("is-open");
   await waitFor(() => expect(screen.getByText("Explore, analyze, create.")).toBeInTheDocument());
+});
+
+it("uploads dropped files, reports errors, and keeps nested drag state stable", async () => {
+  localStorage.setItem("workspace-conversation", "c");
+  const conversation = {
+    id: "c",
+    workspace_id: "w",
+    title: "Drop files",
+    updated_at: run.updated_at,
+  };
+  const config = {
+    providers: [{
+      id: "openai",
+      label: "OpenAI",
+      enabled: true,
+      models: [{
+        id: "gpt-5.6-sol",
+        label: "GPT-5.6 Sol",
+        model: "gpt-5.6-sol",
+        efforts: ["medium"],
+      }],
+    }],
+    workspaces: [{ id: "w", label: "Work", path: "/work" }],
+    skills: [],
+    resources: [],
+    mcp_servers: [],
+  };
+  let uploaded: FormData | undefined;
+  let uploadAttempts = 0;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
+    const url = String(input);
+    if (url === "/api/config") return new Response(JSON.stringify(config));
+    if (url === "/api/conversations")
+      return new Response(JSON.stringify([conversation]));
+    if (url === "/api/conversations/c")
+      return new Response(JSON.stringify({ ...conversation, runs: [] }));
+    if (url.startsWith("/api/conversations/c/files"))
+      return new Response(JSON.stringify([]));
+    if (url === "/api/attachments" && options?.method === "POST") {
+      uploadAttempts += 1;
+      uploaded = options.body as FormData;
+      if (uploadAttempts === 1)
+        return new Response(JSON.stringify({ detail: "Attachment too large" }), { status: 400 });
+      return new Response(JSON.stringify([
+        { id: "a1", name: "notes.txt", size: 5, content_type: "text/plain" },
+        { id: "a2", name: "figure.png", size: 4, content_type: "image/png" },
+      ]));
+    }
+    return new Response(JSON.stringify({}));
+  });
+
+  const { container } = render(<App />);
+  await screen.findByRole("textbox", { name: "Message" });
+  const pane = container.querySelector(".main")!;
+  const files = [
+    new File(["notes"], "notes.txt", { type: "text/plain" }),
+    new File(["png!"], "figure.png", { type: "image/png" }),
+  ];
+  const dataTransfer = { types: ["Files"], files, items: [] };
+
+  fireEvent.dragEnter(pane, { dataTransfer });
+  fireEvent.dragEnter(pane, { dataTransfer });
+  expect(screen.getByText("Drop files to attach")).toBeInTheDocument();
+  fireEvent.dragLeave(pane, { dataTransfer });
+  expect(screen.getByText("Drop files to attach")).toBeInTheDocument();
+  fireEvent.drop(pane, { dataTransfer });
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("Attachment too large");
+  expect(screen.queryByText("Drop files to attach")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+  fireEvent.dragEnter(pane, { dataTransfer });
+  fireEvent.drop(pane, { dataTransfer });
+
+  await waitFor(() => expect(uploadAttempts).toBe(2));
+  expect(uploaded?.get("conversation_id")).toBe("c");
+  expect((uploaded?.getAll("files") as File[]).map((file) => file.name)).toEqual([
+    "notes.txt",
+    "figure.png",
+  ]);
+  expect(await screen.findByText("notes.txt")).toBeInTheDocument();
+  expect(screen.getByText("figure.png")).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "Send directly to model" })).not.toBeChecked();
+  expect(screen.queryByText("Drop files to attach")).not.toBeInTheDocument();
 });

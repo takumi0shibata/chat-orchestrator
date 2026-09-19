@@ -173,6 +173,39 @@ def test_compaction(tmp_path):
     asyncio.run(scenario())
 
 
+def test_project_instructions_are_reloaded_without_persisting(tmp_path):
+    async def scenario():
+        m, store, c, req = setup(
+            tmp_path, [[shell("check instructions")], [message()], [message()]]
+        )
+        instruction_file = m.config.workspaces[0].path / "AGENTS.md"
+        instruction_file.write_text("First instruction")
+
+        first = m.start(req)
+        await m.tasks[first["id"]]
+        first_message = c.calls[0]["input"][0]
+        assert first_message["role"] == "user"
+        assert "First instruction" in first_message["content"][0]["text"]
+        assert "First instruction" in c.calls[1]["input"][0]["content"][0]["text"]
+        assert "First instruction" not in str(store.conversation(req.conversation_id)["context"])
+        loaded = [
+            event
+            for event in store.events(first["id"])
+            if event["type"] == "project_instructions"
+        ]
+        assert loaded[0]["data"]["filename"] == "AGENTS.md"
+
+        instruction_file.write_text("Second instruction")
+        second = m.start(req)
+        await m.tasks[second["id"]]
+        second_message = c.calls[2]["input"][0]
+        assert "Second instruction" in second_message["content"][0]["text"]
+        assert "First instruction" not in second_message["content"][0]["text"]
+        assert "Second instruction" not in str(store.conversation(req.conversation_id)["context"])
+
+    asyncio.run(scenario())
+
+
 def test_mcp_approval_is_run_scoped(tmp_path):
     async def scenario():
         m, store, c, req = setup(

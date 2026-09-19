@@ -1,5 +1,10 @@
 # Copy to runtime.toml. All paths must be existing absolute directories.
 # Keep API credentials, application source/config/state outside workspaces.
+# Project instructions are discovered in each workspace root in this order:
+# AGENTS.override.md, AGENTS.md, then the fallback filenames below.
+project_doc_max_bytes = 32768
+project_doc_fallback_filenames = [] # e.g. ["TEAM_GUIDE.md", ".agents.md"]
+
 [[workspaces]]
 id = "research"
 label = "研究フォルダ"

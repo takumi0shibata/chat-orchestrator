@@ -34,7 +34,7 @@ Docker Composeはイメージのビルド専用です (`docker compose --profile
 
 1. サイドバーから登録済み作業フォルダを選び「新しい作業」。
 2. モデル・推論の深さを選び、必要なら標準Skills、モデル／データ、Remote MCP、Web検索を有効化。
-3. ファイル名や完成形を自然言語で指示。添付も利用できます。
+3. ファイル名や完成形を自然言語で指示。添付ボタンのほか、中央のチャット領域へのドラッグ＆ドロップで複数ファイルを添付できます。
 4. 現在工程と実行履歴で、実行コマンド・出力・所要時間・終了コードを確認。
 5. ファイルパネルを更新して成果物を確認・ダウンロード。
 
@@ -51,6 +51,10 @@ Docker Composeはイメージのビルド専用です (`docker compose --profile
 - `resources`: 事前ダウンロードしたNLPモデルやデータ等。実行ごとに選択し、読み取り専用の `/resources/<id>` に配置します。
 - `azure_models`: `model` に実際のモデルID、`deployment` にAzureのデプロイ名を記載。UIの名前とAPIへ渡すデプロイ名を分離しています。
 - `mcp_servers`: HTTPS URL、明示的な `allowed_tools`、任意の `authorization_env`。トークンはバックエンドの環境変数としてexportします。MCP実行はAPIの承認要求をチャットで許可／拒否します。
+- `project_doc_max_bytes`: ワークスペース直下から読み込むプロジェクト指示の最大バイト数。既定は32 KiBです。
+- `project_doc_fallback_filenames`: `AGENTS.override.md`、`AGENTS.md` がない場合に確認する代替ファイル名。パスではなくファイル名だけを指定します。
+
+各実行ではワークスペース直下の `AGENTS.override.md`、`AGENTS.md`、設定した代替名をこの順に確認し、最初の空でないファイルをモデルのプロジェクト指示として読み込みます。この探索順と既定上限は[Codexの公式仕様](https://developers.openai.com/codex/guides/agents-md)に合わせています。内容は実行ごとに読み直され、Activityに使用したファイル名が表示されます。サブフォルダ内の指示とホストの `~/.codex` は読み込みません。シンボリックリンクやUTF-8ではない指示ファイルは、安全のため実行エラーになります。
 
 Remote MCPはプロバイダ側から接続されるため、ローカルの `localhost` URLは利用できません。このリポジトリにMCPサーバーや業務API本体は含みません。モデルAPI・MCP・Web検索の通信と、ネットワーク無効のローカルサンドボックスは別経路です。
 
@@ -69,7 +73,7 @@ OpenAIの標準モデルは `gpt-5.6-sol`、追加モデルは `gpt-5.6-terra`�
 
 コンテナは非root・ネットワーク無効・root filesystem読み取り専用・追加capabilityなしで起動します。APIキーやホストの環境変数は渡しません。コマンドは非対話実行です。NLPモデルは事前配置し、Transformers等はofflineモードで動かします。追加ライブラリは `sandbox/pyproject.toml` を変更し、`uv lock --project sandbox` とイメージ再ビルドで導入します。macOS DockerからMetal/MPSは利用しません。
 
-Doclingによる自動抽出はありません。通常の添付はShellで必要な部分を読みます。PNG/JPEG/WebP/PDFはUIで「モデルに直接添付」を選べます（1ファイル20 MiB、合計40 MiBまで、通常アップロードは1ファイル50 MiB）。直接添付するとその内容をResponsesへ送ります。ローカルShellで読んだ内容・出力もモデルに返されるため、ローカル実行は完全オフラインではありません。
+Doclingによる自動抽出はありません。通常の添付はShellで必要な部分を読みます。添付ボタンとチャット領域へのドラッグ＆ドロップは同じアップロード処理を使い、フォルダの再帰添付は行いません。PNG/JPEG/WebP/PDFはUIで「モデルに直接添付」を選べます（1ファイル20 MiB、合計40 MiBまで、通常アップロードは1ファイル50 MiB）。直接添付するとその内容をResponsesへ送ります。ローカルShellで読んだ内容・出力もモデルに返されるため、ローカル実行は完全オフラインではありません。
 
 サンドボックスのルートfilesystemは隔離されていますが、登録した作業フォルダ内のファイルは編集・削除可能です。バックアップや版管理が必要な場合は別途用意してください。
 
