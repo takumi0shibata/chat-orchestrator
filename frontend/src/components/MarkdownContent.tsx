@@ -2,7 +2,7 @@ import { MouseEvent } from "react";
 
 import { markdownToHtml } from "../lib/markdown";
 
-export function MarkdownContent({ content }: { content: string }) {
+export function MarkdownContent({ content, conversationId }: { content: string; conversationId?: string }) {
   const onClick = async (event: MouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
     const button = target.closest<HTMLButtonElement>("[data-copy-btn='1']");
@@ -28,5 +28,5 @@ export function MarkdownContent({ content }: { content: string }) {
     }
   };
 
-  return <div className="markdown" onClick={onClick} dangerouslySetInnerHTML={{ __html: markdownToHtml(content) }} />;
+  return <div className="markdown" onClick={onClick} dangerouslySetInnerHTML={{ __html: markdownToHtml(content, conversationId) }} />;
 }

@@ -175,7 +175,7 @@ export function RunView({
                 if (e.type === "progress_message") return (
                   <div className="activity-message" key={e.seq}>
                     <time>{new Date(e.created_at).toLocaleTimeString()}</time>
-                    <MarkdownContent content={text(e.data.text)} />
+                    <MarkdownContent conversationId={run.conversation_id} content={text(e.data.text)} />
                   </div>
                 );
                 if (e.type === "command") {
@@ -202,6 +202,7 @@ export function RunView({
                         </pre>
                       )}
                       <small>
+                        {e.data.timeout_seconds != null && `Limit: ${Number(e.data.timeout_seconds)}s · `}
                         {done
                           ? `${text(done.data.outcome)} · ${Number(done.data.elapsed).toFixed(1)}s`
                           : terminal(run.status)
@@ -235,7 +236,7 @@ export function RunView({
           </div>
         </details>
         {blocks.filter((block) => !block.progress).map((block) => (
-          <div className="answer-block" key={block.key}><MarkdownContent content={block.content} /></div>
+          <div className="answer-block" key={block.key}><MarkdownContent conversationId={run.conversation_id} content={block.content} /></div>
         ))}
         {!terminal(run.status) &&
           approvals.map((e) => (

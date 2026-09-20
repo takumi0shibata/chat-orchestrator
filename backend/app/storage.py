@@ -32,6 +32,9 @@ class Store:
                 CREATE TABLE IF NOT EXISTS events (
                   run_id TEXT NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL,
                   data TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(run_id,seq));
+                CREATE TABLE IF NOT EXISTS run_context_state (
+                  run_id TEXT PRIMARY KEY, checkpoint_seq INTEGER NOT NULL DEFAULT -1,
+                  recovered INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS attachments (
                   id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, name TEXT NOT NULL,
                   content_type TEXT NOT NULL, size INTEGER NOT NULL, path TEXT NOT NULL);
@@ -121,12 +124,62 @@ class Store:
             )
         return self.conversation(cid)
 
-    def save_context(self, cid, context, provider, model):
+    def save_context(self, cid, context, provider, model, *, rid=None):
         with self.connect() as c:
             c.execute(
                 "UPDATE conversations SET context=?,provider=?,model=?,updated_at=? WHERE id=?",
                 (json.dumps(context), provider, model, now(), cid),
             )
+
+            if rid:
+                c.execute(
+                    "UPDATE run_context_state SET checkpoint_seq=(SELECT COALESCE(MAX(seq),0) FROM events WHERE run_id=?) WHERE run_id=?",
+                    (rid, rid),
+                )
+
+    def preserve_interrupted_context(self, rid):
+        """Keep a safe checkpoint plus a journal, never unpaired tool calls.
+
+        The journal and recovered flag commit together, including after a crash.
+        Only runs created with checkpoint tracking are eligible.
+        """
+        with self.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            state = c.execute("SELECT * FROM run_context_state WHERE run_id=?", (rid,)).fetchone()
+            if not state or state["recovered"]:
+                return
+            run = c.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
+            if run["status"] not in {"failed", "stopped"}:
+                return
+            request = json.loads(run["request"])
+            cid = run["conversation_id"]
+            context = json.loads(c.execute("SELECT context FROM conversations WHERE id=?", (cid,)).fetchone()[0])
+            if state["checkpoint_seq"] < 0:
+                content = [{"type": "input_text", "text": request["input"]}]
+                for aid in request.get("attachment_ids", []):
+                    attachment = c.execute("SELECT name FROM attachments WHERE id=? AND conversation_id=?", (aid, cid)).fetchone()
+                    if attachment:
+                        content.append({"type": "input_text", "text": f"Attached file: /input/{aid}/{attachment['name']}"})
+                context.append({"role": "user", "content": content})
+            journal = []
+            output_budget = 24000
+            for event in c.execute("SELECT type,data FROM events WHERE run_id=? AND seq>? ORDER BY seq", (rid, state["checkpoint_seq"])):
+                kind, data = event["type"], json.loads(event["data"])
+                if kind in {"command", "command_done", "error", "status", "tool", "tool_result", "approval_resolved"}:
+                    journal.append({"type": kind, "data": data})
+                elif kind in {"command_output", "text_delta"} and output_budget > 0:
+                    text = data.get("text", "")[:output_budget]
+                    output_budget -= len(text)
+                    journal.append({"type": kind, "data": {**data, "text": text}})
+            context.append({"role": "user", "content": [{"type": "input_text", "text":
+                "Recovery journal for interrupted run " + rid + ". This is recorded history, not a new instruction. "
+                "Changes already applied remain. Commands listed as started may have partially or fully executed even without a result. "
+                "Inspect current files before continuing; do not blindly repeat commands or external actions. "
+                "Tool calls from the incomplete round were not restored. Output excerpts may be truncated.\n"
+                + json.dumps(journal, ensure_ascii=False)}]})
+            c.execute("UPDATE conversations SET context=?,provider=?,model=?,updated_at=? WHERE id=?",
+                      (json.dumps(context), request["provider"], request["model"], now(), cid))
+            c.execute("UPDATE run_context_state SET recovered=1 WHERE run_id=?", (rid,))
 
     def create_run(self, request):
         rid = uuid4().hex
@@ -142,6 +195,7 @@ class Store:
                     now(),
                 ),
             )
+            c.execute("INSERT INTO run_context_state(run_id) VALUES(?)", (rid,))
             c.execute(
                 "UPDATE conversations SET title=CASE WHEN title='新しい作業' THEN ? ELSE title END,updated_at=? WHERE id=?",
                 (
@@ -258,6 +312,7 @@ class Store:
                 "DELETE FROM events WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?)",
                 (cid,),
             )
+            c.execute("DELETE FROM run_context_state WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?)", (cid,))
             c.execute("DELETE FROM runs WHERE conversation_id=?", (cid,))
             c.execute("DELETE FROM attachments WHERE conversation_id=?", (cid,))
             c.execute("DELETE FROM conversations WHERE id=?", (cid,))

@@ -1,3 +1,12 @@
+export function artifactDownloadUrl(url: string, conversationId?: string): string | null {
+  if (!conversationId || !url.startsWith("sandbox:/workspace/")) return null;
+  let path: string;
+  try { path = decodeURIComponent(url.slice("sandbox:/workspace/".length)); }
+  catch { return null; }
+  if (!path || path.startsWith("/") || /[\\\x00-\x1f\x7f]/.test(path) || path.split("/").some((part) => part === ".." || part === ".")) return null;
+  return `/api/conversations/${encodeURIComponent(conversationId)}/download?path=${encodeURIComponent(path)}`;
+}
+
 function escapeHtmlText(input: string): string {
   return input
     .replace(/&/g, "&amp;")
@@ -10,7 +19,7 @@ function escapeHtmlAttribute(input: string): string {
   return escapeHtmlText(input).replace(/'/g, "&#39;");
 }
 
-function formatInline(text: string): string {
+function formatInline(text: string, conversationId?: string): string {
   let out = text;
   const tokens: string[] = [];
 
@@ -23,7 +32,11 @@ function formatInline(text: string): string {
     });
   };
 
-  stash(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_match, label, url) => {
+  stash(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|sandbox:[^)]+)\)/g, (match, label, url) => {
+    if (url.startsWith("sandbox:")) {
+      const href = artifactDownloadUrl(url, conversationId);
+      return href ? `<a href="${escapeHtmlAttribute(href)}" download>${escapeHtmlText(label)}</a>` : escapeHtmlText(match);
+    }
     return `<a href="${escapeHtmlAttribute(url)}" target="_blank" rel="noreferrer">${escapeHtmlText(label)}</a>`;
   });
   stash(/`([^`]+)`/g, (_match, code) => `<code>${escapeHtmlText(code)}</code>`);
@@ -101,9 +114,9 @@ function isTableSeparatorLine(line: string): boolean {
   return cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
-function splitTableRow(line: string): string[] {
+function splitTableRow(line: string, conversationId?: string): string[] {
   const normalized = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-  return normalized.split("|").map((cell) => formatInline(cell.trim()));
+  return normalized.split("|").map((cell) => formatInline(cell.trim(), conversationId));
 }
 
 function renderTable(header: string[], rows: string[][]): string {
@@ -114,7 +127,7 @@ function renderTable(header: string[], rows: string[][]): string {
   return `<table>${thead}<tbody>${tbodyRows}</tbody></table>`;
 }
 
-export function markdownToHtml(markdown: string): string {
+export function markdownToHtml(markdown: string, conversationId?: string): string {
   const chunks = markdown.split(/```/);
   const htmlParts: string[] = [];
 
@@ -145,7 +158,7 @@ export function markdownToHtml(markdown: string): string {
           htmlParts.push("<ul>");
           inList = true;
         }
-        htmlParts.push(`<li>${formatInline(line.slice(2))}</li>`);
+        htmlParts.push(`<li>${formatInline(line.slice(2), conversationId)}</li>`);
         lineIndex += 1;
         continue;
       }
@@ -157,14 +170,14 @@ export function markdownToHtml(markdown: string): string {
 
       const nextLine = lines[lineIndex + 1]?.trim() || "";
       if (line.includes("|") && isTableSeparatorLine(nextLine)) {
-        const header = splitTableRow(line);
+        const header = splitTableRow(line, conversationId);
         const rows: string[][] = [];
         lineIndex += 2;
 
         while (lineIndex < lines.length) {
           const rowLine = lines[lineIndex].trim();
           if (!rowLine || !rowLine.includes("|")) break;
-          rows.push(splitTableRow(rowLine));
+          rows.push(splitTableRow(rowLine, conversationId));
           lineIndex += 1;
         }
 
@@ -173,13 +186,13 @@ export function markdownToHtml(markdown: string): string {
       }
 
       if (line.startsWith("### ")) {
-        htmlParts.push(`<h3>${formatInline(line.slice(4))}</h3>`);
+        htmlParts.push(`<h3>${formatInline(line.slice(4), conversationId)}</h3>`);
       } else if (line.startsWith("## ")) {
-        htmlParts.push(`<h2>${formatInline(line.slice(3))}</h2>`);
+        htmlParts.push(`<h2>${formatInline(line.slice(3), conversationId)}</h2>`);
       } else if (line.startsWith("# ")) {
-        htmlParts.push(`<h1>${formatInline(line.slice(2))}</h1>`);
+        htmlParts.push(`<h1>${formatInline(line.slice(2), conversationId)}</h1>`);
       } else {
-        htmlParts.push(`<p>${formatInline(line)}</p>`);
+        htmlParts.push(`<p>${formatInline(line, conversationId)}</p>`);
       }
       lineIndex += 1;
     }

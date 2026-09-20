@@ -153,7 +153,11 @@ def file_snapshot(root: Path):
     """Metadata only: never reads document contents or follows directory symlinks."""
     result = {}
     for folder, dirs, files in os.walk(root, followlinks=False):
-        dirs[:] = [d for d in dirs if not (Path(folder) / d).is_symlink()]
+        dirs[:] = [
+            d for d in dirs
+            if d not in {".venv", "venv", "node_modules", ".git", "__pycache__", ".pytest_cache", ".ruff_cache"}
+            and not (Path(folder) / d).is_symlink()
+        ]
         for name in files:
             p = Path(folder) / name
             try:

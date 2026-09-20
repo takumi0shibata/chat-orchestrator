@@ -265,7 +265,10 @@ def test_stop_kills_execution(tmp_path):
         await m.stop(r["id"])
         assert store.run(r["id"])["status"] == "stopped"
         assert Blocking.instances[-1].closed
-        assert store.conversation(req.conversation_id)["context"] == []
+        context = store.conversation(req.conversation_id)["context"]
+        assert context[0]["content"][0]["text"] == req.input
+        assert "sleep 100" in str(context)
+        assert not any(i.get("type") == "shell_call" for i in context)
 
     asyncio.run(scenario())
 
@@ -431,4 +434,97 @@ def test_builtin_tool_commentary_is_not_a_final_message(tmp_path):
         response = next(e["data"] for e in store.events(run["id"]) if e["type"] == "response")
         assert response["continues"] is False
         assert response["final_item_ids"] == ["after"]
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["timeout", "api", "disconnect", "startup"])
+def test_failed_run_preserves_instruction_and_partial_history(tmp_path, failure):
+    class FailingSandbox(FakeSandbox):
+        async def start(self):
+            if failure == "startup":
+                raise RuntimeError("Sandbox unavailable")
+
+        async def execute(self, command, emit, timeout):
+            if command == "slow":
+                await emit("stdout", "partial write")
+                raise TimeoutError()
+            return await super().execute(command, emit, timeout)
+
+    async def scenario():
+        batch = shell("edited once")
+        batch["action"]["commands"] += ["slow", "never executed"]
+        m, store, client, req = setup(tmp_path, [[batch]], sandbox=FailingSandbox)
+        original_create = client.create
+        if failure == "api":
+            async def create(**kwargs):
+                raise RuntimeError("Model unavailable")
+            client.create = create
+        elif failure == "disconnect":
+            class BrokenStream(Stream):
+                async def __aiter__(self):
+                    yield NS(type="response.output_text.delta", delta="途中経過", item_id="partial")
+            async def create(**kwargs):
+                return BrokenStream([])
+            client.create = create
+        run = m.start(req)
+        await m.tasks[run["id"]]
+        assert store.run(run["id"])["status"] == "failed"
+        context = store.conversation(req.conversation_id)["context"]
+        assert req.input in str(context)
+        assert not any(i.get("type") == "shell_call" for i in context)
+        if failure == "timeout":
+            assert "edited once" in str(context) and "partial write" in str(context)
+            assert "never executed" not in str(context)
+        if failure == "disconnect":
+            assert "途中経過" in str(context)
+        store.preserve_interrupted_context(run["id"])
+        assert store.conversation(req.conversation_id)["context"] == context
+        client.create = original_create
+        client.outputs = [[message()]]
+        m.sandbox_factory = FakeSandbox
+        req.input = "続けてください"
+        resumed = m.start(req)
+        await m.tasks[resumed["id"]]
+        assert client.calls[-1]["input"][:-1] == context
+        assert FakeSandbox.instances[-1].commands == []
+    asyncio.run(scenario())
+
+
+def test_restart_preserves_started_command_without_replaying(tmp_path, monkeypatch):
+    async def scenario():
+        m, store, client, req = setup(tmp_path, [[message()]])
+        run = store.create_run(req.model_dump())
+        store.save_context(req.conversation_id, [{"role": "user", "content": req.input}], req.provider, req.model, rid=run["id"])
+        store.event(run["id"], "command", {"command": "already started"})
+        async def cleanup(*args, **kwargs):
+            pass
+        monkeypatch.setattr("app.agent_runner.docker", cleanup)
+        await m.recover()
+        context = store.conversation(req.conversation_id)["context"]
+        assert "already started" in str(context) and "restart" in str(context)
+        await m.recover()
+        assert store.conversation(req.conversation_id)["context"] == context
+        req.input = "続けて"
+        resumed = m.start(req)
+        await m.tasks[resumed["id"]]
+        assert client.calls[0]["input"][:-1] == context
+    asyncio.run(scenario())
+
+
+def test_short_model_timeout_is_clamped_and_logged(tmp_path):
+    class CaptureTimeout(FakeSandbox):
+        async def execute(self, command, emit, timeout):
+            assert timeout == 60
+            raise TimeoutError()
+    async def scenario():
+        call = shell("find .")
+        call["action"]["timeout_ms"] = 10000
+        m, store, _, req = setup(tmp_path, [[call]], sandbox=CaptureTimeout)
+        run = m.start(req)
+        await m.tasks[run["id"]]
+        command = next(e["data"] for e in store.events(run["id"]) if e["type"] == "command")
+        done = next(e["data"] for e in store.events(run["id"]) if e["type"] == "command_done")
+        assert command["timeout_seconds"] == 60
+        assert command["requested_timeout_ms"] == 10000
+        assert done["outcome"]["timeout_seconds"] == 60
     asyncio.run(scenario())

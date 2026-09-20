@@ -21,6 +21,13 @@ async def docker(*args, timeout=30):
     return stdout.decode(errors="replace").strip()
 
 
+def command_time_limit(settings, requested=None):
+    """Model hints are clamped to the configured floor and hard ceiling."""
+    return min(settings.command_timeout, max(
+        settings.command_timeout_min, requested or settings.command_timeout
+    ))
+
+
 class Sandbox:
     def __init__(self, settings, workspace, rid, skills, resources, input_dir):
         self.settings = settings
@@ -66,6 +73,10 @@ class Sandbox:
             "HF_DATASETS_OFFLINE=1",
             "--env",
             "PYTHONDONTWRITEBYTECODE=1",
+            "--env", "UV_PROJECT_ENVIRONMENT=/opt/runtime/.venv",
+            "--env", "UV_NO_SYNC=1",
+            "--env", "UV_FROZEN=1",
+            "--env", "UV_OFFLINE=1",
             "--workdir",
             "/workspace",
             "--mount",
@@ -97,9 +108,7 @@ class Sandbox:
                 raise
 
     async def execute(self, command, emit, timeout=None):
-        limit = min(
-            timeout or self.settings.command_timeout, self.settings.command_timeout
-        )
+        limit = command_time_limit(self.settings, timeout)
         process = await asyncio.create_subprocess_exec(
             "docker",
             "exec",

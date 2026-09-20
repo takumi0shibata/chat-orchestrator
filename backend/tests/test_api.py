@@ -206,3 +206,18 @@ def test_search_and_pin_api(app_client):
     assert http.get("/api/conversations?q=missing").json() == []
     assert http.patch("/api/conversations/missing", json={"pinned": True}).status_code == 404
     assert http.patch(f"/api/conversations/{c['id']}", json={"unknown": True}).status_code == 422
+
+
+def test_japanese_artifact_download(app_client):
+    from urllib.parse import quote
+    http, work, _ = app_client
+    cid = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]
+    (work / "reviews").mkdir()
+    for extension in ("docx", "md"):
+        path = f"reviews/結果.{extension}"
+        (work / path).write_bytes(b"artifact")
+        response = http.get(f"/api/conversations/{cid}/download?path={quote(path, safe='')}")
+        assert response.status_code == 200
+        assert response.content == b"artifact"
+        assert "attachment" in response.headers["content-disposition"]
+        assert quote(f"結果.{extension}") in response.headers["content-disposition"]

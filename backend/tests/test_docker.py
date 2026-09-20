@@ -156,3 +156,43 @@ def test_cancel_removes_container(tmp_path):
             await docker("inspect", sandbox.name)
 
     asyncio.run(scenario())
+
+
+def test_uv_run_preserves_host_environment_and_lockfile(tmp_path):
+    async def scenario():
+        work = tmp_path / "work"
+        work.mkdir()
+        host_env = work / ".venv"
+        (host_env / "bin").mkdir(parents=True)
+        (host_env / "bin/python").symlink_to("/Library/Frameworks/Python.framework/Versions/3.12/bin/python3")
+        (host_env / "pyvenv.cfg").write_text("home = /Library/Frameworks/Python.framework/Versions/3.12/bin\nversion = 3.12.0\n")
+        (host_env / "host-package.py").write_text("# macOS package sentinel")
+        (work / "pyproject.toml").write_text('[project]\nname="host-project"\nversion="0.1.0"\nrequires-python=">=3.12"\ndependencies=[]\n')
+        (work / "uv.lock").write_text("# host lock sentinel\n")
+        before = {str(p.relative_to(work)): p.read_bytes() for p in work.rglob("*") if p.is_file() and not p.is_symlink()}
+        sandbox = Sandbox(Settings(_env_file=None), Folder(id="w", label="w", path=work), uuid4().hex, [], [], tmp_path / "input")
+        await sandbox.start()
+        try:
+            for command in ["python -c 'import numpy; print(numpy.__version__)'", "cd /workplace; uv run python -c 'import numpy; print(numpy.__version__)'"]:
+                result = await sandbox.execute(command, emit)
+                assert result["outcome"]["exit_code"] == 0, result
+            after = {str(p.relative_to(work)): p.read_bytes() for p in work.rglob("*") if p.is_file() and not p.is_symlink()}
+            assert before == after
+            assert (host_env / "bin/python").readlink().as_posix().startswith("/Library/")
+        finally:
+            await sandbox.close()
+    asyncio.run(scenario())
+
+
+def test_find_longer_than_model_ten_second_hint(tmp_path):
+    async def scenario():
+        (tmp_path / "target.txt").write_text("target")
+        sandbox = Sandbox(Settings(_env_file=None, command_timeout=30), Folder(id="w", label="w", path=tmp_path), uuid4().hex, [], [], tmp_path / "input")
+        await sandbox.start()
+        try:
+            result = await sandbox.execute(r"find . -name target.txt -exec sleep 11 \; -print", emit, 10)
+            assert result["outcome"]["exit_code"] == 0, result
+            assert "target.txt" in result["stdout"]
+        finally:
+            await sandbox.close()
+    asyncio.run(scenario())

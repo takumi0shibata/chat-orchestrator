@@ -148,6 +148,7 @@ class Settings(BaseSettings):
     sandbox_memory: str = "8g"
     sandbox_pids: int = Field(default=256, ge=32)
     command_timeout: int = Field(default=600, ge=1)
+    command_timeout_min: int = Field(default=60, ge=1)
     run_timeout: int = Field(default=3600, ge=1)
     max_model_rounds: int = Field(default=100, ge=1)
     max_output_chars: int = Field(default=64000, ge=1024)

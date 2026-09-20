@@ -8,13 +8,15 @@ from app.attachments import direct_input, file_snapshot
 from app.model_catalog import validate_model
 from app.openai_client import build_openai_client
 from app.project_instructions import load_project_instructions
-from app.sandbox import Sandbox, docker
+from app.sandbox import Sandbox, command_time_limit, docker
 from app.storage import TERMINAL
 
 log = logging.getLogger(__name__)
 INSTRUCTIONS = """You are a local workspace assistant. Complete the user's task autonomously using Responses shell tools.
 All commands execute in an isolated Linux container. /workspace is the user's ORIGINAL directory: edits are immediately reflected on their computer.
 Only make changes needed for the user's request. Explore filenames first and read relevant portions; never dump every file into context.
+Run Python with `python` using the preinstalled /opt/runtime/.venv environment. Do not activate or synchronize the host's .venv, install dependencies, or update lockfiles unless explicitly requested. Ordinary uv run uses the preinstalled environment with synchronization disabled.
+Use /workspace (not /workplace); chain dependent commands with && so a failed cd stops execution.
 Use installed tools to read Office/PDF files and perform analysis. /input contains read-only attachments; write results to /workspace.
 Skills and optional resources are read-only under /skills and /resources. Network is disabled. Use offline models if available.
 Give concise Japanese progress explanations before substantial operations, and report results, changed file paths, validation and limitations.
@@ -128,6 +130,7 @@ class RunManager:
             self.store.status(
                 rid, "stopped", "Stopped. Applied changes remain."
             )
+        self.store.preserve_interrupted_context(rid)
 
     def approve(self, rid, approval):
         pending = self.approvals.get((rid, approval.request_id))
@@ -146,6 +149,8 @@ class RunManager:
                 if run["status"] in TERMINAL and not self.store.needs_cleanup(
                     run["id"]
                 ):
+                    if run["status"] in {"failed", "stopped"}:
+                        self.store.preserve_interrupted_context(run["id"])
                     continue
                 try:
                     await docker("rm", "-f", "chat-agent-" + run["id"], timeout=10)
@@ -174,6 +179,9 @@ class RunManager:
                         "failed",
                         "Interrupted by a server restart. Check modified files.",
                     )
+
+                if self.store.run(run["id"])["status"] in {"failed", "stopped"}:
+                    self.store.preserve_interrupted_context(run["id"])
 
     async def shutdown(self):
         for rid in list(self.tasks):
@@ -262,6 +270,7 @@ class RunManager:
                 "Stopped. Applied changes remain.",
             )
         except TimeoutError:
+            self.store.event(rid, "error", dict(message=f"Time limit reached (run limit: {self.settings.run_timeout}s); see command history for the applied command limit."))
             final_status, final_label = (
                 "failed",
                 "Time limit reached. Modified files remain.",
@@ -318,6 +327,8 @@ class RunManager:
             if acquired:
                 lock.release()
             self.store.status(rid, final_status, final_label)
+            if final_status != "completed":
+                self.store.preserve_interrupted_context(rid)
 
     async def loop(
         self, rid, request, sandbox, skills, resources, project_instructions=None
@@ -342,8 +353,12 @@ class RunManager:
                 )
             )
         context.append(dict(role="user", content=content))
+        self.store.save_context(
+            request.conversation_id, context, request.provider, request.model, rid=rid
+        )
         instructions = (
             INSTRUCTIONS
+            + f"\nShell timeout hints are clamped to {min(self.settings.command_timeout_min, self.settings.command_timeout)}–{self.settings.command_timeout} seconds; the run limit is {self.settings.run_timeout} seconds."
             + "\nAvailable resource directories: "
             + json.dumps([f"/resources/{r.id}" for r in resources])
         )
@@ -373,7 +388,7 @@ class RunManager:
                 )
                 context = [jsonable(i) for i in compacted.output]
                 self.store.save_context(
-                    request.conversation_id, context, request.provider, request.model
+                    request.conversation_id, context, request.provider, request.model, rid=rid
                 )
                 self.store.event(
                     rid, "compaction", dict(label="Conversation context compacted")
@@ -529,6 +544,8 @@ class RunManager:
                     continue
                 action = item["action"]
                 results = []
+                requested_timeout = (action.get("timeout_ms") or self.settings.command_timeout * 1000) / 1000
+                timeout = command_time_limit(self.settings, requested_timeout)
                 for index, command in enumerate(action["commands"]):
                     self.store.status(
                         rid, "command_running", "Running command"
@@ -536,7 +553,7 @@ class RunManager:
                     self.store.event(
                         rid,
                         "command",
-                        dict(call_id=item["call_id"], index=index, command=command),
+                        dict(call_id=item["call_id"], index=index, command=command, timeout_seconds=timeout, requested_timeout_ms=action.get("timeout_ms")),
                     )
                     started = monotonic()
 
@@ -558,11 +575,7 @@ class RunManager:
                         result = await sandbox.execute(
                             command,
                             emit,
-                            (
-                                action.get("timeout_ms")
-                                or self.settings.command_timeout * 1000
-                            )
-                            / 1000,
+                            timeout,
                         )
                     except TimeoutError:
                         self.store.event(
@@ -572,7 +585,7 @@ class RunManager:
                                 call_id=item["call_id"],
                                 index=index,
                                 elapsed=monotonic() - started,
-                                outcome={"type": "timeout"},
+                                outcome={"type": "timeout", "timeout_seconds": timeout},
                             ),
                         )
                         raise
@@ -595,7 +608,7 @@ class RunManager:
                 context.append(shell_output)
             # Checkpoint only fully paired calls; a cancelled partial batch is never replayed automatically.
             self.store.save_context(
-                request.conversation_id, context, request.provider, request.model
+                request.conversation_id, context, request.provider, request.model, rid=rid
             )
             if not calls:
                 return
