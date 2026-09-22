@@ -601,6 +601,7 @@ h2 {
   border: 0;
 }
 .files-panel {
+  position: relative;
   border-left: 1px solid #e7e7e9;
   background: #fafafa;
   display: flex;
@@ -629,47 +630,131 @@ h2 {
   overflow-wrap: anywhere;
 }
 .folder-path {
-  font-family: monospace;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
-  color: #6e6f75;
-  padding: 10px 0;
+  font-weight: 600;
+  color: #555860;
+  padding: 9px 8px;
+  margin: 4px 0 5px;
+  background: #f3f3f5;
+  border-radius: 8px;
   border-bottom: 1px solid #e8e8ea;
   overflow-wrap: anywhere;
 }
+.folder-path svg { color: #7a6b45; flex: 0 0 auto; }
 .file-list {
   overflow: auto;
   flex: 1;
+  padding: 2px 0 8px;
 }
-.file-row {
+.file-tree {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.file-tree li { min-width: 0; }
+.file-tree-children {
+  margin-left: 17px;
+  padding-left: 6px;
+  border-left: 1px solid #e2e3e6;
+}
+.file-tree-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 2px;
-  color: #55565c;
+  gap: 7px;
+  min-height: 35px;
+  padding: 5px 7px;
+  color: #4d5057;
   border: 0;
-  border-radius: 0;
+  border-radius: 7px;
   background: transparent;
   width: 100%;
   text-decoration: none;
   font-size: 11px;
   text-align: left;
-  border-bottom: 1px solid #ededee;
+  cursor: pointer;
 }
-.file-row:hover {
-  background: #f1f1f2;
+.file-tree-row:hover { background: #eff0f2; }
+.file-tree-row:focus-visible {
+  outline: 2px solid #8b9d91;
+  outline-offset: -2px;
 }
-.file-row > span:not(.file-icon) {
+.file-tree-name {
   flex: 1;
-  overflow-wrap: anywhere;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.file-row small {
+.file-tree-row small {
   color: #999aa0;
   font-size: 9px;
   white-space: nowrap;
 }
-.file-icon {
-  color: #898a90;
+.file-tree-chevron {
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 18px;
+  color: #8b8d93;
+  transition: transform 140ms ease;
+  flex: 0 0 auto;
 }
+.file-tree-chevron.is-expanded { transform: rotate(90deg); }
+.file-tree-spacer { width: 13px; flex: 0 0 auto; }
+.folder-icon { display: grid; place-items: center; color: #8a7545; flex: 0 0 auto; }
+.file-type-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 24px;
+  border-radius: 6px;
+  flex: 0 0 auto;
+}
+.file-type-icon svg { width: 18px; height: 18px; }
+.file-type-pdf { color: #b5544c; background: #f8e9e7; }
+.file-type-image { color: #7661a8; background: #eee9f8; }
+.file-type-document { color: #4f6f9d; background: #e8eef6; }
+.file-type-spreadsheet { color: #477b60; background: #e6f2eb; }
+.file-type-presentation { color: #b26b3d; background: #f8ece3; }
+.file-type-code { color: #536e79; background: #e8eff1; }
+.file-type-archive { color: #8b6d35; background: #f4edde; }
+.file-type-generic { color: #71747b; background: #ececef; }
+.file-tree-branch { min-width: 0; }
+.file-tree-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  margin-left: 23px;
+  padding: 5px 8px;
+  color: #999ba1;
+  font-size: 10px;
+}
+.file-tree-root-state { margin: 4px 0; }
+.file-tree-error { color: #985b4d; justify-content: space-between; }
+.file-tree-error button {
+  border: 0;
+  border-radius: 5px;
+  padding: 3px 6px;
+  background: #f4e7e3;
+  color: #8f4f40;
+  font-size: 9px;
+  cursor: pointer;
+}
+.file-tree-error button:hover { background: #ecd8d2; }
+.file-tree-spinner {
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid #d5d6da;
+  border-top-color: #777b83;
+  border-radius: 50%;
+  animation: file-spin .75s linear infinite;
+}
+@keyframes file-spin { to { transform: rotate(360deg); } }
 .files-note {
   font-size: 10px;
   color: #999aa0;
@@ -1026,6 +1111,7 @@ h2 {
 .files-header .refresh-files { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border-radius: 9px; color: #555961; cursor: pointer; }
 .files-header .refresh-files:hover { background: #f0f1f3; }
 .files-header .refresh-files:disabled { opacity: .4; cursor: default; }
+.files-header .refresh-files.is-loading svg { animation: file-spin .75s linear infinite; }
 @media (min-width: 701px) and (max-width: 1100px) {
   .files-panel.is-open {
     display: flex;
@@ -1033,7 +1119,7 @@ h2 {
     right: 0;
     top: 0;
     bottom: 0;
-    width: 290px;
+    width: var(--files-width, 290px);
     z-index: 10;
     box-shadow: -12px 0 40px #20212422;
   }
@@ -1416,7 +1502,7 @@ h2 {
 /* Desktop sidebar resizing keeps the chat and optional files panel flexible. */
 @media (min-width: 1101px) {
   .app-shell.with-files {
-    grid-template-columns: var(--sidebar-width, 236px) minmax(420px, 1fr) 270px;
+    grid-template-columns: var(--sidebar-width, 236px) minmax(420px, 1fr) var(--files-width, 270px);
   }
   .app-shell.without-files {
     grid-template-columns: var(--sidebar-width, 236px) minmax(420px, 1fr);
@@ -1424,7 +1510,7 @@ h2 {
 }
 @media (min-width: 1500px) {
   .app-shell.with-files {
-    grid-template-columns: var(--sidebar-width, 236px) minmax(420px, 1fr) 310px;
+    grid-template-columns: var(--sidebar-width, 236px) minmax(420px, 1fr) var(--files-width, 310px);
   }
 }
 @media (min-width: 701px) and (max-width: 1100px) {
@@ -1455,6 +1541,16 @@ h2 {
   z-index: 4;
   top: 0;
   right: -5px;
+  bottom: 0;
+  width: 10px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.files-resizer {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  left: -5px;
   bottom: 0;
   width: 10px;
   cursor: col-resize;
@@ -1519,8 +1615,25 @@ h2 {
 .sidebar-resizer:focus-visible::after,
 .is-resizing-sidebar .sidebar-resizer::after { background: #a9aab0; }
 .sidebar-resizer:focus-visible { outline: none; }
+.files-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 1px;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.files-resizer:hover::after,
+.files-resizer:focus-visible::after,
+.is-resizing-files .files-resizer::after { background: #a9aab0; }
+.files-resizer:focus-visible { outline: none; }
 .is-resizing-sidebar,
-.is-resizing-sidebar * { cursor: col-resize !important; user-select: none !important; }
+.is-resizing-sidebar *,
+.is-resizing-files,
+.is-resizing-files * { cursor: col-resize !important; user-select: none !important; }
 @media (max-width: 700px) {
-  .sidebar-resizer { display: none; }
+  .sidebar-resizer,
+  .files-resizer { display: none; }
 }

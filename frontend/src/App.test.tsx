@@ -399,6 +399,23 @@ it("opens and closes Files from the same panel icon even before selecting a chat
   fireEvent.click(toggle);
   expect(screen.getByRole("button", { name: "Hide files panel" })).toBe(toggle);
   expect(container.querySelector("#files-panel")).toHaveClass("is-open");
+  const filesResize = screen.getByRole("separator", { name: "Resize files panel" });
+  expect(filesResize).toHaveAttribute("aria-valuenow", "270");
+  fireEvent.keyDown(filesResize, { key: "ArrowLeft" });
+  expect(filesResize).toHaveAttribute("aria-valuenow", "280");
+  expect(localStorage.getItem("workspace-files-width")).toBe("280");
+  expect(container.querySelector(".app-shell")).toHaveStyle("--files-width: 280px");
+  let captured = false;
+  Object.assign(filesResize, {
+    setPointerCapture: () => { captured = true; },
+    hasPointerCapture: () => captured,
+    releasePointerCapture: () => { captured = false; },
+  });
+  fireEvent(filesResize, new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+  fireEvent(filesResize, new MouseEvent("pointermove", { bubbles: true, clientX: 704 }));
+  fireEvent(filesResize, new MouseEvent("pointerup", { bubbles: true }));
+  expect(filesResize).toHaveAttribute("aria-valuenow", "320");
+  expect(localStorage.getItem("workspace-files-width")).toBe("320");
   fireEvent.keyDown(container.querySelector("#files-panel")!, { key: "Escape" });
   expect(toggle).toHaveAttribute("aria-expanded", "false");
   expect(toggle).toHaveFocus();
@@ -406,6 +423,78 @@ it("opens and closes Files from the same panel icon even before selecting a chat
   fireEvent.click(toggle);
   expect(container.querySelector("#files-panel")).not.toHaveClass("is-open");
   await waitFor(() => expect(screen.getByText("Explore, analyze, create.")).toBeInTheDocument());
+});
+
+it("renders a lazy file tree with typed icons, caching, refresh, empty and retry states", async () => {
+  localStorage.setItem("workspace-conversation", "c");
+  const conversation = { id: "c", workspace_id: "w", title: "File tree", updated_at: run.updated_at };
+  const config = {
+    providers: [],
+    workspaces: [{ id: "w", label: "Work", path: "/work" }],
+    skills: [], resources: [], mcp_servers: [],
+  };
+  const calls: Record<string, number> = {};
+  let brokenAttempts = 0;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = String(input);
+    if (url === "/api/config") return new Response(JSON.stringify(config));
+    if (url === "/api/settings") return new Response(JSON.stringify({ title_provider: "openai", title_model: "gpt-5.6-luna", theme_color: "#25262A" }));
+    if (url === "/api/conversations") return new Response(JSON.stringify([conversation]));
+    if (url === "/api/conversations/c") return new Response(JSON.stringify({ ...conversation, runs: [] }));
+    if (url.startsWith("/api/conversations/c/files")) {
+      const path = decodeURIComponent(url.split("path=")[1] || "");
+      calls[path] = (calls[path] || 0) + 1;
+      if (path === "documents") return new Response(JSON.stringify([
+        { name: "report.pdf", path: "documents/report.pdf", directory: false, size: 1536 },
+      ]));
+      if (path === "empty") return new Response(JSON.stringify([]));
+      if (path === "broken") {
+        brokenAttempts += 1;
+        if (brokenAttempts === 1) return new Response(JSON.stringify({ detail: "Unavailable" }), { status: 500 });
+        return new Response(JSON.stringify([{ name: "fixed.py", path: "broken/fixed.py", directory: false, size: 12 }]));
+      }
+      return new Response(JSON.stringify([
+        { name: "documents", path: "documents", directory: true, size: 0 },
+        { name: "empty", path: "empty", directory: true, size: 0 },
+        { name: "broken", path: "broken", directory: true, size: 0 },
+        { name: "photo.png", path: "photo.png", directory: false, size: 2 * 1024 * 1024 },
+        { name: "data.csv", path: "data.csv", directory: false, size: 100 },
+        { name: ".DS_Store", path: ".DS_Store", directory: false, size: 6 },
+      ]));
+    }
+    return new Response(JSON.stringify({}));
+  });
+
+  const { container } = render(<App />);
+  const documents = await screen.findByRole("button", { name: "documents" });
+  expect(documents).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByRole("link", { name: /photo.png/ }).querySelector('[data-icon="file-image"]')).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /data.csv/ }).querySelector('[data-icon="file-spreadsheet"]')).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /photo.png/ })).toHaveTextContent("2.0 MB");
+  expect(screen.getByRole("link", { name: /.DS_Store/ })).toBeInTheDocument();
+
+  fireEvent.click(documents);
+  expect(documents).toHaveAttribute("aria-expanded", "true");
+  const report = await screen.findByRole("link", { name: /report.pdf/ });
+  expect(report).toHaveAttribute("href", "/api/conversations/c/download?path=documents%2Freport.pdf");
+  expect(report).toHaveTextContent("1.5 KB");
+  expect(report.querySelector('[data-icon="file-pdf"]')).toBeInTheDocument();
+  fireEvent.click(documents);
+  fireEvent.click(documents);
+  expect(calls.documents).toBe(1);
+
+  fireEvent.click(screen.getByRole("button", { name: "empty" }));
+  expect(await screen.findByText("Empty folder")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "broken" }));
+  expect(await screen.findByText("Couldn’t load folder.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Retry loading broken" }));
+  expect(await screen.findByRole("link", { name: /fixed.py/ })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Refresh files" }));
+  await waitFor(() => expect(calls[""]).toBe(2));
+  await waitFor(() => expect(calls.documents).toBe(2));
+  expect(container.querySelector('.file-tree-chevron.is-expanded')).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "documents" })).toHaveAttribute("aria-expanded", "true");
 });
 
 it("uploads dropped files, reports errors, and keeps nested drag state stable", async () => {

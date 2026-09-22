@@ -1,5 +1,5 @@
 import { DragEvent as ReactDragEvent, FormEvent, KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { api, events } from "./api";
 import { MarkdownContent } from "./components/MarkdownContent";
 import { messageBlocks } from "./lib/timeline";
@@ -20,6 +20,9 @@ const LAST_PROJECT_KEY = "workspace-last-project";
 const SIDEBAR_WIDTH_KEY = "workspace-sidebar-width";
 const MIN_SIDEBAR_WIDTH = 200;
 const MAX_SIDEBAR_WIDTH = 400;
+const FILES_WIDTH_KEY = "workspace-files-width";
+const MIN_FILES_WIDTH = 240;
+const MAX_FILES_WIDTH = 520;
 const text = (value: unknown) =>
   typeof value === "string" ? value : JSON.stringify(value ?? "");
 const legacySystemLabels: Record<string, string> = {
@@ -91,6 +94,105 @@ function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "
     gear: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" /></>,
   };
   return <svg aria-hidden="true" data-icon={name} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
+}
+
+type FileKind = "pdf" | "image" | "document" | "spreadsheet" | "presentation" | "code" | "archive" | "generic";
+
+function fileKind(name: string): FileKind {
+  const extension = name.toLowerCase().split(".").pop() || "";
+  if (extension === "pdf") return "pdf";
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "heic", "bmp", "tif", "tiff"].includes(extension)) return "image";
+  if (["doc", "docx", "odt", "rtf", "txt", "md"].includes(extension)) return "document";
+  if (["xls", "xlsx", "ods", "csv", "tsv"].includes(extension)) return "spreadsheet";
+  if (["ppt", "pptx", "odp", "key"].includes(extension)) return "presentation";
+  if (["js", "jsx", "ts", "tsx", "py", "rb", "go", "rs", "java", "c", "cc", "cpp", "h", "hpp", "css", "html", "json", "yaml", "yml", "toml", "xml", "sql", "sh"].includes(extension)) return "code";
+  if (["zip", "gz", "tgz", "tar", "bz2", "xz", "7z", "rar"].includes(extension)) return "archive";
+  return "generic";
+}
+
+function formatFileSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = size / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && value >= 1024; index += 1) {
+    value /= 1024;
+    unit = units[index];
+  }
+  return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${unit}`;
+}
+
+function FileTypeIcon({ name }: { name: string }) {
+  const kind = fileKind(name);
+  const marks: Record<FileKind, ReactNode> = {
+    pdf: <path d="M8 15h8M8 12h5" />,
+    image: <><circle cx="10" cy="10" r="1.2" /><path d="m7.5 16 3.1-3 2.1 2 1.5-1.4 2.3 2.4" /></>,
+    document: <path d="M8 11h8M8 14h8M8 17h5" />,
+    spreadsheet: <><path d="M8 10h8v7H8zM8 13.5h8M12 10v7" /></>,
+    presentation: <><path d="M8 10h8v5H8zM12 15v3M9.5 18h5" /></>,
+    code: <path d="m10 11-2 2 2 2m4-4 2 2-2 2" />,
+    archive: <><path d="M11 8h2M11 11h2M11 14h2" /><path d="M10.5 17h3" /></>,
+    generic: <path d="M8 12h8M8 15h6" />,
+  };
+  return (
+    <span className={`file-type-icon file-type-${kind}`}>
+      <svg aria-hidden="true" data-icon={`file-${kind}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M6 3.5h7l5 5v12H6z" />
+        <path d="M13 3.5v5h5" />
+        {marks[kind]}
+      </svg>
+    </span>
+  );
+}
+
+function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle, onRetry, conversationId, depth = 0 }: {
+  entries: WorkspaceFile[];
+  childrenByPath: Record<string, WorkspaceFile[]>;
+  expanded: string[];
+  loading: string[];
+  errors: Record<string, string>;
+  onToggle: (entry: WorkspaceFile) => void;
+  onRetry: (path: string) => void;
+  conversationId: string;
+  depth?: number;
+}) {
+  return (
+    <ul className={depth ? "file-tree file-tree-children" : "file-tree"}>
+      {entries.map((entry) => {
+        const isExpanded = expanded.includes(entry.path);
+        if (!entry.directory) return (
+          <li key={entry.path}>
+            <a className="file-tree-row file-tree-file" href={`/api/conversations/${conversationId}/download?path=${encodeURIComponent(entry.path)}`} download title={entry.name}>
+              <span className="file-tree-spacer" />
+              <FileTypeIcon name={entry.name} />
+              <span className="file-tree-name">{entry.name}</span>
+              <small>{formatFileSize(entry.size)}</small>
+            </a>
+          </li>
+        );
+        const children = childrenByPath[entry.path];
+        const isLoading = loading.includes(entry.path);
+        const error = errors[entry.path];
+        return (
+          <li key={entry.path}>
+            <button className="file-tree-row file-tree-directory" type="button" aria-expanded={isExpanded} onClick={() => onToggle(entry)} title={entry.name}>
+              <span className={`file-tree-chevron ${isExpanded ? "is-expanded" : ""}`}><Icon name="chevron-right" size={13} /></span>
+              <span className="folder-icon"><Icon name={isExpanded ? "folder-open" : "folder"} size={17} /></span>
+              <span className="file-tree-name">{entry.name}</span>
+            </button>
+            {isExpanded && (
+              <div className="file-tree-branch" aria-busy={isLoading || undefined}>
+                {isLoading && <div className="file-tree-state" role="status"><span className="file-tree-spinner" />Loading…</div>}
+                {!isLoading && error && <div className="file-tree-state file-tree-error" role="alert"><span>Couldn’t load folder.</span><button type="button" aria-label={`Retry loading ${entry.name}`} onClick={() => onRetry(entry.path)}>Retry</button></div>}
+                {!isLoading && !error && children?.length === 0 && <div className="file-tree-state">Empty folder</div>}
+                {!isLoading && !error && children && <FileTree entries={children} childrenByPath={childrenByPath} expanded={expanded} loading={loading} errors={errors} onToggle={onToggle} onRetry={onRetry} conversationId={conversationId} depth={depth + 1} />}
+              </div>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 type SettingsPage = "chat" | "settings" | "cost" | "theme";
@@ -394,6 +496,13 @@ export function App() {
       : 236;
   });
   const [resizingSidebar, setResizingSidebar] = useState(false);
+  const [filesWidth, setFilesWidth] = useState(() => {
+    const stored = Number(localStorage.getItem(FILES_WIDTH_KEY));
+    return Number.isFinite(stored) && stored >= MIN_FILES_WIDTH && stored <= MAX_FILES_WIDTH
+      ? stored
+      : window.innerWidth >= 1500 ? 310 : 270;
+  });
+  const [resizingFiles, setResizingFiles] = useState(false);
   const [pinPending, setPinPending] = useState<string[]>([]);
   const [historyRevision, setHistoryRevision] = useState(0);
   const [cid, setCid] = useState(
@@ -415,8 +524,10 @@ export function App() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [timelines, setTimelines] = useState<Record<string, AgentEvent[]>>({});
   const [revision, setRevision] = useState(0);
-  const [files, setFiles] = useState<WorkspaceFile[]>([]);
-  const [folder, setFolder] = useState("");
+  const [filesByPath, setFilesByPath] = useState<Record<string, WorkspaceFile[]>>({});
+  const [expandedFolders, setExpandedFolders] = useState<string[]>([]);
+  const [loadingFolders, setLoadingFolders] = useState<string[]>([]);
+  const [fileErrors, setFileErrors] = useState<Record<string, string>>({});
   const [showFiles, setShowFiles] = useState(() => window.innerWidth > 1100);
   const [fileRevision, setFileRevision] = useState(0);
   const [error, setError] = useState("");
@@ -429,6 +540,8 @@ export function App() {
   const searchInput = useRef<HTMLInputElement>(null);
   const messageInput = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const fileConversation = useRef("");
+  const fileRequestIds = useRef<Record<string, number>>({});
   const dragDepth = useRef(0);
   const plusWrap = useRef<HTMLDivElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
@@ -651,7 +764,10 @@ export function App() {
   }, [cid, revision, configReady]);
 
   useEffect(() => {
-    setFolder("");
+    setFilesByPath({});
+    setExpandedFolders([]);
+    setLoadingFolders([]);
+    setFileErrors({});
     setAttachments([]);
     setDirect([]);
     setInput("");
@@ -659,22 +775,50 @@ export function App() {
     setError("");
     follow.current = true;
   }, [cid]);
-  useEffect(() => {
-    if (!cid) {
-      setFiles([]);
+
+  async function loadFileFolder(path: string, conversationId = cid) {
+    if (!conversationId) return;
+    const requestId = (fileRequestIds.current[path] || 0) + 1;
+    fileRequestIds.current[path] = requestId;
+    setLoadingFolders((items) => items.includes(path) ? items : [...items, path]);
+    setFileErrors((items) => {
+      const next = { ...items };
+      delete next[path];
+      return next;
+    });
+    try {
+      const entries = await api<WorkspaceFile[]>(`/conversations/${conversationId}/files?path=${encodeURIComponent(path)}`);
+      if (fileConversation.current !== conversationId || fileRequestIds.current[path] !== requestId) return;
+      setFilesByPath((items) => ({ ...items, [path]: entries }));
+    } catch (e) {
+      if (fileConversation.current !== conversationId || fileRequestIds.current[path] !== requestId) return;
+      setFileErrors((items) => ({ ...items, [path]: String(e) }));
+    } finally {
+      if (fileConversation.current === conversationId && fileRequestIds.current[path] === requestId)
+        setLoadingFolders((items) => items.filter((item) => item !== path));
+    }
+  }
+
+  function toggleFileFolder(entry: WorkspaceFile) {
+    if (expandedFolders.includes(entry.path)) {
+      setExpandedFolders((items) => items.filter((path) => path !== entry.path));
       return;
     }
-    const abort = new AbortController();
-    api<WorkspaceFile[]>(
-      `/conversations/${cid}/files?path=${encodeURIComponent(folder)}`,
-      { signal: abort.signal },
-    )
-      .then(setFiles)
-      .catch((e) => {
-        if (!abort.signal.aborted) setError(String(e));
-      });
-    return () => abort.abort();
-  }, [cid, folder, fileRevision]);
+    setExpandedFolders((items) => [...items, entry.path]);
+    if (!(entry.path in filesByPath) && !loadingFolders.includes(entry.path)) void loadFileFolder(entry.path);
+  }
+
+  useEffect(() => {
+    if (!cid) {
+      fileConversation.current = "";
+      setFilesByPath({});
+      return;
+    }
+    const changedConversation = fileConversation.current !== cid;
+    fileConversation.current = cid;
+    const paths = changedConversation ? [""] : ["", ...expandedFolders];
+    for (const path of paths) void loadFileFolder(path, cid);
+  }, [cid, fileRevision]);
   useEffect(() => {
     if (follow.current) bottom.current?.scrollIntoView?.({ block: "end" });
   }, [timelines]);
@@ -888,6 +1032,16 @@ export function App() {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next));
   }
 
+  function updateFilesWidth(value: number) {
+    const desktopLimit = window.innerWidth > 1100
+      ? window.innerWidth - sidebarWidth - 420
+      : window.innerWidth - 180;
+    const maximum = Math.max(MIN_FILES_WIDTH, Math.min(MAX_FILES_WIDTH, desktopLimit));
+    const next = Math.min(maximum, Math.max(MIN_FILES_WIDTH, Math.round(value)));
+    setFilesWidth(next);
+    localStorage.setItem(FILES_WIDTH_KEY, String(next));
+  }
+
   function conversationRow(conversation: Conversation, nested = false) {
     return (
       <div className={`conversation ${nested ? "nested" : ""} ${conversation.id === cid ? "selected" : ""}`} key={conversation.id}>
@@ -900,8 +1054,8 @@ export function App() {
 
   return (
     <div
-      className={`app-shell ${showFiles && settingsPage === "chat" ? "with-files" : "without-files"} ${resizingSidebar ? "is-resizing-sidebar" : ""}`}
-      style={{ "--sidebar-width": `${sidebarWidth}px`, ...themeVariables(appSettings.theme_color) } as CSSProperties}
+      className={`app-shell ${showFiles && settingsPage === "chat" ? "with-files" : "without-files"} ${resizingSidebar ? "is-resizing-sidebar" : ""} ${resizingFiles ? "is-resizing-files" : ""}`}
+      style={{ "--sidebar-width": `${sidebarWidth}px`, "--files-width": `${filesWidth}px`, ...themeVariables(appSettings.theme_color) } as CSSProperties}
     >
       {settingsPage === "chat" && <button
         ref={filesToggle}
@@ -1326,47 +1480,49 @@ export function App() {
           }
         }}
       >
+        <div
+          className="files-resizer"
+          role="separator"
+          aria-label="Resize files panel"
+          aria-orientation="vertical"
+          aria-valuemin={MIN_FILES_WIDTH}
+          aria-valuemax={MAX_FILES_WIDTH}
+          aria-valuenow={filesWidth}
+          tabIndex={0}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            setResizingFiles(true);
+          }}
+          onPointerMove={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) updateFilesWidth(window.innerWidth - event.clientX);
+          }}
+          onPointerUp={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+            setResizingFiles(false);
+          }}
+          onPointerCancel={() => setResizingFiles(false)}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            updateFilesWidth(filesWidth + (event.key === "ArrowLeft" ? 10 : -10));
+          }}
+        />
         <div className="files-header">
           <h2>Files</h2>
-          <button className="refresh-files" type="button" aria-label="Refresh files" title="Refresh files" disabled={!cid} onClick={() => setFileRevision((v) => v + 1)}>
+          <button className={`refresh-files ${loadingFolders.includes("") ? "is-loading" : ""}`} type="button" aria-label="Refresh files" title="Refresh files" disabled={!cid || loadingFolders.includes("")} onClick={() => setFileRevision((v) => v + 1)}>
             <Icon name="refresh" size={17} />
           </button>
         </div>
         <p className="workspace-path">
           {currentWorkspace?.path || "No workspace selected"}
         </p>
-        <div className="folder-path">/workspace{folder && `/${folder}`}</div>
-        {folder && (
-          <button
-            className="file-row"
-            onClick={() => setFolder(folder.split("/").slice(0, -1).join("/"))}
-          >
-            ↰ Parent folder
-          </button>
-        )}
+        <div className="folder-path"><Icon name="folder-open" size={15} /><span>/workspace</span></div>
         <div className="file-list">
-          {files.map((f) =>
-            f.directory ? (
-              <button
-                key={f.path}
-                className="file-row"
-                onClick={() => setFolder(f.path)}
-              >
-                ▸ <span>{f.name}</span>
-              </button>
-            ) : (
-              <a
-                key={f.path}
-                className="file-row"
-                href={`/api/conversations/${cid}/download?path=${encodeURIComponent(f.path)}`}
-                download
-              >
-                <span className="file-icon">▤</span>
-                <span>{f.name}</span>
-                <small>{Math.ceil(f.size / 1024)} KB</small>
-              </a>
-            ),
-          )}
+          {loadingFolders.includes("") && !filesByPath[""] && <div className="file-tree-state file-tree-root-state" role="status"><span className="file-tree-spinner" />Loading files…</div>}
+          {!loadingFolders.includes("") && fileErrors[""] && <div className="file-tree-state file-tree-error file-tree-root-state" role="alert"><span>Couldn’t load files.</span><button type="button" onClick={() => void loadFileFolder("")}>Retry</button></div>}
+          {!loadingFolders.includes("") && !fileErrors[""] && filesByPath[""]?.length === 0 && <div className="file-tree-state file-tree-root-state">No files yet</div>}
+          {filesByPath[""] && <FileTree entries={filesByPath[""]} childrenByPath={filesByPath} expanded={expandedFolders} loading={loadingFolders} errors={fileErrors} onToggle={toggleFileFolder} onRetry={(path) => void loadFileFolder(path)} conversationId={cid} />}
         </div>
         <p className="files-note">
           Created files appear here. Select a file to download it.
