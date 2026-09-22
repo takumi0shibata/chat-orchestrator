@@ -100,7 +100,10 @@ function renderCodeBlock(rawChunk: string): string {
   const body = hasLang ? rawChunk.slice(firstBreak + 1) : rawChunk;
   const escapedBody = escapeHtmlText(body);
   const highlighted = highlightEscapedCode(language, escapedBody);
-  return `<div class="code-wrap"><button class="code-copy-btn" data-copy-btn="1" type="button">Copy</button><pre class="code-block language-${language}"><code>${highlighted}</code></pre></div>`;
+  const languageLabel = hasLang
+    ? `<span class="code-language">${escapeHtmlText(langToken)}</span>`
+    : "<span></span>";
+  return `<div class="code-wrap"><div class="code-toolbar">${languageLabel}<button class="code-copy-btn" data-copy-btn="1" data-state="idle" type="button" aria-label="Copy code" title="Copy code"><svg class="copy-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path></svg><svg class="copy-check" aria-hidden="true" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></svg><span class="sr-only copy-feedback" aria-live="polite"></span></button></div><pre class="code-block language-${language}"><code>${highlighted}</code></pre></div>`;
 }
 
 function isTableSeparatorLine(line: string): boolean {

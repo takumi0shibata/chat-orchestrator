@@ -70,10 +70,14 @@ describe("Run timeline", () => {
         onApproval={vi.fn()}
       />,
     );
+    expect(screen.queryByText("YOU")).not.toBeInTheDocument();
     expect(screen.getByText("変更しました")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Activity"));
+    const details = document.querySelector("details");
+    expect(details).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("Worked for 5s"));
+    expect(details).toHaveAttribute("open");
     expect(screen.getByText("200 files analyzed")).toBeInTheDocument();
-    expect(screen.getByText("Completed")).toBeInTheDocument();
+    expect(screen.getByText("Work completed")).toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Stop" }),
@@ -100,6 +104,29 @@ describe("Run timeline", () => {
       expect(approval).toHaveBeenCalledWith("approval_1", true),
     );
     expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+  });
+
+  it("never renders automatic file change notifications", () => {
+    const { container } = render(
+      <RunView
+        run={run}
+        timeline={[
+          event(1, "artifacts", {
+            label: "3 file changes",
+            files: [
+              { path: "created.md", change: "created" },
+              { path: "updated.md", change: "modified" },
+              { path: "deleted.md", change: "deleted" },
+            ],
+          }),
+        ]}
+        onApproval={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Worked for 5s"));
+    expect(container).not.toHaveTextContent("file changes");
+    expect(container).not.toHaveTextContent("created.md");
+    expect(container.querySelector(".artifact-list")).toBeNull();
   });
 });
 
@@ -216,7 +243,7 @@ it("uses the composer button as the only stop control for an active run", async 
   });
   const { container } = render(<App />);
   const stop = await screen.findByRole("button", { name: "Stop" });
-  expect(screen.getAllByText("Waiting for model")).toHaveLength(1);
+  expect(screen.getAllByRole("status").some((element) => /^Working for /.test(element.textContent || ""))).toBe(true);
   expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
   fireEvent.dragEnter(container.querySelector(".main")!, {
     dataTransfer: { types: ["Files"], files: [new File(["x"], "x.txt")], items: [] },
@@ -237,7 +264,8 @@ it("moves provisional text to expandable Activity and keeps the final Markdown s
   expect(container.querySelectorAll(".answer-block")).toHaveLength(1);
   expect(container.querySelector(".answer-block strong")).toHaveTextContent("Final result");
   expect(container.querySelector(".activity-message")).toHaveTextContent("Checking files");
-  fireEvent.click(screen.getByText("Activity"));
+  expect(container.querySelector("details")).not.toHaveAttribute("open");
+  fireEvent.click(screen.getByText("Worked for 5s"));
   expect(container.querySelector("details")).toHaveAttribute("open");
 });
 
@@ -267,11 +295,12 @@ it("searches with debounce, ignores stale responses, preserves the open chat, an
   await screen.findByRole("textbox", { name: "Message" });
   expect(screen.queryByRole("heading", { name: "Current chat" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Pin Current chat" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Unpin Current chat" })).toBeEnabled());
+  await waitFor(() => expect(screen.getAllByRole("button", { name: "Unpin Current chat" })).toHaveLength(2));
   failPin = true;
-  fireEvent.click(screen.getByRole("button", { name: "Unpin Current chat" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Unpin Current chat" })[0]);
   await screen.findByText(/Pin failed/);
-  expect(screen.getByRole("button", { name: "Unpin Current chat" })).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "Unpin Current chat" })).toHaveLength(2);
+  fireEvent.click(screen.getByRole("button", { name: "Search" }));
   const search = screen.getByRole("searchbox", { name: "Search history" });
   fireEvent.change(search, { target: { value: "old" } });
   expect(fetchMock.mock.calls.some(([url]) => url === "/api/conversations?q=old")).toBe(false);
@@ -283,7 +312,75 @@ it("searches with debounce, ignores stale responses, preserves the open chat, an
   expect(localStorage.getItem("workspace-conversation")).toBe("c");
   expect(screen.getByRole("textbox", { name: "Message" })).toBeInTheDocument();
   fireEvent.change(search, { target: { value: "" } });
-  await screen.findByRole("button", { name: "Current chat" });
+  await waitFor(() => expect(screen.getAllByRole("button", { name: "Current chat" })).toHaveLength(2));
+  fireEvent.keyDown(search, { key: "Escape" });
+  expect(screen.queryByRole("searchbox", { name: "Search history" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Search" })).toBeInTheDocument();
+});
+
+it("groups chats by project and creates from the recent or chosen project", async () => {
+  const alpha = { id: "a", title: "Alpha chat", workspace_id: "alpha", updated_at: "2026-09-16T00:00:00Z", pinned: false };
+  const beta = { id: "b", title: "Beta chat", workspace_id: "beta", updated_at: "2026-09-17T00:00:00Z", pinned: true };
+  const created = { id: "new", title: "New chat", workspace_id: "beta", updated_at: "2026-09-18T00:00:00Z", pinned: false };
+  localStorage.setItem("workspace-conversation", "b");
+  localStorage.setItem("workspace-last-project", "beta");
+  const posts: string[] = [];
+  let conversations = [alpha, beta];
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
+    const url = String(input);
+    if (url === "/api/config") return new Response(JSON.stringify({
+      providers: [],
+      workspaces: [
+        { id: "alpha", label: "Alpha", path: "/alpha" },
+        { id: "beta", label: "Beta", path: "/beta" },
+      ],
+      skills: [], resources: [], mcp_servers: [],
+    }));
+    if (url === "/api/conversations" && options?.method === "POST") {
+      const projectId = JSON.parse(String(options.body)).workspace_id as string;
+      posts.push(projectId);
+      const next = { ...created, id: `new-${posts.length}`, workspace_id: projectId };
+      conversations = [...conversations, next];
+      return new Response(JSON.stringify(next));
+    }
+    if (url === "/api/conversations") return new Response(JSON.stringify(conversations));
+    if (url.startsWith("/api/conversations/") && !url.includes("/files")) {
+      const id = url.split("/").pop();
+      const conversation = conversations.find((item) => item.id === id);
+      return new Response(JSON.stringify({ ...conversation, runs: [] }));
+    }
+    if (url.includes("/files")) return new Response(JSON.stringify([]));
+    return new Response(JSON.stringify({}));
+  });
+
+  render(<App />);
+  const betaToggle = await screen.findByRole("button", { name: "Collapse Beta" });
+  const alphaToggle = screen.getByRole("button", { name: "Expand Alpha" });
+  expect(betaToggle.querySelector('[data-icon="folder-open"]')).toBeInTheDocument();
+  expect(alphaToggle.querySelector('[data-icon="folder"]')).toBeInTheDocument();
+  fireEvent.click(alphaToggle);
+  const expandedAlpha = screen.getByRole("button", { name: "Collapse Alpha" });
+  const alphaConversations = expandedAlpha.closest(".project-group")?.querySelector(".project-conversations");
+  expect(expandedAlpha.querySelector('[data-icon="folder-open"]')).toBeInTheDocument();
+  expect(alphaConversations).toHaveClass("is-expanded");
+  expect(alphaConversations).toHaveAttribute("aria-hidden", "false");
+  fireEvent.click(expandedAlpha);
+  expect(alphaConversations).not.toHaveClass("is-expanded");
+  expect(alphaConversations).toHaveAttribute("aria-hidden", "true");
+  expect(screen.getAllByRole("button", { name: "Beta chat" })).toHaveLength(2);
+  expect(screen.queryByText("Recents")).not.toBeInTheDocument();
+
+  const sidebarResize = screen.getByRole("separator", { name: "Resize sidebar" });
+  expect(sidebarResize).toHaveAttribute("aria-valuenow", "236");
+  fireEvent.keyDown(sidebarResize, { key: "ArrowRight" });
+  expect(sidebarResize).toHaveAttribute("aria-valuenow", "246");
+  expect(localStorage.getItem("workspace-sidebar-width")).toBe("246");
+
+  fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+  await waitFor(() => expect(posts).toEqual(["beta"]));
+  fireEvent.click(screen.getByRole("button", { name: "New chat in Alpha" }));
+  await waitFor(() => expect(posts).toEqual(["beta", "alpha"]));
+  expect(localStorage.getItem("workspace-last-project")).toBe("alpha");
 });
 
 it("opens and closes Files from the same panel icon even before selecting a chat", async () => {

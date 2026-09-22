@@ -12,19 +12,28 @@ export function MarkdownContent({ content, conversationId }: { content: string; 
     const code = wrap?.querySelector("pre code");
     const text = code?.textContent || "";
     if (!text) return;
+    const feedback = button.querySelector<HTMLElement>(".copy-feedback");
+
+    const reset = () => {
+      button.dataset.state = "idle";
+      button.setAttribute("aria-label", "Copy code");
+      button.setAttribute("title", "Copy code");
+      if (feedback) feedback.textContent = "";
+    };
 
     try {
       await navigator.clipboard.writeText(text);
-      const previous = button.textContent;
-      button.textContent = "Copied";
-      window.setTimeout(() => {
-        button.textContent = previous || "Copy";
-      }, 1200);
+      button.dataset.state = "copied";
+      button.setAttribute("aria-label", "Code copied");
+      button.setAttribute("title", "Copied");
+      if (feedback) feedback.textContent = "Code copied";
+      window.setTimeout(reset, 1200);
     } catch {
-      button.textContent = "Failed";
-      window.setTimeout(() => {
-        button.textContent = "Copy";
-      }, 1200);
+      button.dataset.state = "failed";
+      button.setAttribute("aria-label", "Copy failed");
+      button.setAttribute("title", "Copy failed");
+      if (feedback) feedback.textContent = "Copy failed";
+      window.setTimeout(reset, 1200);
     }
   };
 

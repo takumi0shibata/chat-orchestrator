@@ -1,7 +1,8 @@
 import { DragEvent as ReactDragEvent, FormEvent, KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { api, events } from "./api";
 import { MarkdownContent } from "./components/MarkdownContent";
-import { activityLabel, messageBlocks } from "./lib/timeline";
+import { messageBlocks } from "./lib/timeline";
 import { terminal } from "./types";
 import type {
   AgentEvent,
@@ -13,15 +14,10 @@ import type {
   WorkspaceFile,
 } from "./types";
 
-const statusLabels: Record<string, string> = {
-  preparing: "Preparing",
-  model_wait: "Waiting for model",
-  command_running: "Running command",
-  approval_wait: "Approval needed",
-  completed: "Completed",
-  failed: "Failed",
-  stopped: "Stopped",
-};
+const LAST_PROJECT_KEY = "workspace-last-project";
+const SIDEBAR_WIDTH_KEY = "workspace-sidebar-width";
+const MIN_SIDEBAR_WIDTH = 200;
+const MAX_SIDEBAR_WIDTH = 400;
 const text = (value: unknown) =>
   typeof value === "string" ? value : JSON.stringify(value ?? "");
 const legacySystemLabels: Record<string, string> = {
@@ -42,9 +38,21 @@ const legacySystemLabels: Record<string, string> = {
 };
 const systemText = (value: unknown) => legacySystemLabels[text(value)] || text(value);
 
-function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "check" | "close" | "spark" | "pin" | "panel-right"; size?: number }) {
+function elapsedLabel(seconds: number) {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "check" | "close" | "spark" | "pin" | "panel-right" | "compose" | "search" | "folder" | "folder-open" | "chevron-right"; size?: number }) {
   const paths = {
     "panel-right": <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M15 4v16" /></>,
+    "chevron-right": <path d="m9 18 6-6-6-6" />,
+    compose: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" /></>,
+    search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></>,
+    folder: <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5Z" />,
+    "folder-open": <><path d="M3 10V7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5V10" /><path d="M4.4 10h15.2a2 2 0 0 1 1.9 2.6l-1.4 4.5A2.7 2.7 0 0 1 17.5 19h-12a2.7 2.7 0 0 1-2.6-3.4l1.5-5.6Z" /></>,
     pin: <><path d="m8 3 8 0-1 6 3 3v2H6v-2l3-3-1-6Z" /><path d="M12 14v7" /></>,
     refresh: <><path d="M20 11a8 8 0 1 0-2.2 6.4" /><path d="M20 4v7h-7" /></>,
     paperclip: <path d="m20.5 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5l9.5-9.5a4 4 0 0 1 5.7 5.7l-9.5 9.5a2 2 0 0 1-2.8-2.8l8.8-8.8" />,
@@ -53,7 +61,7 @@ function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "
     close: <path d="M6 6l12 12M18 6 6 18" />,
     spark: <><path d="m12 2 1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2Z" /><path d="m19 17 .6 1.4L21 19l-1.4.6L19 21l-.6-1.4L17 19l1.4-.6L19 17Z" /></>,
   };
-  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
+  return <svg aria-hidden="true" data-icon={name} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
 
 function Choices({
@@ -111,9 +119,8 @@ export function RunView({
     return () => clearInterval(timer);
   }, [run.status]);
   const blocks = messageBlocks(timeline, run.status);
-  const currentStep = systemText(activityLabel(timeline, run.status, blocks));
   const activityEvents = [
-    ...timeline.filter((e) => !["text_delta", "command_output"].includes(e.type)),
+    ...timeline.filter((e) => !["text_delta", "command_output", "artifacts"].includes(e.type)),
     ...blocks.filter((block) => block.progress).map((block) => ({
       run_id: run.id, seq: block.seq, created_at: block.created_at,
       type: "progress_message", data: { text: block.content } as Record<string, unknown>,
@@ -149,26 +156,18 @@ export function RunView({
   return (
     <article className="turn">
       <div className="user-message">
-        <span className="eyebrow">YOU</span>
         <p>{run.request.input || "Work with attached files"}</p>
         {run.request.attachment_ids.length > 0 && (
           <small>{run.request.attachment_ids.length} attachments</small>
         )}
       </div>
       <div className="assistant-message">
-        <div className="run-heading">
-          <span className={`status ${run.status}`}>
-            <i />
-            {terminal(run.status) ? statusLabels[run.status] : "Working"}
-          </span>
-          <span className="muted">
-            {run.request.model} · {seconds}s
-          </span>
-        </div>
         <details className="activity">
           <summary>
-            <span className="activity-label" role={terminal(run.status) ? undefined : "status"}>{currentStep}</span>
-            <span className="activity-hint">{terminal(run.status) ? "View history" : "Activity"}</span>
+            <span className="activity-label" role={terminal(run.status) ? undefined : "status"}>
+              {terminal(run.status) ? "Worked" : "Working"} for {elapsedLabel(seconds)}
+            </span>
+            <span className="activity-chevron" aria-hidden="true"><Icon name="chevron-right" size={15} /></span>
           </summary>
           <div className="activity-body">
             {activityEvents.map((e) => {
@@ -272,27 +271,6 @@ export function RunView({
               {text(e.data.message)}
             </p>
           ))}
-        {timeline
-          .filter((e) => e.type === "artifacts")
-          .map((e) => (
-            <div className="artifact-list" key={e.seq}>
-              {((e.data.files as { path: string; change: string }[]) || []).map(
-                (f) =>
-                  f.change === "deleted" ? (
-                    <span key={f.path}>{f.path} · deleted</span>
-                  ) : (
-                    <a
-                      key={f.path}
-                      href={`/api/conversations/${run.conversation_id}/download?path=${encodeURIComponent(f.path)}`}
-                      download
-                    >
-                      ▤ {f.path} · {f.change === "created" ? "created" : "updated"} ↓
-                    </a>
-                  ),
-              )}
-            </div>
-          ))}
-
       </div>
     </article>
   );
@@ -305,12 +283,23 @@ export function App() {
   const [searchResults, setSearchResults] = useState<Conversation[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [expandedProjects, setExpandedProjects] = useState<string[]>([]);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const stored = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    return Number.isFinite(stored) && stored >= MIN_SIDEBAR_WIDTH && stored <= MAX_SIDEBAR_WIDTH
+      ? stored
+      : 236;
+  });
+  const [resizingSidebar, setResizingSidebar] = useState(false);
   const [pinPending, setPinPending] = useState<string[]>([]);
   const [historyRevision, setHistoryRevision] = useState(0);
   const [cid, setCid] = useState(
     localStorage.getItem("workspace-conversation") || "",
   );
-  const [workspace, setWorkspace] = useState("");
+  const [workspace, setWorkspace] = useState(
+    localStorage.getItem(LAST_PROJECT_KEY) || "",
+  );
   const [provider, setProvider] = useState("openai");
   const [model, setModel] = useState("gpt-5.6-sol");
   const [effort, setEffort] = useState("medium");
@@ -335,6 +324,7 @@ export function App() {
   const [plusOpen, setPlusOpen] = useState(false);
   const [loadedCid, setLoadedCid] = useState("");
   const filesToggle = useRef<HTMLButtonElement>(null);
+  const searchInput = useRef<HTMLInputElement>(null);
   const messageInput = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
@@ -363,6 +353,21 @@ export function App() {
     !busy && !active && (input.trim() || attachments.length),
   );
   const canDropFiles = Boolean(cid && loadedCid === cid && !busy && !active);
+  const displayedConversations = query.trim() ? searchResults || [] : conversations;
+  const sortedConversations = (items: Conversation[]) => [...items].sort(
+    (a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id),
+  );
+
+  function rememberProject(projectId: string) {
+    setWorkspace(projectId);
+    localStorage.setItem(LAST_PROJECT_KEY, projectId);
+    setExpandedProjects((ids) => ids.includes(projectId) ? ids : [...ids, projectId]);
+  }
+
+  function selectConversation(conversation: Conversation) {
+    rememberProject(conversation.workspace_id);
+    setCid(conversation.id);
+  }
 
   async function refreshConversations() {
     setConversations(await api<Conversation[]>("/conversations"));
@@ -382,6 +387,10 @@ export function App() {
     }, 250);
     return () => { clearTimeout(timer); abort.abort(); };
   }, [query, historyRevision]);
+
+  useEffect(() => {
+    if (searchOpen) searchInput.current?.focus();
+  }, [searchOpen]);
 
   useLayoutEffect(() => {
     const element = messageInput.current;
@@ -431,13 +440,20 @@ export function App() {
         if (!alive) return;
         setConfig(c);
         setConversations(cs);
-        setWorkspace(c.workspaces[0]?.id || "");
+        const restoredConversation = cs.find((item) => item.id === cid);
+        const storedProject = localStorage.getItem(LAST_PROJECT_KEY) || "";
+        const initialProject = c.workspaces.some((item) => item.id === storedProject)
+          ? storedProject
+          : restoredConversation?.workspace_id || c.workspaces[0]?.id || "";
+        setWorkspace(initialProject);
+        if (initialProject) localStorage.setItem(LAST_PROJECT_KEY, initialProject);
+        setExpandedProjects(restoredConversation ? [restoredConversation.workspace_id] : []);
         const enabled = c.providers.find((p) => p.enabled && p.models.length);
         if (enabled) {
           setProvider(enabled.id);
           setModel(enabled.models[0].id);
         }
-        setCid((old) => (cs.some((x) => x.id === old) ? old : ""));
+        setCid(restoredConversation?.id || "");
       })
       .catch((e) => alive && setError(String(e)));
     return () => {
@@ -579,15 +595,17 @@ export function App() {
     };
   }, []);
 
-  async function newConversation() {
+  async function newConversation(projectId = workspace) {
+    if (!projectId) return;
     setBusy(true);
     setError("");
     try {
       const c = await api<Conversation>("/conversations", {
         method: "POST",
-        body: JSON.stringify({ workspace_id: workspace }),
+        body: JSON.stringify({ workspace_id: projectId }),
       });
       await refreshConversations();
+      rememberProject(projectId);
       setCid(c.id);
     } catch (e) {
       setError(String(e));
@@ -718,8 +736,44 @@ export function App() {
     }
   }
 
+  function toggleSearch() {
+    setSearchOpen((open) => {
+      if (open) {
+        setQuery("");
+        setSearchResults(null);
+        setSearchError("");
+      }
+      return !open;
+    });
+  }
+
+  function toggleProject(projectId: string) {
+    setExpandedProjects((ids) => ids.includes(projectId)
+      ? ids.filter((id) => id !== projectId)
+      : [...ids, projectId]);
+  }
+
+  function updateSidebarWidth(clientX: number) {
+    const next = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(clientX)));
+    setSidebarWidth(next);
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next));
+  }
+
+  function conversationRow(conversation: Conversation, nested = false) {
+    return (
+      <div className={`conversation ${nested ? "nested" : ""} ${conversation.id === cid ? "selected" : ""}`} key={conversation.id}>
+        <button disabled={busy} onClick={() => selectConversation(conversation)}>{conversation.title}</button>
+        <button className="history-action pin" aria-label={`${conversation.pinned ? "Unpin" : "Pin"} ${conversation.title}`} aria-pressed={Boolean(conversation.pinned)} disabled={pinPending.includes(conversation.id)} onClick={() => void togglePin(conversation)}><Icon name="pin" size={14} /></button>
+        <button className="history-action delete" aria-label={`Delete ${conversation.title}`} disabled={busy || pinPending.includes(conversation.id) || (conversation.id === cid && active)} onClick={() => void removeConversation(conversation.id)}>×</button>
+      </div>
+    );
+  }
+
   return (
-    <div className={`app-shell ${showFiles ? "with-files" : "without-files"}`}>
+    <div
+      className={`app-shell ${showFiles ? "with-files" : "without-files"} ${resizingSidebar ? "is-resizing-sidebar" : ""}`}
+      style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+    >
       <button
         ref={filesToggle}
         className="panel-toggle"
@@ -740,52 +794,104 @@ export function App() {
             Workspace<span className="brand-sub">RESPONSES AGENT</span>
           </span>
         </a>
-        <label className="field-label" htmlFor="workspace">
-          Workspace
-        </label>
-        <select
-          id="workspace"
-          value={workspace}
-          onChange={(e) => setWorkspace(e.target.value)}
-        >
-          {config?.workspaces.map((w) => (
-            <option key={w.id} value={w.id}>
-              {w.label}
-            </option>
-          ))}
-        </select>
-        <button
-          className="new-chat"
-          disabled={!workspace || busy}
-          onClick={() => void newConversation()}
-        >
-          + New chat
-        </button>
-        <div className="eyebrow section-label">History</div>
-        <input className="history-search" type="search" aria-label="Search history" placeholder="Search history" value={query} onChange={(e) => setQuery(e.target.value)} />
-        {searching && <small role="status">Searching…</small>}
-        {searchError && <small role="alert">{searchError}</small>}
+        <div className="sidebar-commands">
+          <button className="sidebar-command" disabled={!workspace || busy} onClick={() => void newConversation()}>
+            <Icon name="compose" size={19} />
+            <span>New chat</span>
+          </button>
+          {searchOpen ? (
+            <div className="sidebar-search-field" id="sidebar-search" role="search">
+              <Icon name="search" size={19} />
+              <input
+                ref={searchInput}
+                className="history-search"
+                type="search"
+                aria-label="Search history"
+                placeholder="Search chats"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Escape") toggleSearch(); }}
+              />
+              <button className="sidebar-search-close" type="button" aria-label="Close search" title="Close search" onClick={toggleSearch}>
+                <Icon name="close" size={15} />
+              </button>
+            </div>
+          ) : (
+            <button className="sidebar-command" aria-expanded="false" aria-controls="sidebar-search" onClick={toggleSearch}>
+              <Icon name="search" size={19} />
+              <span>Search</span>
+            </button>
+          )}
+        </div>
+        {searchOpen && (searching || searchError) && (
+          <div className="search-feedback">
+            {searching && <small role="status">Searching…</small>}
+            {searchError && <small role="alert">{searchError}</small>}
+          </div>
+        )}
         <nav aria-label="History">
-          {[true, false].map((pinned) => {
-            const items = (query.trim() ? searchResults || [] : conversations)
-              .filter((c) => Boolean(c.pinned) === pinned)
-              .sort((a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id));
-            return items.length > 0 && <div className="history-group" key={String(pinned)}>
-              <div className="eyebrow history-group-label">{pinned ? "Pinned" : "Recent"}</div>
-              {items.map((c) => <div className={`conversation ${c.id === cid ? "selected" : ""}`} key={c.id}>
-                <button disabled={busy} onClick={() => setCid(c.id)}>{c.title}</button>
-                <button className="history-action pin" aria-label={`${c.pinned ? "Unpin" : "Pin"} ${c.title}`} aria-pressed={Boolean(c.pinned)} disabled={pinPending.includes(c.id)} onClick={() => void togglePin(c)}><Icon name="pin" size={14} /></button>
-                <button className="history-action delete" aria-label={`Delete ${c.title}`} disabled={busy || pinPending.includes(c.id) || (c.id === cid && active)} onClick={() => void removeConversation(c.id)}>×</button>
-              </div>)}
-            </div>;
-          })}
+          {sortedConversations(displayedConversations.filter((conversation) => conversation.pinned)).length > 0 && (
+            <section className="history-group" aria-labelledby="pinned-heading">
+              <h2 className="sidebar-heading" id="pinned-heading">Pinned</h2>
+              {sortedConversations(displayedConversations.filter((conversation) => conversation.pinned)).map((conversation) => conversationRow(conversation))}
+            </section>
+          )}
+          <section className="projects-section" aria-labelledby="projects-heading">
+            <h2 className="sidebar-heading" id="projects-heading">Projects</h2>
+            {config?.workspaces.map((project) => {
+              const items = sortedConversations(displayedConversations.filter((conversation) => conversation.workspace_id === project.id));
+              if (query.trim() && items.length === 0) return null;
+              const expanded = query.trim() ? items.length > 0 : expandedProjects.includes(project.id);
+              return (
+                <div className={`project-group ${expanded ? "is-expanded" : ""}`} key={project.id}>
+                  <div className="project-row">
+                    <button className="project-toggle" type="button" aria-expanded={expanded} aria-label={`${expanded ? "Collapse" : "Expand"} ${project.label}`} onClick={() => toggleProject(project.id)}>
+                      <Icon name={expanded ? "folder-open" : "folder"} size={18} />
+                      <span>{project.label}</span>
+                    </button>
+                    <button className="project-new" type="button" aria-label={`New chat in ${project.label}`} title={`New chat in ${project.label}`} disabled={busy} onClick={() => void newConversation(project.id)}>
+                      <Icon name="compose" size={16} />
+                    </button>
+                  </div>
+                  <div className={`project-conversations ${expanded ? "is-expanded" : ""}`} aria-hidden={!expanded}>
+                    <div className="project-conversations-inner">
+                      {items.map((conversation) => conversationRow(conversation, true))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </section>
           {query.trim() && !searching && !searchError && searchResults?.length === 0 && <p className="muted">No matching conversations</p>}
         </nav>
-        <div className="sidebar-footer">
-          LOCAL EXECUTION
-          <br />
-          <span>Docker · Network off · CPU</span>
-        </div>
+        <div
+          className="sidebar-resizer"
+          role="separator"
+          aria-label="Resize sidebar"
+          aria-orientation="vertical"
+          aria-valuemin={MIN_SIDEBAR_WIDTH}
+          aria-valuemax={MAX_SIDEBAR_WIDTH}
+          aria-valuenow={sidebarWidth}
+          tabIndex={0}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            setResizingSidebar(true);
+          }}
+          onPointerMove={(event) => {
+            if (resizingSidebar && event.currentTarget.hasPointerCapture(event.pointerId)) updateSidebarWidth(event.clientX);
+          }}
+          onPointerUp={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+            setResizingSidebar(false);
+          }}
+          onPointerCancel={() => setResizingSidebar(false)}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            updateSidebarWidth(sidebarWidth + (event.key === "ArrowRight" ? 10 : -10));
+          }}
+        />
       </aside>
       <main
         className={`main ${draggingFiles ? "is-file-dragging" : ""}`}
@@ -817,7 +923,7 @@ export function App() {
               <img className="welcome-icon" src="/app-icon.png" alt="" />
               <h2>Explore, analyze, create.</h2>
               <p>
-                Choose a workspace and start a new chat.
+                Choose a project or start a new chat in your most recent project.
                 <br />
                 Ask the agent to inspect, edit, and check your files.
               </p>
