@@ -422,13 +422,49 @@ h2 {
   overflow: auto;
 }
 .command {
-  margin: 10px 0;
+  margin: 4px 0;
+  background: transparent;
+  color: #6e6f75;
+  border-radius: 0;
+  padding: 0;
+}
+.command summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 2px;
+  color: #6e6f75;
+  cursor: pointer;
+  list-style: none;
+}
+.command summary::-webkit-details-marker { display: none; }
+.command summary:hover { color: #35373c; }
+.command summary .command-label {
+  float: none;
+  color: inherit;
+  font-size: 11px;
+}
+.command summary small {
+  margin: 0 0 0 auto;
+  color: #999aa0;
+  font-size: 10px;
+}
+.command-chevron {
+  display: grid;
+  place-items: center;
+  float: none !important;
+  color: inherit !important;
+  transition: transform 150ms ease;
+}
+.command[open] .command-chevron { transform: rotate(90deg); }
+.command-details {
+  margin: 2px 0 10px 22px;
   background: #27282b;
   color: #eeeeef;
   border-radius: 7px;
   padding: 12px;
 }
-.command pre {
+.command-details pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, monospace;
@@ -443,7 +479,7 @@ h2 {
   max-height: 260px;
   overflow: auto;
 }
-.command small {
+.command-details small {
   display: block;
   color: #a9aab0;
   margin-top: 8px;
@@ -1303,13 +1339,19 @@ h2 {
 }
 .activity[open] .activity-chevron { transform: rotate(90deg); }
 .activity-body {
-  max-height: min(480px, 55vh);
-  overflow-y: auto;
+  max-height: none;
+  overflow: visible;
   padding: 8px 2px 4px;
-  scrollbar-gutter: stable;
 }
 .activity-message { padding: 12px 2px; border-bottom: 1px solid #ededee; }
 .activity-message time { font-size: 11px; color: #878990; }
+.activity .command > summary {
+  justify-content: flex-start;
+  padding: 7px 2px;
+  border-bottom: 0;
+  color: #6e6f75;
+}
+.activity .command > summary:hover { color: #35373c; }
 
 /* Code block toolbar: language metadata stays outside the copied code. */
 .code-wrap {

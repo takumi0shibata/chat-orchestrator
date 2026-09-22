@@ -76,6 +76,11 @@ describe("Run timeline", () => {
     expect(details).not.toHaveAttribute("open");
     fireEvent.click(screen.getByText("Worked for 5s"));
     expect(details).toHaveAttribute("open");
+    const command = document.querySelector("details.command")!;
+    expect(command).not.toHaveAttribute("open");
+    expect(screen.getByText("Ran command")).toBeInTheDocument();
+    fireEvent.click(command.querySelector("summary")!);
+    expect(command).toHaveAttribute("open");
     expect(screen.getByText("200 files analyzed")).toBeInTheDocument();
     expect(screen.getByText("Work completed")).toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
@@ -309,20 +314,53 @@ it("uses the composer button as the only stop control for an active run", async 
   await waitFor(() => expect(fetchMock.mock.calls.some(([url, options]) => url === "/api/runs/r/stop" && options?.method === "POST")).toBe(true));
 });
 
-it("moves provisional text to expandable Activity and keeps the final Markdown separate", () => {
+it("shows live work in Activity, preserves manual collapse, and separates the final answer", async () => {
   const initial = [event(1, "round", { number: 1 }), event(2, "text_delta", { item_id: "a", text: "Checking files" })];
   const { container, rerender } = render(<RunView run={{ ...run, status: "model_wait" }} timeline={initial} onApproval={vi.fn()} />);
-  expect(container.querySelector(".answer-block")).toHaveTextContent("Checking files");
-  const timeline = [...initial, event(3, "response", { round: 1, continues: true, final_item_ids: [] }),
-    event(4, "round", { number: 2 }), event(5, "text_delta", { item_id: "b", text: "**Final result**" }),
-    event(6, "response", { round: 2, final_item_ids: ["b"], continues: false })];
+  const details = container.querySelector("details")!;
+  expect(details).toHaveAttribute("open");
+  expect(container.querySelector(".activity-message")).toHaveTextContent("Checking files");
+  expect(container.querySelector(".answer-block")).toBeNull();
+  fireEvent.click(details.querySelector("summary")!);
+  expect(details).not.toHaveAttribute("open");
+
+  const continued = [...initial, event(3, "response", { round: 1, continues: true, final_item_ids: [] }),
+    event(4, "command", { call_id: "call", index: 0, command: "npm test" })];
+  rerender(<RunView run={{ ...run, status: "command_running" }} timeline={continued} onApproval={vi.fn()} />);
+  expect(details).not.toHaveAttribute("open");
+  const command = container.querySelector("details.command")!;
+  expect(command).not.toHaveAttribute("open");
+  expect(command.querySelector(".command-code")).toHaveTextContent("npm test");
+  expect(command.querySelector(".command-label")).toHaveTextContent("Running command");
+  fireEvent.click(details.querySelector("summary")!);
+  expect(details).toHaveAttribute("open");
+
+  const timeline = [...continued, event(5, "command_done", { call_id: "call", index: 0, elapsed: 1, outcome: { type: "exit", exit_code: 0 } }),
+    event(6, "round", { number: 2 }), event(7, "text_delta", { item_id: "b", text: "**Final result**" }),
+    event(8, "response", { round: 2, final_item_ids: ["b"], continues: false })];
   rerender(<RunView run={run} timeline={timeline} onApproval={vi.fn()} />);
+  await waitFor(() => expect(details).not.toHaveAttribute("open"));
   expect(container.querySelectorAll(".answer-block")).toHaveLength(1);
   expect(container.querySelector(".answer-block strong")).toHaveTextContent("Final result");
   expect(container.querySelector(".activity-message")).toHaveTextContent("Checking files");
-  expect(container.querySelector("details")).not.toHaveAttribute("open");
   fireEvent.click(screen.getByText("Worked for 5s"));
-  expect(container.querySelector("details")).toHaveAttribute("open");
+  expect(details).toHaveAttribute("open");
+});
+
+it("opens Activity when an active run fails and when a stopped run is restored", async () => {
+  const timeline = [event(1, "text_delta", { item_id: "a", text: "Checking before failure" })];
+  const { container, rerender } = render(<RunView run={{ ...run, status: "model_wait" }} timeline={timeline} onApproval={vi.fn()} />);
+  const details = container.querySelector("details")!;
+  fireEvent.click(details.querySelector("summary")!);
+  expect(details).not.toHaveAttribute("open");
+
+  rerender(<RunView run={{ ...run, status: "failed" }} timeline={timeline} onApproval={vi.fn()} />);
+  await waitFor(() => expect(details).toHaveAttribute("open"));
+  expect(container.querySelector(".activity-message")).toHaveTextContent("Checking before failure");
+  expect(container.querySelector(".answer-block")).toBeNull();
+
+  const restored = render(<RunView run={{ ...run, status: "stopped" }} timeline={timeline} onApproval={vi.fn()} />);
+  expect(restored.container.querySelector("details")).toHaveAttribute("open");
 });
 
 it("searches with debounce, ignores stale responses, preserves the open chat, and rolls back failed pinning", async () => {

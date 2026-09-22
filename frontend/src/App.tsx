@@ -322,15 +322,23 @@ export function RunView({
   const [clock, setClock] = useState(Date.now());
   const [pending, setPending] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState("");
+  const [activityOpen, setActivityOpen] = useState(run.status !== "completed");
   useEffect(() => {
     if (terminal(run.status)) return;
     const timer = setInterval(() => setClock(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [run.status]);
+  useEffect(() => {
+    if (run.status === "completed") setActivityOpen(false);
+    else if (["failed", "stopped"].includes(run.status)) setActivityOpen(true);
+  }, [run.status]);
   const blocks = messageBlocks(timeline, run.status);
+  const activityBlocks = run.status === "completed"
+    ? blocks.filter((block) => block.progress)
+    : blocks;
   const activityEvents = [
     ...timeline.filter((e) => !["text_delta", "command_output", "artifacts", "conversation_title"].includes(e.type)),
-    ...blocks.filter((block) => block.progress).map((block) => ({
+    ...activityBlocks.map((block) => ({
       run_id: run.id, seq: block.seq, created_at: block.created_at,
       type: "progress_message", data: { text: block.content } as Record<string, unknown>,
     })),
@@ -371,8 +379,14 @@ export function RunView({
         )}
       </div>
       <div className="assistant-message">
-        <details className="activity">
-          <summary>
+        <details
+          className="activity"
+          open={activityOpen}
+        >
+          <summary onClick={(event) => {
+            event.preventDefault();
+            setActivityOpen((open) => !open);
+          }}>
             <span className="activity-label" role={terminal(run.status) ? undefined : "status"}>
               {terminal(run.status) ? "Worked" : "Working"} for {elapsedLabel(seconds)}
             </span>
@@ -400,24 +414,33 @@ export function RunView({
                       o.data.index === e.data.index,
                   );
                   return (
-                    <div className="command" key={e.seq}>
-                      <pre className="command-code">
-                        $ {text(e.data.command)}
-                      </pre>
-                      {output.length > 0 && (
-                        <pre className="command-output">
-                          {output.map((o) => text(o.data.text)).join("")}
+                    <details className="command" key={e.seq}>
+                      <summary>
+                        <span className="command-chevron" aria-hidden="true"><Icon name="chevron-right" size={14} /></span>
+                        <span className="command-label">
+                          {done ? "Ran command" : terminal(run.status) ? "Command interrupted" : "Running command"}
+                        </span>
+                        {done && <small>{Number(done.data.elapsed).toFixed(1)}s</small>}
+                      </summary>
+                      <div className="command-details">
+                        <pre className="command-code">
+                          $ {text(e.data.command)}
                         </pre>
-                      )}
-                      <small>
-                        {e.data.timeout_seconds != null && `Limit: ${Number(e.data.timeout_seconds)}s · `}
-                        {done
-                          ? `${text(done.data.outcome)} · ${Number(done.data.elapsed).toFixed(1)}s`
-                          : terminal(run.status)
-                            ? "Interrupted"
-                            : "Running…"}
-                      </small>
-                    </div>
+                        {output.length > 0 && (
+                          <pre className="command-output">
+                            {output.map((o) => text(o.data.text)).join("")}
+                          </pre>
+                        )}
+                        <small>
+                          {e.data.timeout_seconds != null && `Limit: ${Number(e.data.timeout_seconds)}s · `}
+                          {done
+                            ? `${text(done.data.outcome)} · ${Number(done.data.elapsed).toFixed(1)}s`
+                            : terminal(run.status)
+                              ? "Interrupted"
+                              : "Running…"}
+                        </small>
+                      </div>
+                    </details>
                   );
                 }
                 if (e.type === "command_done") return null;
@@ -443,7 +466,7 @@ export function RunView({
               })}
           </div>
         </details>
-        {blocks.filter((block) => !block.progress).map((block) => (
+        {run.status === "completed" && blocks.filter((block) => !block.progress).map((block) => (
           <div className="answer-block" key={block.key}><MarkdownContent conversationId={run.conversation_id} content={block.content} /></div>
         ))}
         {!terminal(run.status) &&
