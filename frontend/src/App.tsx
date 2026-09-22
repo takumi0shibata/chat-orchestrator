@@ -2,6 +2,14 @@ import { DragEvent as ReactDragEvent, FormEvent, KeyboardEvent, useEffect, useLa
 import type { CSSProperties, ReactNode } from "react";
 import { api, events } from "./api";
 import { MarkdownContent } from "./components/MarkdownContent";
+import {
+  exactSkillMatch,
+  findSkillMention,
+  matchingSkills,
+  replaceSkillMention,
+  skillMentionName,
+} from "./lib/skillMention";
+import type { SkillMention } from "./lib/skillMention";
 import { messageBlocks } from "./lib/timeline";
 import { terminal } from "./types";
 import type {
@@ -519,6 +527,8 @@ export function App() {
   const [mcps, setMcps] = useState<string[]>([]);
   const [web, setWeb] = useState(false);
   const [input, setInput] = useState("");
+  const [skillMention, setSkillMention] = useState<SkillMention | null>(null);
+  const [skillOption, setSkillOption] = useState(0);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [direct, setDirect] = useState<string[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
@@ -539,6 +549,7 @@ export function App() {
   const filesToggle = useRef<HTMLButtonElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const messageInput = useRef<HTMLTextAreaElement>(null);
+  const composerBox = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const fileConversation = useRef("");
   const fileRequestIds = useRef<Record<string, number>>({});
@@ -563,6 +574,9 @@ export function App() {
     ...resources.map((id) => ({ key: `resource-${id}`, label: config?.resources.find((item) => item.id === id)?.label || id, icon: "spark" as const, remove: () => setResources((old) => old.filter((value) => value !== id)) })),
     ...mcps.map((id) => ({ key: `mcp-${id}`, label: config?.mcp_servers.find((item) => item.id === id)?.label || id, icon: "spark" as const, remove: () => setMcps((old) => old.filter((value) => value !== id)) })),
   ];
+  const skillMatches = skillMention ? matchingSkills(config?.skills || [], skillMention.query) : [];
+  const skillMentionOpen = Boolean(skillMention && skillMatches.length && !busy && !active);
+  const activeSkillOption = Math.min(skillOption, Math.max(0, skillMatches.length - 1));
   const canSend = Boolean(
     selectedProvider?.enabled && selectedModel && cid && loadedCid === cid &&
     !busy && !active && (input.trim() || attachments.length),
@@ -771,6 +785,7 @@ export function App() {
     setAttachments([]);
     setDirect([]);
     setInput("");
+    setSkillMention(null);
     setPlusOpen(false);
     setError("");
     follow.current = true;
@@ -830,6 +845,14 @@ export function App() {
     document.addEventListener("pointerdown", closeOutside);
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, [plusOpen]);
+  useEffect(() => {
+    if (!skillMentionOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!composerBox.current?.contains(event.target as Node)) setSkillMention(null);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [skillMentionOpen]);
   useEffect(() => {
     if (canDropFiles) return;
     dragDepth.current = 0;
@@ -910,6 +933,7 @@ export function App() {
         }),
       });
       setInput("");
+      setSkillMention(null);
       setAttachments([]);
       setDirect([]);
       setRevision((v) => v + 1);
@@ -920,8 +944,56 @@ export function App() {
       setBusy(false);
     }
   }
+  function updateSkillMention(value: string, cursor: number | null) {
+    const mention = config?.skills.length && cursor !== null
+      ? findSkillMention(value, cursor)
+      : null;
+    setSkillMention(mention || null);
+    setSkillOption(0);
+    if (mention) setPlusOpen(false);
+  }
+  function selectSkillMention(skillId: string) {
+    if (!skillMention) return;
+    const skill = config?.skills.find((item) => item.id === skillId);
+    if (!skill) return;
+    const replacement = replaceSkillMention(input, skillMention);
+    setInput(replacement.value);
+    setSkills((old) => old.includes(skill.id) ? old : [...old, skill.id]);
+    setSkillMention(null);
+    window.setTimeout(() => {
+      messageInput.current?.focus();
+      messageInput.current?.setSelectionRange(replacement.cursor, replacement.cursor);
+    }, 0);
+  }
   function handleComposerKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (skillMentionOpen) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const direction = e.key === "ArrowDown" ? 1 : -1;
+        setSkillOption((activeSkillOption + direction + skillMatches.length) % skillMatches.length);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSkillMention(null);
+        return;
+      }
+      if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+        e.preventDefault();
+        selectSkillMention(skillMatches[activeSkillOption].id);
+        return;
+      }
+      if ((e.key === " " || e.key === "Spacebar") && skillMention) {
+        const exact = exactSkillMatch(skillMatches, skillMention.query);
+        if (exact) {
+          e.preventDefault();
+          selectSkillMention(exact.id);
+          return;
+        }
+      }
+    }
+    if (e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
     if (canSend) e.currentTarget.form?.requestSubmit();
   }
@@ -1266,7 +1338,7 @@ export function App() {
                 {connection}
               </p>
             )}
-            <div className="composer-box">
+            <div className="composer-box" ref={composerBox}>
               <div className="attachments">
                 {attachments.map((a) => (
                   <div className="attachment" key={a.id}>
@@ -1303,13 +1375,45 @@ export function App() {
               <textarea
                 ref={messageInput}
                 aria-label="Message"
+                aria-autocomplete="list"
+                aria-controls={skillMentionOpen ? "skill-mention-list" : undefined}
+                aria-expanded={skillMentionOpen}
+                aria-activedescendant={skillMentionOpen ? `skill-mention-${skillMatches[activeSkillOption].id}` : undefined}
                 placeholder="Ask anything"
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  updateSkillMention(e.target.value, e.target.selectionStart);
+                }}
+                onSelect={(e) => updateSkillMention(e.currentTarget.value, e.currentTarget.selectionStart)}
                 onKeyDown={handleComposerKeyDown}
                 disabled={busy || active}
                 rows={3}
               />
+              {skillMentionOpen && (
+                <div className="skill-mention-menu" id="skill-mention-list" role="listbox" aria-label="Skills">
+                  {skillMatches.map((skill, index) => (
+                    <button
+                      className={index === activeSkillOption ? "is-active" : ""}
+                      id={`skill-mention-${skill.id}`}
+                      key={skill.id}
+                      type="button"
+                      role="option"
+                      aria-selected={index === activeSkillOption}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => selectSkillMention(skill.id)}
+                    >
+                      <Icon name="spark" size={16} />
+                      <span>
+                        <strong>@{skillMentionName(skill)}</strong>
+                        {skill.label !== skillMentionName(skill) && <small>{skill.label}</small>}
+                        <small>{skill.description}</small>
+                      </span>
+                      {skills.includes(skill.id) && <Icon name="check" size={16} />}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="composer-actions">
                 <div className="plus-wrap" ref={plusWrap}>
                   <button
@@ -1318,6 +1422,7 @@ export function App() {
                     aria-label="Add attachments and tools"
                     aria-expanded={plusOpen}
                     onClick={() => {
+                      setSkillMention(null);
                       setPlusOpen((v) => !v);
                       if (!plusOpen) void refreshConfig();
                     }}

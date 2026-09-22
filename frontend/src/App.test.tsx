@@ -227,6 +227,62 @@ it("restores selected conversation and replays persistent events on reload", asy
   );
 });
 
+it("selects configured skills with an @ mention and sends their ids without the mention text", async () => {
+  localStorage.setItem("workspace-conversation", "c");
+  const config = {
+    providers: [{ id: "openai", label: "OpenAI", enabled: true, models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol", model: "gpt-5.6-sol", efforts: ["medium"] }] }],
+    workspaces: [{ id: "w", label: "Research", path: "/research" }],
+    skills: [
+      { id: "academic", label: "Academic review", name: "academic-writing", description: "Review drafts" },
+      { id: "morning", label: "Morning brief", name: "morning-brief", description: "Prepare a brief" },
+    ],
+    resources: [],
+    mcp_servers: [],
+  };
+  const conversation = { id: "c", workspace_id: "w", title: "Skill task", updated_at: run.updated_at };
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
+    const url = String(input);
+    if (url === "/api/config") return new Response(JSON.stringify(config));
+    if (url === "/api/settings") return new Response(JSON.stringify({ title_provider: "openai", title_model: "gpt-5.6-sol", theme_color: "#25262A" }));
+    if (url === "/api/conversations") return new Response(JSON.stringify([conversation]));
+    if (url === "/api/conversations/c") return new Response(JSON.stringify({ ...conversation, runs: [] }));
+    if (url.startsWith("/api/conversations/c/files")) return new Response(JSON.stringify([]));
+    if (url === "/api/runs" && options?.method === "POST") return new Response(JSON.stringify(run));
+    return new Response(JSON.stringify({}));
+  });
+
+  render(<App />);
+  const message = await screen.findByRole("textbox", { name: "Message" });
+  await waitFor(() => expect(message).not.toBeDisabled());
+
+  fireEvent.change(message, { target: { value: "@" } });
+  fireEvent.keyDown(message, { key: "ArrowDown" });
+  expect(screen.getByRole("option", { name: /@morning-brief/ })).toHaveAttribute("aria-selected", "true");
+  fireEvent.keyDown(message, { key: "Escape" });
+  expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
+
+  fireEvent.change(message, { target: { value: "@acad" } });
+  expect(screen.getByRole("listbox", { name: "Skills" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /@academic-writing/ })).toHaveAttribute("aria-selected", "true");
+  fireEvent.keyDown(message, { key: "Enter" });
+  expect(message).toHaveValue("");
+  expect(screen.getByRole("button", { name: "Remove Academic review" })).toBeInTheDocument();
+
+  fireEvent.change(message, { target: { value: "@morning-brief" } });
+  fireEvent.keyDown(message, { key: " " });
+  expect(message).toHaveValue("");
+  expect(screen.getByRole("button", { name: "Remove Morning brief" })).toBeInTheDocument();
+
+  fireEvent.change(message, { target: { value: "Prepare today's update" } });
+  fireEvent.keyDown(message, { key: "Enter" });
+  await waitFor(() => expect(fetchMock.mock.calls.some(([url, options]) => url === "/api/runs" && options?.method === "POST")).toBe(true));
+  const sent = fetchMock.mock.calls.find(([url, options]) => url === "/api/runs" && options?.method === "POST");
+  expect(JSON.parse(String(sent?.[1]?.body))).toMatchObject({
+    input: "Prepare today's update",
+    skill_ids: ["academic", "morning"],
+  });
+});
+
 it("uses the composer button as the only stop control for an active run", async () => {
   localStorage.setItem("workspace-conversation", "c");
   const activeRun = { ...run, status: "model_wait" };

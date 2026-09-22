@@ -12,10 +12,14 @@ export interface Provider extends Named {
   enabled: boolean;
   models: Model[];
 }
+export interface Skill extends Named {
+  name: string;
+  description: string;
+}
 export interface Config {
   providers: Provider[];
   workspaces: (Named & { path: string })[];
-  skills: (Named & { name: string; description: string })[];
+  skills: Skill[];
   resources: Named[];
   mcp_servers: Named[];
 }
