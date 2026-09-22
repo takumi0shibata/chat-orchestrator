@@ -60,17 +60,65 @@ function highlightCode(language: string, code: string): string {
   }
 }
 
-function renderCodeBlock(rawChunk: string): string {
-  const firstBreak = rawChunk.indexOf("\n");
-  const langToken = firstBreak >= 0 ? rawChunk.slice(0, firstBreak).trim() : "";
+function renderCodeBlock(langToken: string, body: string): string {
   const hasLang = /^[a-zA-Z0-9_+-]{1,20}$/.test(langToken);
   const language = hasLang ? langToken : "plain";
-  const body = hasLang ? rawChunk.slice(firstBreak + 1) : rawChunk;
   const highlighted = hasLang ? highlightCode(language, body) : escapeHtmlText(body);
   const languageLabel = hasLang
     ? `<span class="code-language">${escapeHtmlText(langToken)}</span>`
     : "<span></span>";
   return `<div class="code-wrap"><div class="code-toolbar">${languageLabel}<button class="code-copy-btn" data-copy-btn="1" data-state="idle" type="button" aria-label="Copy code" title="Copy code"><svg class="copy-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path></svg><svg class="copy-check" aria-hidden="true" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></svg><span class="sr-only copy-feedback" aria-live="polite"></span></button></div><pre class="code-block language-${language}"><code class="hljs">${highlighted}</code></pre></div>`;
+}
+
+type MarkdownSegment =
+  | { kind: "prose"; content: string }
+  | { kind: "code"; content: string; language: string };
+
+function splitFencedBlocks(markdown: string): MarkdownSegment[] {
+  const lines = markdown.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) || [];
+  const segments: MarkdownSegment[] = [];
+  let prose = "";
+  let index = 0;
+
+  const withoutLineEnding = (line: string) => line.replace(/\r?\n$/, "");
+
+  while (index < lines.length) {
+    const line = withoutLineEnding(lines[index]);
+    const opening = line.match(/^ {0,3}(`{3,}|~{3,})([^\r\n]*)$/);
+    const marker = opening?.[1] || "";
+    const info = opening?.[2] || "";
+    const invalidBacktickInfo = marker.startsWith("`") && info.includes("`");
+
+    if (!opening || invalidBacktickInfo) {
+      prose += lines[index];
+      index += 1;
+      continue;
+    }
+
+    if (prose) {
+      segments.push({ kind: "prose", content: prose });
+      prose = "";
+    }
+
+    index += 1;
+    let code = "";
+    while (index < lines.length) {
+      const candidate = withoutLineEnding(lines[index]);
+      const closing = candidate.match(/^ {0,3}(`+|~+)[ \t]*$/)?.[1];
+      if (closing?.[0] === marker[0] && closing.length >= marker.length) {
+        index += 1;
+        break;
+      }
+      code += lines[index];
+      index += 1;
+    }
+
+    const language = info.trim();
+    segments.push({ kind: "code", content: code, language });
+  }
+
+  if (prose) segments.push({ kind: "prose", content: prose });
+  return segments;
 }
 
 function isTableSeparatorLine(line: string): boolean {
@@ -98,16 +146,15 @@ function renderTable(header: string[], rows: string[][]): string {
 }
 
 export function markdownToHtml(markdown: string, conversationId?: string): string {
-  const chunks = markdown.split(/```/);
   const htmlParts: string[] = [];
 
-  for (let i = 0; i < chunks.length; i += 1) {
-    const chunk = chunks[i];
-    if (i % 2 === 1) {
-      htmlParts.push(renderCodeBlock(chunk));
+  for (const segment of splitFencedBlocks(markdown)) {
+    if (segment.kind === "code") {
+      htmlParts.push(renderCodeBlock(segment.language, segment.content));
       continue;
     }
 
+    const chunk = segment.content;
     const lines = chunk.split("\n");
     let inList = false;
 

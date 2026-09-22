@@ -41,6 +41,29 @@ describe("markdownToHtml", () => {
     }
   });
 
+  it("keeps shorter nested fences inside a longer fenced code block", () => {
+    const markdown = [
+      "Before",
+      "",
+      "````markdown",
+      "```typescript",
+      'const message: string = "Hello";',
+      "```",
+      "````",
+      "",
+      "After",
+    ].join("\n");
+    const root = document.createElement("div");
+    root.innerHTML = markdownToHtml(markdown);
+
+    expect(root.querySelectorAll(".code-wrap")).toHaveLength(1);
+    expect(root.querySelector(".code-language")).toHaveTextContent("markdown");
+    expect(root.querySelector("code")?.textContent).toBe('```typescript\nconst message: string = "Hello";\n```\n');
+    expect(root.querySelectorAll("p")).toHaveLength(2);
+    expect(root.textContent).toContain("Before");
+    expect(root.textContent).toContain("After");
+  });
+
   it("preserves apostrophes in prose and code output", () => {
     const html = markdownToHtml("We're testing `don't escape`");
 
