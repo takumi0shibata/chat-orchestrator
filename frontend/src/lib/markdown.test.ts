@@ -12,6 +12,35 @@ describe("markdownToHtml", () => {
     expect(root.querySelector(".language-bash")?.textContent).toBe("echo 'world'\n");
   });
 
+  it("highlights supported languages and aliases with distinct token classes", () => {
+    const cases = [
+      { language: "python", code: "for i in range(1, 9):\n    pass", tokens: [".hljs-keyword", ".hljs-built_in", ".hljs-number"] },
+      { language: "py", code: "return len(items)", tokens: [".hljs-keyword", ".hljs-built_in"] },
+      { language: "javascript", code: "const answer = 42;", tokens: [".hljs-keyword", ".hljs-number"] },
+      { language: "json", code: '{"enabled": true}', tokens: [".hljs-attr", ".hljs-literal"] },
+      { language: "bash", code: "echo 'hello'", tokens: [".hljs-built_in", ".hljs-string"] },
+    ];
+
+    for (const { language, code, tokens } of cases) {
+      const root = document.createElement("div");
+      root.innerHTML = markdownToHtml(`\`\`\`${language}\n${code}\n\`\`\``);
+
+      for (const token of tokens) expect(root.querySelector(token), `${language} should render ${token}`).not.toBeNull();
+      expect(root.querySelector("code")?.textContent).toBe(`${code}\n`);
+    }
+  });
+
+  it("keeps untagged and unknown-language blocks plain and HTML-safe", () => {
+    for (const markdown of ["```\n<script>alert(1)</script>\n```", "```unknown\n<script>alert(1)</script>\n```"]) {
+      const root = document.createElement("div");
+      root.innerHTML = markdownToHtml(markdown);
+
+      expect(root.querySelector("script")).toBeNull();
+      expect(root.querySelector(".hljs-keyword")).toBeNull();
+      expect(root.querySelector("code")?.textContent).toContain("<script>alert(1)</script>");
+    }
+  });
+
   it("preserves apostrophes in prose and code output", () => {
     const html = markdownToHtml("We're testing `don't escape`");
 

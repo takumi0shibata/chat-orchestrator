@@ -1,3 +1,5 @@
+import hljs from "highlight.js/lib/common";
+
 export function artifactDownloadUrl(url: string, conversationId?: string): string | null {
   if (!conversationId || !url.startsWith("sandbox:/workspace/")) return null;
   let path: string;
@@ -48,48 +50,14 @@ function formatInline(text: string, conversationId?: string): string {
   return out;
 }
 
-function highlightEscapedCode(language: string, escapedCode: string): string {
-  let code = escapedCode;
-  const tokens: string[] = [];
+function highlightCode(language: string, code: string): string {
+  if (!hljs.getLanguage(language)) return escapeHtmlText(code);
 
-  const stash = (pattern: RegExp, cls: string) => {
-    code = code.replace(pattern, (match) => {
-      const key = `@@TOK${tokens.length}@@`;
-      tokens.push(`<span class="tok ${cls}">${match}</span>`);
-      return key;
-    });
-  };
-
-  const restore = () => {
-    code = code.replace(/@@TOK(\d+)@@/g, (_, idx) => tokens[Number(idx)] || "");
-  };
-
-  const lang = language.toLowerCase();
-  const isPython = lang === "python" || lang === "py";
-  const isJsLike = ["javascript", "js", "typescript", "ts", "tsx", "jsx"].includes(lang);
-  const isJson = lang === "json";
-  const isShell = ["bash", "sh", "zsh", "shell"].includes(lang);
-
-  stash(/#.*$/gm, "comment");
-  stash(/\/\/.*$/gm, "comment");
-  stash(/\/\*[\s\S]*?\*\//g, "comment");
-  stash(/("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g, "string");
-
-  if (isPython) {
-    stash(/\b(def|class|if|elif|else|for|while|try|except|finally|return|import|from|as|pass|break|continue|with|lambda|yield|True|False|None|and|or|not|in|is|async|await)\b/g, "kw");
-    stash(/(^|\s)(@\w+)/gm, "decorator");
-  } else if (isJsLike) {
-    stash(/\b(function|class|const|let|var|if|else|for|while|switch|case|break|continue|return|try|catch|finally|throw|import|from|export|default|new|async|await|true|false|null|undefined)\b/g, "kw");
-  } else if (isJson) {
-    stash(/"([^"\\]|\\.)*"\s*(?=:)/g, "property");
-    stash(/\b(true|false|null)\b/g, "kw");
-  } else if (isShell) {
-    stash(/(^|\s)(sudo|cd|ls|cat|grep|awk|sed|find|curl|wget|npm|pnpm|yarn|python|pip|uv|git|docker|kubectl)\b/gm, "kw");
+  try {
+    return hljs.highlight(code, { language, ignoreIllegals: true }).value;
+  } catch {
+    return escapeHtmlText(code);
   }
-
-  stash(/\b\d+(\.\d+)?\b/g, "num");
-  restore();
-  return code;
 }
 
 function renderCodeBlock(rawChunk: string): string {
@@ -98,12 +66,11 @@ function renderCodeBlock(rawChunk: string): string {
   const hasLang = /^[a-zA-Z0-9_+-]{1,20}$/.test(langToken);
   const language = hasLang ? langToken : "plain";
   const body = hasLang ? rawChunk.slice(firstBreak + 1) : rawChunk;
-  const escapedBody = escapeHtmlText(body);
-  const highlighted = highlightEscapedCode(language, escapedBody);
+  const highlighted = hasLang ? highlightCode(language, body) : escapeHtmlText(body);
   const languageLabel = hasLang
     ? `<span class="code-language">${escapeHtmlText(langToken)}</span>`
     : "<span></span>";
-  return `<div class="code-wrap"><div class="code-toolbar">${languageLabel}<button class="code-copy-btn" data-copy-btn="1" data-state="idle" type="button" aria-label="Copy code" title="Copy code"><svg class="copy-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path></svg><svg class="copy-check" aria-hidden="true" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></svg><span class="sr-only copy-feedback" aria-live="polite"></span></button></div><pre class="code-block language-${language}"><code>${highlighted}</code></pre></div>`;
+  return `<div class="code-wrap"><div class="code-toolbar">${languageLabel}<button class="code-copy-btn" data-copy-btn="1" data-state="idle" type="button" aria-label="Copy code" title="Copy code"><svg class="copy-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path></svg><svg class="copy-check" aria-hidden="true" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></svg><span class="sr-only copy-feedback" aria-live="polite"></span></button></div><pre class="code-block language-${language}"><code class="hljs">${highlighted}</code></pre></div>`;
 }
 
 function isTableSeparatorLine(line: string): boolean {
