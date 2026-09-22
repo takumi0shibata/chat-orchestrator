@@ -24,11 +24,15 @@ function escapeHtmlAttribute(input: string): string {
 function formatInline(text: string, conversationId?: string): string {
   let out = text;
   const tokens: string[] = [];
+  let markerPrefix = "\uE000";
+  while (text.includes(markerPrefix)) markerPrefix += "\uE001";
+  const markerSuffix = "\uE002";
+  const markerPattern = new RegExp(`${markerPrefix}(\\d+)${markerSuffix}`, "g");
 
   const stash = (pattern: RegExp, render: (...args: string[]) => string) => {
     out = out.replace(pattern, (...args) => {
       const matchArgs = args.slice(0, -2) as string[];
-      const key = `@@INLINE${tokens.length}@@`;
+      const key = `${markerPrefix}${tokens.length}${markerSuffix}`;
       tokens.push(render(...matchArgs));
       return key;
     });
@@ -46,8 +50,14 @@ function formatInline(text: string, conversationId?: string): string {
   stash(/\*([^*]+)\*/g, (_match, emphasis) => `<em>${escapeHtmlText(emphasis)}</em>`);
 
   out = escapeHtmlText(out);
-  out = out.replace(/@@INLINE(\d+)@@/g, (_, idx) => tokens[Number(idx)] || "");
-  return out;
+  const resolvedTokens: string[] = [];
+  const resolveToken = (index: number): string => {
+    if (resolvedTokens[index] !== undefined) return resolvedTokens[index];
+    const resolved = (tokens[index] || "").replace(markerPattern, (_, idx) => resolveToken(Number(idx)));
+    resolvedTokens[index] = resolved;
+    return resolved;
+  };
+  return out.replace(markerPattern, (_, idx) => resolveToken(Number(idx)));
 }
 
 function highlightCode(language: string, code: string): string {
@@ -132,6 +142,10 @@ function isTableSeparatorLine(line: string): boolean {
   return cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
+function isThematicBreak(line: string): boolean {
+  return /^(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(line);
+}
+
 function splitTableRow(line: string, conversationId?: string): string[] {
   const normalized = line.trim().replace(/^\|/, "").replace(/\|$/, "");
   return normalized.split("|").map((cell) => formatInline(cell.trim(), conversationId));
@@ -166,6 +180,16 @@ export function markdownToHtml(markdown: string, conversationId?: string): strin
           htmlParts.push("</ul>");
           inList = false;
         }
+        lineIndex += 1;
+        continue;
+      }
+
+      if (isThematicBreak(line)) {
+        if (inList) {
+          htmlParts.push("</ul>");
+          inList = false;
+        }
+        htmlParts.push("<hr>");
         lineIndex += 1;
         continue;
       }

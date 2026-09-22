@@ -71,6 +71,31 @@ describe("markdownToHtml", () => {
     expect(html).toContain("don't escape");
     expect(html).not.toContain("&#39;");
   });
+
+  it("restores inline code nested inside bold text", () => {
+    const html = markdownToHtml("**ラベルと `actual` の整合性を確認する**\n**`src` が `tests` の対象外**\n***`deep`***");
+    const root = document.createElement("div");
+    root.innerHTML = html;
+
+    expect(root.querySelectorAll("strong")).toHaveLength(3);
+    expect(root.querySelectorAll("strong code")).toHaveLength(4);
+    expect(root.querySelector("em strong code")).toHaveTextContent("deep");
+    expect(root.textContent).toContain("ラベルと actual の整合性を確認する");
+    expect(root.textContent).not.toContain("INLINE");
+  });
+
+  it("does not treat placeholder-like user text as an internal inline token", () => {
+    expect(markdownToHtml("@@INLINE0@@ and `code`")).toContain("@@INLINE0@@");
+  });
+
+  it("renders thematic breaks instead of paragraphs or list items", () => {
+    const root = document.createElement("div");
+    root.innerHTML = markdownToHtml("before\n\n---\n\nafter\n* * *\n___");
+
+    expect(root.querySelectorAll("hr")).toHaveLength(3);
+    expect(root.querySelectorAll("p")).toHaveLength(2);
+    expect(root.querySelector("ul")).toBeNull();
+  });
 });
 
 it("resolves Japanese sandbox artifacts through the conversation download API", () => {
