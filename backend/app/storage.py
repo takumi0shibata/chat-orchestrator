@@ -23,7 +23,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS conversations (
                   id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL,
                   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, context TEXT NOT NULL DEFAULT '[]',
-                  provider TEXT, model TEXT);
+                  provider TEXT, model TEXT, title_status TEXT NOT NULL DEFAULT 'complete');
                 CREATE TABLE IF NOT EXISTS runs (
                   id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, status TEXT NOT NULL,
                   request TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -38,6 +38,17 @@ class Store:
                 CREATE TABLE IF NOT EXISTS attachments (
                   id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, name TEXT NOT NULL,
                   content_type TEXT NOT NULL, size INTEGER NOT NULL, path TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS app_settings (
+                  id INTEGER PRIMARY KEY CHECK(id=1), title_provider TEXT NOT NULL,
+                  title_model TEXT NOT NULL, theme_color TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS llm_costs (
+                  response_id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL,
+                  kind TEXT NOT NULL, input_tokens INTEGER NOT NULL,
+                  cached_input_tokens INTEGER NOT NULL, cache_write_tokens INTEGER NOT NULL,
+                  output_tokens INTEGER NOT NULL, input_rate_nano INTEGER NOT NULL,
+                  cached_rate_nano INTEGER NOT NULL, cache_write_rate_nano INTEGER NOT NULL,
+                  output_rate_nano INTEGER NOT NULL, cost_nano_usd INTEGER NOT NULL,
+                  created_at TEXT NOT NULL);
             """)
 
             columns = {row[1] for row in c.execute("PRAGMA table_info(conversations)")}
@@ -45,6 +56,16 @@ class Store:
                 c.execute(
                     "ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
                 )
+            if "title_status" not in columns:
+                c.execute(
+                    "ALTER TABLE conversations ADD COLUMN title_status TEXT NOT NULL DEFAULT 'complete'"
+                )
+            # A process restart cannot resume the independent title request. Do not
+            # leave completed run streams waiting on an orphaned state.
+            c.execute("UPDATE conversations SET title_status='complete' WHERE title_status='generating'")
+            c.execute(
+                "INSERT OR IGNORE INTO app_settings VALUES(1,'openai','gpt-5.6-luna','#25262A')"
+            )
 
     @contextmanager
     def connect(self):
@@ -119,8 +140,8 @@ class Store:
         cid = uuid4().hex
         with self.connect() as c:
             c.execute(
-                "INSERT INTO conversations(id,workspace_id,title,created_at,updated_at) VALUES(?,?,?,?,?)",
-                (cid, workspace_id, "新しい作業", now(), now()),
+                "INSERT INTO conversations(id,workspace_id,title,created_at,updated_at,title_status) VALUES(?,?,?,?,?,?)",
+                (cid, workspace_id, "新しい作業", now(), now(), "pending"),
             )
         return self.conversation(cid)
 
@@ -197,17 +218,72 @@ class Store:
             )
             c.execute("INSERT INTO run_context_state(run_id) VALUES(?)", (rid,))
             c.execute(
-                "UPDATE conversations SET title=CASE WHEN title='新しい作業' THEN ? ELSE title END,updated_at=? WHERE id=?",
-                (
-                    request["input"][:60] or "添付ファイルの作業",
-                    now(),
-                    request["conversation_id"],
-                ),
+                "UPDATE conversations SET updated_at=? WHERE id=?",
+                (now(), request["conversation_id"]),
             )
         self.event(
             rid, "status", {"status": "preparing", "label": "実行を準備しています"}
         )
         return self.run(rid)
+
+    def claim_title(self, cid):
+        with self.connect() as c:
+            result = c.execute(
+                "UPDATE conversations SET title_status='generating' WHERE id=? AND title_status='pending'",
+                (cid,),
+            )
+        return bool(result.rowcount)
+
+    def finish_title(self, cid, title):
+        with self.connect() as c:
+            result = c.execute(
+                "UPDATE conversations SET title=?,title_status='complete',updated_at=? WHERE id=?",
+                (title, now(), cid),
+            )
+        return bool(result.rowcount)
+
+    def settings(self):
+        with self.connect() as c:
+            row = c.execute("SELECT * FROM app_settings WHERE id=1").fetchone()
+        return {k: row[k] for k in ("title_provider", "title_model", "theme_color")}
+
+    def update_settings(self, **changes):
+        allowed = {k: v for k, v in changes.items() if k in {"title_provider", "title_model", "theme_color"} and v is not None}
+        if allowed:
+            assignments = ",".join(f"{key}=?" for key in allowed)
+            with self.connect() as c:
+                c.execute(
+                    f"UPDATE app_settings SET {assignments} WHERE id=1",
+                    (*allowed.values(),),
+                )
+        return self.settings()
+
+    def record_cost(self, entry):
+        with self.connect() as c:
+            c.execute(
+                """INSERT OR IGNORE INTO llm_costs(
+                    response_id,provider,model,kind,input_tokens,cached_input_tokens,
+                    cache_write_tokens,output_tokens,input_rate_nano,cached_rate_nano,
+                    cache_write_rate_nano,output_rate_nano,cost_nano_usd,created_at
+                ) VALUES(:response_id,:provider,:model,:kind,:input_tokens,:cached_input_tokens,
+                    :cache_write_tokens,:output_tokens,:input_rate_nano,:cached_rate_nano,
+                    :cache_write_rate_nano,:output_rate_nano,:cost_nano_usd,:created_at)""",
+                entry,
+            )
+
+    def monthly_costs(self):
+        current = datetime.now(timezone.utc).strftime("%Y-%m")
+        with self.connect() as c:
+            rows = [dict(r) for r in c.execute(
+                "SELECT substr(created_at,1,7) AS month,SUM(cost_nano_usd) AS cost_nano_usd "
+                "FROM llm_costs GROUP BY month ORDER BY month DESC"
+            )]
+        if not any(row["month"] == current for row in rows):
+            rows.insert(0, {"month": current, "cost_nano_usd": 0})
+        return [
+            {"month": row["month"], "usd": row["cost_nano_usd"] / 1_000_000_000}
+            for row in rows
+        ]
 
     def run(self, rid):
         with self.connect() as c:

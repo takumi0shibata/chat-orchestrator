@@ -208,6 +208,29 @@ def test_search_and_pin_api(app_client):
     assert http.patch(f"/api/conversations/{c['id']}", json={"unknown": True}).status_code == 422
 
 
+def test_settings_and_monthly_cost_api(app_client):
+    http, _, _ = app_client
+    settings = http.get("/api/settings").json()
+    assert settings == {
+        "title_provider": "openai",
+        "title_model": "gpt-5.6-luna",
+        "theme_color": "#25262A",
+    }
+    updated = http.patch("/api/settings", json={"theme_color": "#abcdef"})
+    assert updated.status_code == 200
+    assert updated.json()["theme_color"] == "#ABCDEF"
+    assert http.patch("/api/settings", json={"theme_color": "red"}).status_code == 422
+    assert http.patch("/api/settings", json={"title_model": "gpt-5.6-sol"}).status_code == 400
+    assert http.patch(
+        "/api/settings",
+        json={"title_provider": "openai", "title_model": "missing"},
+    ).status_code == 400
+    costs = http.get("/api/costs/monthly").json()
+    assert costs["currency"] == "USD" and costs["estimated"] is True
+    assert costs["exclusions"] == ["tool_fees"]
+    assert costs["months"][0]["usd"] == 0
+
+
 def test_japanese_artifact_download(app_client):
     from urllib.parse import quote
     http, work, _ = app_client

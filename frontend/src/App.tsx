@@ -6,9 +6,11 @@ import { messageBlocks } from "./lib/timeline";
 import { terminal } from "./types";
 import type {
   AgentEvent,
+  AppSettings,
   Attachment,
   Config,
   Conversation,
+  CostSummary,
   Named,
   Run,
   WorkspaceFile,
@@ -38,6 +40,32 @@ const legacySystemLabels: Record<string, string> = {
 };
 const systemText = (value: unknown) => legacySystemLabels[text(value)] || text(value);
 
+const DEFAULT_APP_SETTINGS: AppSettings = {
+  title_provider: "openai",
+  title_model: "gpt-5.6-luna",
+  theme_color: "#25262A",
+};
+
+function themeVariables(color: string): CSSProperties {
+  const match = /^#([0-9a-f]{6})$/i.exec(color);
+  if (!match) return {};
+  const value = Number.parseInt(match[1], 16);
+  const rgb = [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+  const linear = rgb.map((channel) => {
+    const normalized = channel / 255;
+    return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  });
+  const luminance = 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+  const foreground = luminance > 0.179 ? "#17181B" : "#FFFFFF";
+  const target = luminance > 0.179 ? 0 : 255;
+  const hover = `rgb(${rgb.map((channel) => Math.round(channel * 0.86 + target * 0.14)).join(" ")})`;
+  return {
+    "--theme-color": color,
+    "--theme-foreground": foreground,
+    "--theme-hover": hover,
+  } as CSSProperties;
+}
+
 function elapsedLabel(seconds: number) {
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
@@ -45,7 +73,7 @@ function elapsedLabel(seconds: number) {
   return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
-function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "check" | "close" | "spark" | "pin" | "panel-right" | "compose" | "search" | "folder" | "folder-open" | "chevron-right"; size?: number }) {
+function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "check" | "close" | "spark" | "pin" | "panel-right" | "compose" | "search" | "folder" | "folder-open" | "chevron-right" | "gear"; size?: number }) {
   const paths = {
     "panel-right": <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M15 4v16" /></>,
     "chevron-right": <path d="m9 18 6-6-6-6" />,
@@ -60,8 +88,79 @@ function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "
     check: <path d="m5 12 4 4L19 6" />,
     close: <path d="M6 6l12 12M18 6 6 18" />,
     spark: <><path d="m12 2 1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2Z" /><path d="m19 17 .6 1.4L21 19l-1.4.6L19 21l-.6-1.4L17 19l1.4-.6L19 17Z" /></>,
+    gear: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" /></>,
   };
   return <svg aria-hidden="true" data-icon={name} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
+}
+
+type SettingsPage = "chat" | "settings" | "cost" | "theme";
+
+function SettingsPanel({
+  page,
+  config,
+  settings,
+  costs,
+  onNavigate,
+  onChange,
+}: {
+  page: SettingsPage;
+  config: Config | null;
+  settings: AppSettings;
+  costs: CostSummary | null;
+  onNavigate: (page: SettingsPage) => void;
+  onChange: (changes: Partial<AppSettings>) => Promise<void>;
+}) {
+  const provider = config?.providers.find((item) => item.id === settings.title_provider);
+  const presets = ["#25262A", "#315C47", "#315B7A", "#5B4B8A", "#8A493D", "#B78A2B"];
+  const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 6 });
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const current = costs?.months.find((item) => item.month === currentMonth)?.usd || 0;
+  if (page === "cost") return (
+    <section className="settings-page">
+      <button className="settings-back" type="button" onClick={() => onNavigate("settings")}>← Settings</button>
+      <h1>Cost</h1>
+      <p className="settings-description">Monthly estimated LLM token costs in USD.</p>
+      <div className="cost-current"><span>This month</span><strong>{money.format(current)}</strong></div>
+      <div className="cost-notes"><span>Estimated</span><span>LLM token costs only</span><span>Tool fees excluded</span><span>UTC</span></div>
+      <div className="cost-list" aria-label="Monthly costs">
+        {(costs?.months || []).map((item) => <div className="cost-row" key={item.month}><span>{item.month}</span><strong>{money.format(item.usd)}</strong></div>)}
+      </div>
+    </section>
+  );
+  if (page === "theme") return (
+    <section className="settings-page">
+      <button className="settings-back" type="button" onClick={() => onNavigate("settings")}>← Settings</button>
+      <h1>Theme color</h1>
+      <p className="settings-description">Applied to your message boxes and the send button.</p>
+      <div className="theme-swatches" aria-label="Theme color presets">
+        {presets.map((color) => <button key={color} type="button" aria-label={`Use ${color}`} aria-pressed={settings.theme_color === color} style={{ backgroundColor: color }} onClick={() => void onChange({ theme_color: color })} />)}
+      </div>
+      <label className="custom-color">Custom color<input type="color" aria-label="Custom theme color" value={settings.theme_color} onChange={(event) => void onChange({ theme_color: event.target.value.toUpperCase() })} /><code>{settings.theme_color}</code></label>
+      <div className="theme-preview"><div className="user-message"><p>Theme preview</p></div><button className="send" type="button" aria-label="Theme preview send">↑</button></div>
+    </section>
+  );
+  return (
+    <section className="settings-page">
+      <button className="settings-back" type="button" onClick={() => onNavigate("chat")}>← Back to chat</button>
+      <h1>Settings</h1>
+      <div className="title-model-setting">
+        <h2>Title model</h2>
+        <p className="settings-description">Generates a concise title from the first message.</p>
+        <div className="title-model-controls">
+          <label>Provider<select aria-label="Title provider" value={settings.title_provider} onChange={(event) => {
+            const nextProvider = config?.providers.find((item) => item.id === event.target.value);
+            const nextModel = nextProvider?.models[0]?.id;
+            if (nextModel) void onChange({ title_provider: event.target.value, title_model: nextModel });
+          }}>{config?.providers.map((item) => <option key={item.id} value={item.id} disabled={!item.enabled}>{item.label}{!item.enabled ? " (unavailable)" : ""}</option>)}</select></label>
+          <label>Model<select aria-label="Title model" value={settings.title_model} onChange={(event) => void onChange({ title_provider: settings.title_provider, title_model: event.target.value })}>{provider?.models.map((item) => <option key={item.id} value={item.id}>{item.label}{item.id !== item.model ? ` · ${item.id}` : ""}</option>)}</select></label>
+        </div>
+      </div>
+      <div className="settings-links">
+        <button type="button" onClick={() => onNavigate("cost")}><span><strong>Cost</strong><small>Monthly estimated usage</small></span><Icon name="chevron-right" /></button>
+        <button type="button" onClick={() => onNavigate("theme")}><span><strong>Theme color</strong><small>{settings.theme_color}</small></span><Icon name="chevron-right" /></button>
+      </div>
+    </section>
+  );
 }
 
 function Choices({
@@ -120,7 +219,7 @@ export function RunView({
   }, [run.status]);
   const blocks = messageBlocks(timeline, run.status);
   const activityEvents = [
-    ...timeline.filter((e) => !["text_delta", "command_output", "artifacts"].includes(e.type)),
+    ...timeline.filter((e) => !["text_delta", "command_output", "artifacts", "conversation_title"].includes(e.type)),
     ...blocks.filter((block) => block.progress).map((block) => ({
       run_id: run.id, seq: block.seq, created_at: block.created_at,
       type: "progress_message", data: { text: block.content } as Record<string, unknown>,
@@ -278,6 +377,9 @@ export function RunView({
 
 export function App() {
   const [config, setConfig] = useState<Config | null>(null);
+  const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>("chat");
+  const [costs, setCosts] = useState<CostSummary | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Conversation[] | null>(null);
@@ -352,7 +454,7 @@ export function App() {
     selectedProvider?.enabled && selectedModel && cid && loadedCid === cid &&
     !busy && !active && (input.trim() || attachments.length),
   );
-  const canDropFiles = Boolean(cid && loadedCid === cid && !busy && !active);
+  const canDropFiles = Boolean(settingsPage === "chat" && cid && loadedCid === cid && !busy && !active);
   const displayedConversations = query.trim() ? searchResults || [] : conversations;
   const sortedConversations = (items: Conversation[]) => [...items].sort(
     (a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id),
@@ -365,6 +467,7 @@ export function App() {
   }
 
   function selectConversation(conversation: Conversation) {
+    setSettingsPage("chat");
     rememberProject(conversation.workspace_id);
     setCid(conversation.id);
   }
@@ -435,10 +538,11 @@ export function App() {
   }
   useEffect(() => {
     let alive = true;
-    Promise.all([api<Config>("/config"), api<Conversation[]>("/conversations")])
-      .then(([c, cs]) => {
+    Promise.all([api<Config>("/config"), api<Conversation[]>("/conversations"), api<AppSettings>("/settings")])
+      .then(([c, cs, savedSettings]) => {
         if (!alive) return;
         setConfig(c);
+        setAppSettings(savedSettings);
         setConversations(cs);
         const restoredConversation = cs.find((item) => item.id === cid);
         const storedProject = localStorage.getItem(LAST_PROJECT_KEY) || "";
@@ -495,6 +599,11 @@ export function App() {
               );
               if (terminal(text(event.data.status)))
                 setFileRevision((v) => v + 1);
+            }
+            if (event.type === "conversation_title") {
+              const title = text(event.data.title);
+              setConversations((old) => old.map((item) => item.id === run.conversation_id ? { ...item, title } : item));
+              setSearchResults((old) => old?.map((item) => item.id === run.conversation_id ? { ...item, title } : item) || null);
             }
             setConnection("");
           });
@@ -583,6 +692,10 @@ export function App() {
     setDraggingFiles(false);
   }, [canDropFiles]);
   useEffect(() => {
+    if (settingsPage !== "cost") return;
+    api<CostSummary>("/costs/monthly").then(setCosts).catch((e) => setError(String(e)));
+  }, [settingsPage]);
+  useEffect(() => {
     const preventFileNavigation = (event: globalThis.DragEvent) => {
       if (Array.from(event.dataTransfer?.types || []).includes("Files"))
         event.preventDefault();
@@ -600,6 +713,7 @@ export function App() {
     setBusy(true);
     setError("");
     try {
+      setSettingsPage("chat");
       const c = await api<Conversation>("/conversations", {
         method: "POST",
         body: JSON.stringify({ workspace_id: projectId }),
@@ -611,6 +725,21 @@ export function App() {
       setError(String(e));
     } finally {
       setBusy(false);
+    }
+  }
+  async function saveAppSettings(changes: Partial<AppSettings>) {
+    const previous = appSettings;
+    const optimistic = { ...appSettings, ...changes };
+    setAppSettings(optimistic);
+    try {
+      const saved = await api<AppSettings>("/settings", {
+        method: "PATCH",
+        body: JSON.stringify(changes),
+      });
+      setAppSettings(saved);
+    } catch (e) {
+      setAppSettings(previous);
+      setError(String(e));
     }
   }
   async function submit(e: FormEvent) {
@@ -771,10 +900,10 @@ export function App() {
 
   return (
     <div
-      className={`app-shell ${showFiles ? "with-files" : "without-files"} ${resizingSidebar ? "is-resizing-sidebar" : ""}`}
-      style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+      className={`app-shell ${showFiles && settingsPage === "chat" ? "with-files" : "without-files"} ${resizingSidebar ? "is-resizing-sidebar" : ""}`}
+      style={{ "--sidebar-width": `${sidebarWidth}px`, ...themeVariables(appSettings.theme_color) } as CSSProperties}
     >
-      <button
+      {settingsPage === "chat" && <button
         ref={filesToggle}
         className="panel-toggle"
         type="button"
@@ -786,7 +915,7 @@ export function App() {
         onKeyDown={(event) => { if (event.key === "Escape") setShowFiles(false); }}
       >
         <Icon name="panel-right" size={20} />
-      </button>
+      </button>}
       <aside className="sidebar">
         <a className="brand" href="/">
           <img className="brand-icon" src="/app-icon.png" alt="" />
@@ -864,6 +993,10 @@ export function App() {
           </section>
           {query.trim() && !searching && !searchError && searchResults?.length === 0 && <p className="muted">No matching conversations</p>}
         </nav>
+        <button className="sidebar-settings" type="button" aria-current={settingsPage !== "chat" ? "page" : undefined} onClick={() => setSettingsPage("settings")}>
+          <Icon name="gear" size={18} />
+          <span>Settings</span>
+        </button>
         <div
           className="sidebar-resizer"
           role="separator"
@@ -900,7 +1033,15 @@ export function App() {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-
+        {settingsPage !== "chat" ? (
+          <SettingsPanel page={settingsPage} config={config} settings={appSettings} costs={costs} onNavigate={setSettingsPage} onChange={saveAppSettings} />
+        ) : <>
+        {cid && (
+          <header className="chat-header">
+            <Icon name="folder" size={17} />
+            <h1 title={current?.title || "New chat"}>{current?.title || "New chat"}</h1>
+          </header>
+        )}
         {draggingFiles && (
           <div className="file-drop-overlay" role="status" aria-live="polite">
             <Icon name="paperclip" size={28} />
@@ -1164,6 +1305,7 @@ export function App() {
             <p className="composer-note">Responses may contain mistakes.</p>
           </form>
         )}
+        </>}
         {error && (
           <div className="error-banner" role="alert">
             {error}
@@ -1173,7 +1315,7 @@ export function App() {
           </div>
         )}
       </main>
-      <aside
+      {settingsPage === "chat" && <aside
         id="files-panel"
         aria-label="Files"
         className={`files-panel ${showFiles ? "is-open" : ""}`}
@@ -1229,7 +1371,7 @@ export function App() {
         <p className="files-note">
           Created files appear here. Select a file to download it.
         </p>
-      </aside>
+      </aside>}
     </div>
   );
 }

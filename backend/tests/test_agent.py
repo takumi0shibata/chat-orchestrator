@@ -41,9 +41,18 @@ class Client:
             [],
             [],
         )
+        self.title_calls = []
         self.tokens = tokens
 
     async def create(self, **kwargs):
+        if not kwargs.get("stream"):
+            self.title_calls.append(copy.deepcopy(kwargs))
+            return NS(
+                output_text="編集タスク",
+                output=[message()],
+                id="title_resp_1",
+                usage={"input_tokens": 12, "output_tokens": 3},
+            )
         self.calls.append(copy.deepcopy(kwargs))
         result = Stream(self.outputs.pop(0), self.tokens)
         self.streams.append(result)
@@ -52,6 +61,8 @@ class Client:
     async def compact(self, **kwargs):
         self.compacts.append(copy.deepcopy(kwargs))
         return NS(
+            id="compact_resp_1",
+            usage={"input_tokens": 100, "output_tokens": 20},
             output=[
                 {"type": "compaction", "id": "cmp_1", "encrypted_content": "encrypted"}
             ]
@@ -528,3 +539,57 @@ def test_short_model_timeout_is_clamped_and_logged(tmp_path):
         assert command["requested_timeout_ms"] == 10000
         assert done["outcome"]["timeout_seconds"] == 60
     asyncio.run(scenario())
+
+
+def test_first_message_generates_one_title_with_selected_model_and_records_cost(tmp_path):
+    async def scenario():
+        m, store, client, req = setup(tmp_path, [[message()]])
+        store.update_settings(title_provider="azure_openai", title_model="azure-astra")
+        run = m.start(req)
+        await m.tasks[run["id"]]
+        for _ in range(20):
+            if store.conversation(req.conversation_id)["title_status"] == "complete":
+                break
+            await asyncio.sleep(0)
+        assert store.conversation(req.conversation_id)["title"] == "編集タスク"
+        assert len(client.title_calls) == 1
+        assert client.title_calls[0]["model"] == "azure-astra"
+        assert client.title_calls[0]["reasoning"] == {"effort": "low"}
+        assert any(e["type"] == "conversation_title" for e in store.events(run["id"]))
+
+        client.outputs = [[message()]]
+        second = m.start(req)
+        await m.tasks[second["id"]]
+        assert len(client.title_calls) == 1
+        with store.connect() as connection:
+            kinds = [row[0] for row in connection.execute("SELECT kind FROM llm_costs ORDER BY kind")]
+        assert "title" in kinds and "response" in kinds
+
+    asyncio.run(scenario())
+
+
+def test_cost_calculation_uses_cache_and_long_context_rates(tmp_path):
+    m, store, _, _ = setup(tmp_path, [[message()]])
+    m.record_usage(
+        "priced-response",
+        "openai",
+        "gpt-5.6-luna",
+        "response",
+        {
+            "input_tokens": 300_000,
+            "input_tokens_details": {"cached_tokens": 100_000, "cache_write_tokens": 50_000},
+            "output_tokens": 1_000,
+        },
+    )
+    m.record_usage(
+        "priced-response", "openai", "gpt-5.6-luna", "response", {"input_tokens": 1}
+    )
+    with store.connect() as connection:
+        row = connection.execute("SELECT * FROM llm_costs WHERE response_id='priced-response'").fetchone()
+        assert connection.execute("SELECT COUNT(*) FROM llm_costs").fetchone()[0] == 1
+    assert row["input_rate_nano"] == 400
+    assert row["cached_rate_nano"] == 40
+    assert row["cache_write_rate_nano"] == 500
+    assert row["output_rate_nano"] == 1800
+    assert row["cost_nano_usd"] == 90_800_000
+    assert store.monthly_costs()[0]["usd"] == pytest.approx(0.0908)

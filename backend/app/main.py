@@ -15,7 +15,13 @@ from app.agent_runner import RunManager
 from app.attachments import list_files, open_regular, save_upload
 from app.config import get_settings
 from app.model_catalog import models_for
-from app.schemas import Approval, ConversationCreate, ConversationUpdate, RunCreate
+from app.schemas import (
+    AppSettingsUpdate,
+    Approval,
+    ConversationCreate,
+    ConversationUpdate,
+    RunCreate,
+)
 from app.storage import TERMINAL, Store
 
 
@@ -48,6 +54,7 @@ def create_app(settings=None, manager_factory=RunManager):
                             f"Workspace {w.id} contains application configuration/state"
                         )
             manager = manager_factory(settings, config, store)
+            manager.title_selection()
             app.state.config, app.state.store, app.state.manager = (
                 config,
                 store,
@@ -138,6 +145,30 @@ def create_app(settings=None, manager_factory=RunManager):
             ],
             resources=[dict(id=r.id, label=r.label) for r in c.resources],
             mcp_servers=[dict(id=m.id, label=m.label) for m in c.mcp_servers],
+        )
+
+    @app.get("/api/settings")
+    async def app_settings():
+        return app.state.manager.title_selection()
+
+    @app.patch("/api/settings")
+    async def update_app_settings(body: AppSettingsUpdate):
+        provider, model = body.title_selection()
+        if provider and model:
+            app.state.manager.validate_title_selection(provider, model)
+        changes = body.model_dump(exclude_none=True)
+        if "theme_color" in changes:
+            changes["theme_color"] = changes["theme_color"].upper()
+        return app.state.store.update_settings(**changes)
+
+    @app.get("/api/costs/monthly")
+    async def monthly_costs():
+        return dict(
+            currency="USD",
+            estimated=True,
+            timezone="UTC",
+            exclusions=["tool_fees"],
+            months=app.state.store.monthly_costs(),
         )
 
     @app.get("/api/conversations")
@@ -247,7 +278,14 @@ def create_app(settings=None, manager_factory=RunManager):
                     yield json.dumps(event, ensure_ascii=False) + "\n"
                 if batch:
                     continue
-                if app.state.store.run(rid)["status"] in TERMINAL:
+                latest_run = app.state.store.run(rid)
+                if latest_run["status"] in TERMINAL:
+                    conversation_state = app.state.store.conversation(
+                        latest_run["conversation_id"]
+                    )
+                    if conversation_state.get("title_status") == "generating":
+                        await asyncio.sleep(0.2)
+                        continue
                     # Re-read after terminal status so events committed concurrently are drained.
                     for event in app.state.store.events(rid, cursor):
                         yield json.dumps(event, ensure_ascii=False) + "\n"

@@ -89,6 +89,8 @@ Responsesは `store=false` で完全な入出力を再送し、既定100,000ト�
 
 - `GET /api/config`: プロバイダ・モデル・登録済み作業フォルダ／Skills／resources／MCP一覧。認証情報は返さない。
 - `GET/POST /api/conversations`、`GET/DELETE /api/conversations/{id}`
+- `GET/PATCH /api/settings`: タイトル生成モデルとテーマカラー。
+- `GET /api/costs/monthly`: UTC月別の推定LLMトークン費用（USD）。
 - `POST /api/attachments`: `conversation_id` と複数 `files` のmultipart。
 - `GET /api/conversations/{id}/files?path=...`: フォルダ内のファイル一覧。
 - `GET /api/conversations/{id}/download?path=...`: 許可領域の通常ファイルを取得。

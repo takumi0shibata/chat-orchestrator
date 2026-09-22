@@ -110,4 +110,7 @@ def test_migrates_existing_history_without_data_loss(tmp_path):
     store = Store(tmp_path)
     assert store.conversations()[0]["title"] == "Existing"
     assert store.conversation("old")["pinned"] is False
+    assert store.conversation("old")["title_status"] == "complete"
+    assert store.settings()["title_model"] == "gpt-5.6-luna"
+    assert store.monthly_costs()[0]["usd"] == 0
     Store(tmp_path)  # Migration is safe to run again.

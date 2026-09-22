@@ -293,7 +293,7 @@ it("searches with debounce, ignores stale responses, preserves the open chat, an
   render(<App />);
   await screen.findByRole("button", { name: "Current chat" });
   await screen.findByRole("textbox", { name: "Message" });
-  expect(screen.queryByRole("heading", { name: "Current chat" })).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Current chat" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Pin Current chat" }));
   await waitFor(() => expect(screen.getAllByRole("button", { name: "Unpin Current chat" })).toHaveLength(2));
   failPin = true;
@@ -489,4 +489,53 @@ it("uploads dropped files, reports errors, and keeps nested drag state stable", 
   expect(screen.getByText("figure.png")).toBeInTheDocument();
   expect(screen.getByRole("checkbox", { name: "Send directly to model" })).not.toBeChecked();
   expect(screen.queryByText("Drop files to attach")).not.toBeInTheDocument();
+});
+
+it("navigates settings, saves the title model and theme, and shows monthly cost", async () => {
+  const config = {
+    providers: [{
+      id: "openai", label: "OpenAI", enabled: true,
+      models: [
+        { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", model: "gpt-5.6-sol", efforts: ["low"] },
+        { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", model: "gpt-5.6-luna", efforts: ["low"] },
+      ],
+    }],
+    workspaces: [{ id: "w", label: "Work", path: "/work" }],
+    skills: [], resources: [], mcp_servers: [],
+  };
+  let settings = { title_provider: "openai", title_model: "gpt-5.6-luna", theme_color: "#25262A" };
+  const patches: Record<string, unknown>[] = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
+    const url = String(input);
+    if (url === "/api/config") return new Response(JSON.stringify(config));
+    if (url === "/api/conversations") return new Response(JSON.stringify([]));
+    if (url === "/api/settings" && options?.method === "PATCH") {
+      const change = JSON.parse(String(options.body));
+      patches.push(change);
+      settings = { ...settings, ...change };
+      return new Response(JSON.stringify(settings));
+    }
+    if (url === "/api/settings") return new Response(JSON.stringify(settings));
+    if (url === "/api/costs/monthly") return new Response(JSON.stringify({
+      currency: "USD", estimated: true, timezone: "UTC", exclusions: ["tool_fees"],
+      months: [{ month: new Date().toISOString().slice(0, 7), usd: 0.012345 }],
+    }));
+    return new Response(JSON.stringify({}));
+  });
+
+  const { container } = render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+  expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
+  fireEvent.change(screen.getByRole("combobox", { name: "Title model" }), { target: { value: "gpt-5.6-sol" } });
+  await waitFor(() => expect(patches).toContainEqual({ title_provider: "openai", title_model: "gpt-5.6-sol" }));
+
+  fireEvent.click(screen.getByRole("button", { name: /Theme color/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Use #315C47" }));
+  await waitFor(() => expect(container.querySelector(".app-shell")).toHaveStyle("--theme-color: #315C47"));
+  expect(patches).toContainEqual({ theme_color: "#315C47" });
+
+  fireEvent.click(screen.getByRole("button", { name: "← Settings" }));
+  fireEvent.click(screen.getByRole("button", { name: /Cost/ }));
+  expect((await screen.findAllByText("$0.012345")).length).toBe(2);
+  expect(screen.getByText("Tool fees excluded")).toBeInTheDocument();
 });

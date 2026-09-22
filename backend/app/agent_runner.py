@@ -2,14 +2,15 @@ import asyncio
 import json
 import logging
 import os
+import re
 from time import monotonic
 
 from app.attachments import direct_input, file_snapshot
-from app.model_catalog import validate_model
+from app.model_catalog import models_for, pricing_for, validate_model
 from app.openai_client import build_openai_client
 from app.project_instructions import load_project_instructions
 from app.sandbox import Sandbox, command_time_limit, docker
-from app.storage import TERMINAL
+from app.storage import TERMINAL, now
 
 log = logging.getLogger(__name__)
 INSTRUCTIONS = """You are a local workspace assistant. Complete the user's task autonomously using Responses shell tools.
@@ -40,6 +41,7 @@ class RunManager:
     ):
         self.settings, self.config, self.store = settings, config, store
         self.tasks = {}
+        self.title_tasks = set()
         self.approvals = {}
         self.locks = {}
         self.poisoned_workspaces = set()
@@ -109,13 +111,177 @@ class RunManager:
         if total > 40 * 1024 * 1024:
             raise ValueError("Direct input total exceeds 40 MiB")
 
+    def title_selection(self):
+        configured = self.store.settings()
+        available = []
+        for provider in ("openai", "azure_openai"):
+            enabled = bool(self.client_factory) or (
+                bool(self.settings.openai_api_key)
+                if provider == "openai"
+                else bool(self.settings.azure_openai_api_key and self.settings.azure_openai_endpoint)
+            )
+            if enabled:
+                available.extend((provider, item) for item in models_for(provider, self.config))
+        current = next(
+            (
+                (provider, item)
+                for provider, item in available
+                if provider == configured["title_provider"] and item["id"] == configured["title_model"]
+            ),
+            None,
+        )
+        if not current:
+            current = next(
+                (
+                    (provider, item)
+                    for provider, item in available
+                    if provider == "openai" and item["id"] == "gpt-5.6-luna"
+                ),
+                None,
+            )
+        if not current:
+            current = next(
+                (
+                    (provider, item)
+                    for provider, item in available
+                    if item["model"] == "gpt-5.6-luna"
+                ),
+                None,
+            )
+        if not current and available:
+            current = available[0]
+        if current and (
+            configured["title_provider"], configured["title_model"]
+        ) != (current[0], current[1]["id"]):
+            configured = self.store.update_settings(
+                title_provider=current[0], title_model=current[1]["id"]
+            )
+        return configured
+
+    def validate_title_selection(self, provider, model):
+        enabled = bool(self.client_factory) or (
+            bool(self.settings.openai_api_key)
+            if provider == "openai"
+            else bool(self.settings.azure_openai_api_key and self.settings.azure_openai_endpoint)
+        )
+        if not enabled or not any(item["id"] == model for item in models_for(provider, self.config)):
+            raise ValueError("Unsupported or unavailable title model")
+
+    def record_usage(self, response_id, provider, model, kind, usage):
+        usage = jsonable(usage) if usage else {}
+        base_model, prices = pricing_for(provider, model, self.config)
+        if not response_id or not base_model or not prices:
+            return
+        input_tokens = int(usage.get("input_tokens") or 0)
+        output_tokens = int(usage.get("output_tokens") or 0)
+        details = usage.get("input_tokens_details") or {}
+        cached = min(input_tokens, int(details.get("cached_tokens") or 0))
+        cache_write = min(
+            input_tokens - cached, int(details.get("cache_write_tokens") or 0)
+        )
+        uncached = max(0, input_tokens - cached - cache_write)
+        input_multiplier = 2 if input_tokens > 272_000 else 1
+        output_multiplier_numerator = 3 if input_tokens > 272_000 else 2
+        rates = {
+            "input_rate_nano": round(prices["input"] * 1000 * input_multiplier),
+            "cached_rate_nano": round(prices["cached_input"] * 1000 * input_multiplier),
+            "cache_write_rate_nano": round(prices["cache_write"] * 1000 * input_multiplier),
+            "output_rate_nano": round(prices["output"] * 1000 * output_multiplier_numerator / 2),
+        }
+        cost = (
+            uncached * rates["input_rate_nano"]
+            + cached * rates["cached_rate_nano"]
+            + cache_write * rates["cache_write_rate_nano"]
+            + output_tokens * rates["output_rate_nano"]
+        )
+        self.store.record_cost(
+            dict(
+                response_id=response_id,
+                provider=provider,
+                model=model,
+                kind=kind,
+                input_tokens=input_tokens,
+                cached_input_tokens=cached,
+                cache_write_tokens=cache_write,
+                output_tokens=output_tokens,
+                cost_nano_usd=cost,
+                created_at=now(),
+                **rates,
+            )
+        )
+
     def start(self, request):
         self.validate(request)
         run = self.store.create_run(request.model_dump())
+        if self.store.claim_title(request.conversation_id):
+            title_task = asyncio.create_task(self.generate_title(run["id"], request))
+            self.title_tasks.add(title_task)
+            title_task.add_done_callback(self.title_tasks.discard)
         task = asyncio.create_task(self.execute(run["id"], request))
         self.tasks[run["id"]] = task
         task.add_done_callback(lambda _: self.tasks.pop(run["id"], None))
         return run
+
+    def fallback_title(self, request):
+        source = " ".join(request.input.split())
+        if not source:
+            names = []
+            for aid in request.attachment_ids:
+                try:
+                    names.append(self.store.attachment(aid, request.conversation_id)["name"])
+                except KeyError:
+                    pass
+            source = "Work with " + ", ".join(names) if names else "File task"
+        return source[:60].rstrip(" .。!！?？,，、") or "New chat"
+
+    async def generate_title(self, rid, request):
+        fallback = self.fallback_title(request)
+        try:
+            selected = self.title_selection()
+            provider, model = selected["title_provider"], selected["title_model"]
+            source = request.input.strip()
+            if not source:
+                names = [
+                    self.store.attachment(aid, request.conversation_id)["name"]
+                    for aid in request.attachment_ids
+                ]
+                source = "Attached files: " + ", ".join(names)
+            async with asyncio.timeout(60):
+                response = await self.client(provider).responses.create(
+                    model=model,
+                    input=source[:12000],
+                    instructions=(
+                        "Create a concise title that captures the user's task. Use the same language as the user. "
+                        "Return only the title, without quotation marks or terminal punctuation. "
+                        "Aim for at most 30 Japanese characters or 8 words."
+                    ),
+                    reasoning={"effort": "low"},
+                    store=False,
+                )
+            raw = getattr(response, "output_text", "") or ""
+            if not raw:
+                for raw_item in getattr(response, "output", []):
+                    item = jsonable(raw_item)
+                    if item.get("type") == "message":
+                        raw += "".join(
+                            part.get("text", "")
+                            for part in item.get("content", [])
+                            if part.get("type") == "output_text"
+                        )
+            title = re.sub(r"\s+", " ", raw).strip().strip("\"'“”‘’")
+            title = title[:60].rstrip(" .。!！?？,，、") or fallback
+            self.record_usage(
+                getattr(response, "id", ""), provider, model, "title", getattr(response, "usage", None)
+            )
+        except Exception:
+            log.warning("Unable to generate title for conversation %s", request.conversation_id, exc_info=True)
+            title = fallback
+        if self.store.finish_title(request.conversation_id, title):
+            try:
+                self.store.run(rid)
+            except KeyError:
+                return
+            self.store.event(rid, "conversation_title", {"title": title})
 
     async def stop(self, rid):
         run = self.store.run(rid)
@@ -186,6 +352,8 @@ class RunManager:
     async def shutdown(self):
         for rid in list(self.tasks):
             await self.stop(rid)
+        if self.title_tasks:
+            await asyncio.gather(*list(self.title_tasks), return_exceptions=True)
         for client in self.clients.values():
             await client.close()
 
@@ -387,6 +555,10 @@ class RunManager:
                     model=request.model, input=context, instructions=instructions
                 )
                 context = [jsonable(i) for i in compacted.output]
+                self.record_usage(
+                    getattr(compacted, "id", ""), request.provider, request.model,
+                    "compaction", getattr(compacted, "usage", None),
+                )
                 self.store.save_context(
                     request.conversation_id, context, request.provider, request.model, rid=rid
                 )
@@ -482,6 +654,9 @@ class RunManager:
             output = [jsonable(i) for i in response.output]
             context.extend(output)
             usage = jsonable(response.usage) if response.usage else {}
+            self.record_usage(
+                response.id, request.provider, request.model, "response", usage
+            )
             needs_compact = (
                 usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
                 >= self.settings.compact_token_threshold

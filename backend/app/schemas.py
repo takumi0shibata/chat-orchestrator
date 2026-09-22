@@ -15,6 +15,17 @@ class ConversationUpdate(Request):
     pinned: bool
 
 
+class AppSettingsUpdate(Request):
+    title_provider: Literal["openai", "azure_openai"] | None = None
+    title_model: str | None = None
+    theme_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+
+    def title_selection(self):
+        if (self.title_provider is None) != (self.title_model is None):
+            raise ValueError("Title provider and model must be updated together")
+        return self.title_provider, self.title_model
+
+
 class RunCreate(Request):
     conversation_id: str
     provider: Literal["openai", "azure_openai"] = "openai"

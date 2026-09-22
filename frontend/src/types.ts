@@ -19,6 +19,22 @@ export interface Config {
   resources: Named[];
   mcp_servers: Named[];
 }
+export interface AppSettings {
+  title_provider: string;
+  title_model: string;
+  theme_color: string;
+}
+export interface MonthlyCost {
+  month: string;
+  usd: number;
+}
+export interface CostSummary {
+  currency: "USD";
+  estimated: boolean;
+  timezone: "UTC";
+  exclusions: string[];
+  months: MonthlyCost[];
+}
 export interface Conversation {
   pinned?: boolean;
   id: string;
