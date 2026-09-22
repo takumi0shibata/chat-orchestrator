@@ -735,7 +735,7 @@ export function App() {
       </button>
       <aside className="sidebar">
         <a className="brand" href="/">
-          ◈{" "}
+          <img className="brand-icon" src="/app-icon.png" alt="" />
           <span>
             Workspace<span className="brand-sub">RESPONSES AGENT</span>
           </span>
@@ -814,7 +814,7 @@ export function App() {
         >
           {!cid ? (
             <div className="welcome">
-              <div className="welcome-icon">◈</div>
+              <img className="welcome-icon" src="/app-icon.png" alt="" />
               <h2>Explore, analyze, create.</h2>
               <p>
                 Choose a workspace and start a new chat.
