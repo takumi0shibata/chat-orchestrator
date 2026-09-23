@@ -730,6 +730,10 @@ it("starts new conversations with GPT-6 Sol and offers registered Azure GPT-6 fo
       { id: "openai", label: "OpenAI", enabled: true, models: [
         { id: "gpt-6-sol", model: "gpt-6-sol", label: "GPT-6 Sol", efforts: ["none", "medium"] },
         { id: "gpt-6-luna", model: "gpt-6-luna", label: "GPT-6 Luna", efforts: ["none", "medium"] },
+        { id: "gpt-5.6-sol", model: "gpt-5.6-sol", label: "GPT-5.6 Sol", efforts: ["medium"] },
+        { id: "gpt-5.6-terra", model: "gpt-5.6-terra", label: "GPT-5.6 Terra", efforts: ["medium"] },
+        { id: "gpt-5.6-luna", model: "gpt-5.6-luna", label: "GPT-5.6 Luna", efforts: ["medium"] },
+        { id: "gpt-6-astra", model: "gpt-6-astra", label: "GPT-6 Astra", efforts: ["medium"] },
       ] },
       { id: "azure_openai", label: "Azure OpenAI", enabled: true, models: [
         { id: "azure-old-luna", model: "gpt-5.6-luna", label: "GPT-5.6 Luna", efforts: ["medium"] },
@@ -761,12 +765,22 @@ it("starts new conversations with GPT-6 Sol and offers registered Azure GPT-6 fo
   render(<App />);
   const modelSelect = await screen.findByRole("combobox", { name: "Model" });
   await waitFor(() => expect(modelSelect).toHaveValue("gpt-6-sol"));
+  const expectedOrder = [
+    "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+  ];
+  expect(Array.from((modelSelect as HTMLSelectElement).options, (option) => option.value)).toEqual(expectedOrder);
   expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("medium");
 
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-  expect(screen.getByRole("combobox", { name: "Title model" })).toHaveValue("gpt-6-luna");
+  const titleModelSelect = screen.getByRole("combobox", { name: "Title model" });
+  expect(titleModelSelect).toHaveValue("gpt-6-luna");
+  expect(Array.from((titleModelSelect as HTMLSelectElement).options, (option) => option.value)).toEqual(expectedOrder);
   fireEvent.change(screen.getByRole("combobox", { name: "Title provider" }), { target: { value: "azure_openai" } });
   await waitFor(() => expect(patches).toContainEqual({ title_provider: "azure_openai", title_model: "azure-old-luna" }));
+  expect(Array.from((titleModelSelect as HTMLSelectElement).options, (option) => option.value)).toEqual([
+    "azure-new-luna", "azure-old-luna",
+  ]);
   fireEvent.change(screen.getByRole("combobox", { name: "Title model" }), { target: { value: "azure-new-luna" } });
   await waitFor(() => expect(patches).toContainEqual({ title_provider: "azure_openai", title_model: "azure-new-luna" }));
 });

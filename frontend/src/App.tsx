@@ -19,6 +19,7 @@ import type {
   Config,
   Conversation,
   CostSummary,
+  Model,
   Named,
   Run,
   WorkspaceFile,
@@ -56,6 +57,23 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   title_model: "gpt-6-luna",
   theme_color: "#25262A",
 };
+
+const MODEL_ORDER = [
+  "gpt-6-astra",
+  "gpt-6-sol",
+  "gpt-6-luna",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+];
+
+function orderedModels(models: Model[]): Model[] {
+  const rank = (model: Model) => {
+    const index = MODEL_ORDER.indexOf(model.model);
+    return index < 0 ? MODEL_ORDER.length : index;
+  };
+  return [...models].sort((a, b) => rank(a) - rank(b));
+}
 
 function themeVariables(color: string): CSSProperties {
   const match = /^#([0-9a-f]{6})$/i.exec(color);
@@ -262,7 +280,7 @@ function SettingsPanel({
             const nextModel = nextProvider?.models[0]?.id;
             if (nextModel) void onChange({ title_provider: event.target.value, title_model: nextModel });
           }}>{config?.providers.map((item) => <option key={item.id} value={item.id} disabled={!item.enabled}>{item.label}{!item.enabled ? " (unavailable)" : ""}</option>)}</select></label>
-          <label>Model<select aria-label="Title model" value={settings.title_model} onChange={(event) => void onChange({ title_provider: settings.title_provider, title_model: event.target.value })}>{provider?.models.map((item) => <option key={item.id} value={item.id}>{item.label}{item.id !== item.model ? ` · ${item.id}` : ""}</option>)}</select></label>
+          <label>Model<select aria-label="Title model" value={settings.title_model} onChange={(event) => void onChange({ title_provider: settings.title_provider, title_model: event.target.value })}>{orderedModels(provider?.models || []).map((item) => <option key={item.id} value={item.id}>{item.label}{item.id !== item.model ? ` · ${item.id}` : ""}</option>)}</select></label>
         </div>
       </div>
       <div className="settings-links">
@@ -1548,7 +1566,7 @@ export function App() {
                       setEffort("medium");
                     }}
                   >
-                    {models.map((m) => (
+                    {orderedModels(models).map((m) => (
                       <option key={m.id} value={m.id}>{m.label}</option>
                     ))}
                   </select>
