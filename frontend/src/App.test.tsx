@@ -224,18 +224,18 @@ it("restores selected conversation and replays persistent events on reload", asy
   expect(modelSelector).toHaveTextContent("GPT-5.6 Luna");
   const effortSelector = screen.getByRole("button", { name: "Reasoning effort" });
   fireEvent.click(effortSelector);
-  fireEvent.click(screen.getByRole("option", { name: "high" }));
-  expect(effortSelector).toHaveTextContent("high");
+  fireEvent.click(screen.getByRole("option", { name: "High" }));
+  expect(effortSelector).toHaveTextContent("High");
   fireEvent.click(modelSelector);
   fireEvent.pointerDown(document.body);
   expect(screen.queryByRole("listbox", { name: "Model" })).not.toBeInTheDocument();
   fireEvent.click(modelSelector);
   fireEvent.click(screen.getByRole("option", { name: "GPT-5.6 Sol" }));
-  expect(effortSelector).toHaveTextContent("medium");
+  expect(effortSelector).toHaveTextContent("Medium");
   fireEvent.click(modelSelector);
   fireEvent.click(screen.getByRole("option", { name: "GPT-5.6 Luna" }));
   fireEvent.click(effortSelector);
-  fireEvent.click(screen.getByRole("option", { name: "high" }));
+  fireEvent.click(screen.getByRole("option", { name: "High" }));
   const message = screen.getByRole("textbox", { name: "Message" });
   fireEvent.change(message, { target: { value: "Analyze the report" } });
   fireEvent.keyDown(message, { key: "Enter", shiftKey: true });
@@ -793,9 +793,17 @@ it("starts new conversations with GPT-6 Sol and offers registered Azure GPT-6 fo
   expect(Array.from(screen.getAllByRole("option"), (option) => option.textContent)).toEqual([
     "GPT-6 Astra", "GPT-6 Sol", "GPT-6 Luna", "GPT-5.6 Sol", "GPT-5.6 Terra", "GPT-5.6 Luna",
   ]);
+  expect(Array.from(screen.getByRole("listbox", { name: "Model" }).querySelectorAll("[data-model-icon]"), (icon) => icon.getAttribute("data-model-icon"))).toEqual([
+    "astra", "sol", "luna", "sol", "terra", "luna",
+  ]);
   fireEvent.keyDown(screen.getByRole("listbox", { name: "Model" }), { key: "Escape" });
   expect(screen.queryByRole("listbox", { name: "Model" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Reasoning effort" })).toHaveTextContent("medium");
+  expect(screen.getByRole("button", { name: "Reasoning effort" })).toHaveTextContent("Medium");
+  fireEvent.click(screen.getByRole("button", { name: "Reasoning effort" }));
+  expect(Array.from(screen.getByRole("listbox", { name: "Reasoning effort" }).querySelectorAll('[role="option"]'), (option) => option.textContent)).toEqual([
+    "Instant", "Medium",
+  ]);
+  fireEvent.keyDown(screen.getByRole("listbox", { name: "Reasoning effort" }), { key: "Escape" });
 
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
   const titleModelSelect = screen.getByRole("combobox", { name: "Title model" });
@@ -808,4 +816,48 @@ it("starts new conversations with GPT-6 Sol and offers registered Azure GPT-6 fo
   ]);
   fireEvent.change(screen.getByRole("combobox", { name: "Title model" }), { target: { value: "azure-new-luna" } });
   await waitFor(() => expect(patches).toContainEqual({ title_provider: "azure_openai", title_model: "azure-new-luna" }));
+});
+
+it("shows five recent chats per project and reveals ten more at a time", async () => {
+  const conversations = Array.from({ length: 17 }, (_, index) => ({
+    id: `history-${index}`,
+    title: `History ${index + 1}`,
+    workspace_id: "w",
+    updated_at: `2026-09-${String(23 - index).padStart(2, "0")}T00:00:00Z`,
+    pinned: index === 16,
+  }));
+  localStorage.setItem("workspace-conversation", conversations[0].id);
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = String(input);
+    if (url === "/api/config") return new Response(JSON.stringify({
+      providers: [],
+      workspaces: [{ id: "w", label: "Work", path: "/work" }],
+      skills: [], resources: [], mcp_servers: [],
+    }));
+    if (url === "/api/conversations") return new Response(JSON.stringify(conversations));
+    if (url === `/api/conversations/${conversations[0].id}`) return new Response(JSON.stringify({ ...conversations[0], runs: [] }));
+    if (url.includes("/files")) return new Response(JSON.stringify([]));
+    if (url === "/api/settings") return new Response(JSON.stringify({ title_provider: "openai", title_model: "gpt-6-luna", theme_color: "#25262A" }));
+    return new Response(JSON.stringify({}));
+  });
+
+  render(<App />);
+  await screen.findByRole("button", { name: "History 1" });
+  expect(screen.getByText("Sandboxed: network access is disabled; only files in the mounted workspace can be modified.")).toBeInTheDocument();
+  const project = screen.getByRole("button", { name: "Collapse Work" }).closest(".project-group")!;
+  const projectHistory = () => project.querySelectorAll(".project-conversations .history-title");
+  expect(projectHistory()).toHaveLength(6);
+  expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "History 17" })).toHaveLength(2);
+  expect(screen.queryByRole("button", { name: "History 6" })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+  await waitFor(() => expect(projectHistory()).toHaveLength(16));
+  expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "History 16" })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+  await waitFor(() => expect(projectHistory()).toHaveLength(17));
+  expect(screen.getByRole("button", { name: "History 16" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
 });

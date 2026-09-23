@@ -1172,6 +1172,11 @@ h2 {
 .popover-select { position: relative; min-width: 0; }
 .popover-select.model-select { width: min(170px, 24vw); }
 .popover-select.effort-select { width: min(95px, 14vw); }
+.model-family-icon { display: block; flex: none; }
+.model-family-icon-astra { color: #765fa8; }
+.model-family-icon-sol { color: #bd7c31; }
+.model-family-icon-terra { color: #4d7e83; }
+.model-family-icon-luna { color: #70738f; }
 .popover-select-trigger {
   display: flex;
   align-items: center;
@@ -1190,6 +1195,8 @@ h2 {
 .popover-select-trigger:hover,
 .popover-select-trigger[aria-expanded="true"] { background: #f2f3f5; }
 .popover-select-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.popover-select-trigger > .popover-select-value { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.popover-select-trigger > .popover-select-value > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .popover-select-trigger > svg { flex: none; color: #77787d; }
 .popover-select-menu {
   position: absolute;
@@ -1226,7 +1233,8 @@ h2 {
 }
 .popover-select-option:hover,
 .popover-select-option.is-active { background: #f1f3f4; }
-.popover-select-option > span { overflow: hidden; text-overflow: ellipsis; }
+.popover-select-option-label { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.popover-select-option-label > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .popover-select-option > svg { flex: none; color: #4a6555; }
 .send, .stop-send {
   display: grid;
@@ -1673,6 +1681,20 @@ h2 {
   overflow: hidden;
   padding: 2px 0 4px;
 }
+.history-more {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 2px 8px 4px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #687d6e;
+  font-size: 12px;
+  text-align: left;
+}
+.history-more:hover,
+.history-more:focus-visible { background: #e9efeb; color: #31513d; }
 .conversation { margin-bottom: 0; }
 .conversation.nested > button:first-child { padding-left: 9px; }
 .conversation.selected { background: #e4e4e7; }

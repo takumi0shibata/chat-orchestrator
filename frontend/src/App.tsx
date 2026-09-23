@@ -67,6 +67,28 @@ const MODEL_ORDER = [
   "gpt-5.6-luna",
 ];
 
+const HISTORY_INITIAL_COUNT = 5;
+const HISTORY_PAGE_SIZE = 10;
+const REASONING_EFFORT_LABELS: Record<string, string> = {
+  none: "Instant",
+  low: "Light",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max",
+};
+
+type ModelFamilyIconName = "astra" | "sol" | "terra" | "luna";
+
+function modelFamilyIconName(model: string): ModelFamilyIconName | undefined {
+  const family = model.toLowerCase().match(/-(astra|sol|terra|luna)$/)?.[1];
+  return family as ModelFamilyIconName | undefined;
+}
+
+function reasoningEffortLabel(value: string) {
+  return REASONING_EFFORT_LABELS[value] || value;
+}
+
 function orderedModels(models: Model[]): Model[] {
   const rank = (model: Model) => {
     const index = MODEL_ORDER.indexOf(model.model);
@@ -123,7 +145,33 @@ function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "
   return <svg aria-hidden="true" data-icon={name} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
 
-type PopoverSelectOption = { value: string; label: string };
+type PopoverSelectOption = { value: string; label: string; icon?: ModelFamilyIconName };
+
+function ModelFamilyIcon({ name, size = 16 }: { name: ModelFamilyIconName; size?: number }) {
+  const paths: Record<ModelFamilyIconName, ReactNode> = {
+    astra: <><path d="m7.5 3.5.9 2.6L11 7l-2.6.9-.9 2.6-.9-2.6L4 7l2.6-.9Z" /><path d="m17 10.5 1.1 3.4 3.4 1.1-3.4 1.1L17 19.5l-1.1-3.4-3.4-1.1 3.4-1.1Z" /><path d="m10.2 8.2 4.4 4.4M5 17.5h.01" /></>,
+    sol: <><circle cx="12" cy="12" r="3.8" /><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" /></>,
+    terra: <><circle cx="12" cy="12" r="8.8" /><path d="M3.5 12h17M12 3.2c2.4 2.3 3.6 5.2 3.6 8.8s-1.2 6.5-3.6 8.8M12 3.2c-2.4 2.3-3.6 5.2-3.6 8.8s1.2 6.5 3.6 8.8M4.8 7.2c2.1.8 4.5 1.2 7.2 1.2s5.1-.4 7.2-1.2M4.8 16.8c2.1-.8 4.5-1.2 7.2-1.2s5.1.4 7.2 1.2" /></>,
+    luna: <><path d="M17.9 4.6A8.5 8.5 0 1 0 19.4 17 7.4 7.4 0 0 1 17.9 4.6Z" /><path d="M14.2 8.1h.01M16.2 13.6h.01M12.5 15.9h.01" /></>,
+  };
+  return (
+    <svg
+      aria-hidden="true"
+      className={`model-family-icon model-family-icon-${name}`}
+      data-model-icon={name}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {paths[name]}
+    </svg>
+  );
+}
 
 function PopoverSelect({ label, value, options, onChange, disabled = false, className = "" }: {
   label: string;
@@ -228,7 +276,10 @@ function PopoverSelect({ label, value, options, onChange, disabled = false, clas
         onClick={() => (open ? close() : openMenu())}
         onKeyDown={handleTriggerKeyDown}
       >
-        <span>{selectedLabel}</span>
+        <span className="popover-select-value">
+          {selectedOption?.icon && <ModelFamilyIcon name={selectedOption.icon} />}
+          <span>{selectedLabel}</span>
+        </span>
         <Icon name="chevron-down" size={14} />
       </button>
       {open && (
@@ -254,7 +305,10 @@ function PopoverSelect({ label, value, options, onChange, disabled = false, clas
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => selectOption(index)}
             >
-              <span>{option.label}</span>
+              <span className="popover-select-option-label">
+                {option.icon && <ModelFamilyIcon name={option.icon} />}
+                <span>{option.label}</span>
+              </span>
               {option.value === value && <Icon name="check" size={15} />}
             </button>
           ))}
@@ -680,6 +734,7 @@ export function App() {
   const [searchError, setSearchError] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<string[]>([]);
+  const [historyVisibleCounts, setHistoryVisibleCounts] = useState<Record<string, number>>({});
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const stored = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
     return Number.isFinite(stored) && stored >= MIN_SIDEBAR_WIDTH && stored <= MAX_SIDEBAR_WIDTH
@@ -1307,6 +1362,13 @@ export function App() {
     );
   }
 
+  function showMoreHistory(projectId: string) {
+    setHistoryVisibleCounts((counts) => ({
+      ...counts,
+      [projectId]: (counts[projectId] || HISTORY_INITIAL_COUNT) + HISTORY_PAGE_SIZE,
+    }));
+  }
+
   return (
     <div
       className={`app-shell ${showFiles && settingsPage === "chat" ? "with-files" : "without-files"} ${resizingSidebar ? "is-resizing-sidebar" : ""} ${resizingFiles ? "is-resizing-files" : ""}`}
@@ -1380,6 +1442,13 @@ export function App() {
               const items = sortedConversations(displayedConversations.filter((conversation) => conversation.workspace_id === project.id));
               if (query.trim() && items.length === 0) return null;
               const expanded = query.trim() ? items.length > 0 : expandedProjects.includes(project.id);
+              const regularItems = items.filter((conversation) => !conversation.pinned);
+              const visibleCount = historyVisibleCounts[project.id] || HISTORY_INITIAL_COUNT;
+              const visibleRegularIds = new Set(regularItems.slice(0, visibleCount).map((conversation) => conversation.id));
+              const visibleItems = query.trim()
+                ? items
+                : items.filter((conversation) => conversation.pinned || visibleRegularIds.has(conversation.id));
+              const hasMoreHistory = !query.trim() && regularItems.length > visibleCount;
               return (
                 <div className={`project-group ${expanded ? "is-expanded" : ""}`} key={project.id}>
                   <div className="project-row">
@@ -1393,7 +1462,12 @@ export function App() {
                   </div>
                   <div className={`project-conversations ${expanded ? "is-expanded" : ""}`} aria-hidden={!expanded}>
                     <div className="project-conversations-inner">
-                      {items.map((conversation) => conversationRow(conversation, true))}
+                      {visibleItems.map((conversation) => conversationRow(conversation, true))}
+                      {hasMoreHistory && (
+                        <button className="history-more" type="button" onClick={() => showMoreHistory(project.id)}>
+                          Show more
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1704,7 +1778,7 @@ export function App() {
                     value={model}
                     disabled={active}
                     className="model-select"
-                    options={orderedModels(models).map((m) => ({ value: m.id, label: m.label }))}
+                    options={orderedModels(models).map((m) => ({ value: m.id, label: m.label, icon: modelFamilyIconName(m.model) }))}
                     onChange={(value) => {
                       setModel(value);
                       setEffort("medium");
@@ -1715,7 +1789,7 @@ export function App() {
                     value={effort}
                     disabled={active}
                     className="effort-select"
-                    options={(selectedModel?.efforts || []).map((value) => ({ value, label: value }))}
+                    options={(selectedModel?.efforts || []).map((value) => ({ value, label: reasoningEffortLabel(value) }))}
                     onChange={setEffort}
                   />
                 </div>
@@ -1740,7 +1814,7 @@ export function App() {
                 )}
               </div>
             </div>
-            <p className="composer-note">Responses may contain mistakes.</p>
+            <p className="composer-note">Sandboxed: network access is disabled; only files in the mounted workspace can be modified.</p>
           </form>
         )}
         </>}
