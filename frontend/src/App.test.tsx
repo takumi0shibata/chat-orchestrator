@@ -39,6 +39,56 @@ beforeEach(() => localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
 
 describe("Run timeline", () => {
+  it("copies the user message and the combined assistant Markdown", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(
+      <RunView
+        run={{
+          ...run,
+          request: {
+            ...run.request,
+            input: "Review the attached report",
+            attachment_ids: ["attachment-1"],
+          },
+        }}
+        timeline={[
+          event(1, "text_delta", { item_id: "first", text: "**Summary**" }),
+          event(2, "text_delta", { item_id: "second", text: "`report.md`" }),
+        ]}
+        onApproval={vi.fn()}
+      />,
+    );
+
+    const copyMessageButton = screen.getByRole("button", { name: "Copy message" });
+    const copyResponseButton = screen.getByRole("button", { name: "Copy response" });
+    expect(copyMessageButton).toHaveAttribute("data-tooltip", "Copy message");
+    expect(copyResponseButton).toHaveAttribute("data-tooltip", "Copy response");
+
+    fireEvent.click(copyMessageButton);
+    await waitFor(() => expect(writeText).toHaveBeenNthCalledWith(1, "Review the attached report"));
+    expect(screen.getByRole("button", { name: "Copied" })).toHaveAttribute("data-state", "copied");
+
+    fireEvent.click(copyResponseButton);
+    await waitFor(() => expect(writeText).toHaveBeenNthCalledWith(2, "**Summary**\n\n`report.md`"));
+  });
+
+  it("reports a message copy failure", async () => {
+    Object.defineProperty(window.navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    });
+
+    render(<RunView run={run} timeline={[]} onApproval={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+    expect(await screen.findByRole("button", { name: "Copy failed" })).toHaveAttribute("data-state", "failed");
+  });
+
   it("keeps command output, errors and status after completion", () => {
     render(
       <RunView

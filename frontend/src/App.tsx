@@ -106,7 +106,7 @@ function elapsedLabel(seconds: number) {
   return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
-function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "check" | "close" | "spark" | "pin" | "panel-right" | "compose" | "search" | "folder" | "folder-open" | "chevron-right" | "chevron-down" | "gear"; size?: number }) {
+function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "check" | "close" | "copy" | "spark" | "pin" | "panel-right" | "compose" | "search" | "folder" | "folder-open" | "chevron-right" | "chevron-down" | "gear"; size?: number }) {
   const paths = {
     "panel-right": <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M15 4v16" /></>,
     "chevron-right": <path d="m9 18 6-6-6-6" />,
@@ -121,10 +121,41 @@ function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "
     globe: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" /></>,
     check: <path d="m5 12 4 4L19 6" />,
     close: <path d="M6 6l12 12M18 6 6 18" />,
+    copy: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3" /></>,
     spark: <><path d="m12 2 1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2Z" /><path d="m19 17 .6 1.4L21 19l-1.4.6L19 21l-.6-1.4L17 19l1.4-.6L19 17Z" /></>,
     gear: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" /></>,
   };
   return <svg aria-hidden="true" data-icon={name} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
+}
+
+function CopyButton({ content, tooltip }: { content: string; tooltip: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const label = state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : tooltip;
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(content);
+      setState("copied");
+      window.setTimeout(() => setState("idle"), 1200);
+    } catch {
+      setState("failed");
+      window.setTimeout(() => setState("idle"), 1200);
+    }
+  }
+
+  return (
+    <button
+      className="message-copy"
+      type="button"
+      data-state={state}
+      data-tooltip={label}
+      aria-label={label}
+      onClick={() => void copy()}
+    >
+      {state === "copied" ? <Icon name="check" size={18} /> : <Icon name="copy" size={18} />}
+      <span className="sr-only">{label}</span>
+    </button>
+  );
 }
 
 type PopoverSelectOption = { value: string; label: string; icon?: ModelFamilyIconName };
@@ -611,6 +642,9 @@ export function RunView({
   }, [run.status, finalStart]);
   const blocks = messageBlocks(timeline, run.status);
   const activity = activityEntries(timeline, blocks, run.status);
+  const answerBlocks = blocks.filter((block) => block.final || (run.status === "completed" && !block.progress));
+  const userMessage = run.request.input || "Work with attached files";
+  const assistantMessage = answerBlocks.map((block) => block.content).join("\n\n");
   const approvals = timeline.filter(
     (e) =>
       e.type === "approval" &&
@@ -640,11 +674,14 @@ export function RunView({
   }
   return (
     <article className="turn">
-      <div className="user-message">
-        <p>{run.request.input || "Work with attached files"}</p>
-        {run.request.attachment_ids.length > 0 && (
-          <small>{run.request.attachment_ids.length} attachments</small>
-        )}
+      <div className="user-message-wrap">
+        <div className="user-message">
+          <p>{userMessage}</p>
+          {run.request.attachment_ids.length > 0 && (
+            <small>{run.request.attachment_ids.length} attachments</small>
+          )}
+        </div>
+        <CopyButton content={userMessage} tooltip="Copy message" />
       </div>
       <div className="assistant-message">
         <details
@@ -670,9 +707,10 @@ export function RunView({
             ))}
           </div>
         </details>
-        {blocks.filter((block) => block.final || (run.status === "completed" && !block.progress)).map((block) => (
+        {answerBlocks.map((block) => (
           <div className="answer-block" key={block.key}><MarkdownContent conversationId={run.conversation_id} content={block.content} /></div>
         ))}
+        {assistantMessage && <CopyButton content={assistantMessage} tooltip="Copy response" />}
         {!terminal(run.status) &&
           approvals.map((e) => (
             <div className="approval" key={e.seq}>

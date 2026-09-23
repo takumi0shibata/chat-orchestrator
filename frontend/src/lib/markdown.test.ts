@@ -72,6 +72,14 @@ describe("markdownToHtml", () => {
     expect(html).not.toContain("&#39;");
   });
 
+  it("keeps inline code distinct from fenced code", () => {
+    const root = document.createElement("div");
+    root.innerHTML = markdownToHtml("Use `report.md`\n\n```text\nreport.md\n```");
+
+    expect(root.querySelector("p code")).not.toHaveClass("hljs");
+    expect(root.querySelector("pre code")).toHaveClass("hljs");
+  });
+
   it("restores inline code nested inside bold text", () => {
     const html = markdownToHtml("**ラベルと `actual` の整合性を確認する**\n**`src` が `tests` の対象外**\n***`deep`***");
     const root = document.createElement("div");
