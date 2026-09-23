@@ -872,6 +872,16 @@ export function App() {
 
   useEffect(() => { setTerminalOwner(""); }, [terminalContext]);
   useEffect(() => {
+    const toggleTerminal = (event: globalThis.KeyboardEvent) => {
+      if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== "j") return;
+      if (!terminalContext) return;
+      event.preventDefault();
+      setTerminalOwner((owner) => owner === terminalContext ? "" : terminalContext);
+    };
+    document.addEventListener("keydown", toggleTerminal);
+    return () => document.removeEventListener("keydown", toggleTerminal);
+  }, [terminalContext]);
+  useEffect(() => {
     const resize = () => setTerminalHeight((value) => clampTerminalHeight(value));
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
@@ -1436,7 +1446,8 @@ export function App() {
         className="panel-toggle terminal-toggle"
         type="button"
         aria-label={terminalVisible ? "Hide host terminal" : "Show host terminal"}
-        title={terminalVisible ? "Hide host terminal" : "Show host terminal"}
+        title={`${terminalVisible ? "Hide" : "Show"} host terminal (⌘J)`}
+        aria-keyshortcuts="Meta+J"
         aria-controls="host-terminal-panel"
         aria-expanded={terminalVisible}
         onClick={() => setTerminalOwner(terminalVisible ? "" : terminalContext)}

@@ -689,6 +689,37 @@ it("places the terminal beside the sidebar and closes it on chat change", async 
   expect(shell).not.toHaveClass("has-terminal");
 });
 
+it("toggles the host terminal with Cmd+J", async () => {
+  const conversation = { id: "new", workspace_id: "w", title: "New chat", updated_at: run.updated_at };
+  let created = false;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
+    const url = String(input);
+    if (url === "/api/config") return new Response(JSON.stringify({
+      providers: [], workspaces: [{ id: "w", label: "Work", path: "/work" }],
+      skills: [], resources: [], mcp_servers: [],
+    }));
+    if (url === "/api/settings") return new Response(JSON.stringify({
+      title_provider: "openai", title_model: "gpt-6-luna", theme_color: "#25262A",
+    }));
+    if (url === "/api/conversations" && options?.method === "POST") {
+      created = true;
+      return new Response(JSON.stringify(conversation));
+    }
+    if (url === "/api/conversations") return new Response(JSON.stringify(created ? [conversation] : []));
+    if (url === "/api/conversations/new") return new Response(JSON.stringify({ ...conversation, runs: [] }));
+    return new Response(JSON.stringify([]));
+  });
+
+  render(<App />);
+  await screen.findByRole("button", { name: "Show host terminal" });
+  fireEvent.keyDown(document, { key: "j", metaKey: true });
+  expect(await screen.findByTestId("host-terminal-mock")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Hide host terminal" })).toHaveAttribute("aria-keyshortcuts", "Meta+J");
+
+  fireEvent.keyDown(document, { key: "j", metaKey: true });
+  await waitFor(() => expect(screen.queryByTestId("host-terminal-mock")).not.toBeInTheDocument());
+});
+
 it("renders a lazy file tree with typed icons, caching, refresh, empty and retry states", async () => {
   localStorage.setItem("workspace-conversation", "c");
   const conversation = { id: "c", workspace_id: "w", title: "File tree", updated_at: run.updated_at };
