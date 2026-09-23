@@ -34,6 +34,8 @@ def test_config_no_credentials_and_origins(app_client):
     http, work, _ = app_client
     config = http.get("/api/config").json()
     assert [p["id"] for p in config["providers"]] == ["openai", "azure_openai"]
+    assert config["providers"][0]["models"][0]["id"] == "gpt-6-sol"
+    assert config["providers"][1]["models"] == []
     assert "test-key" not in str(config)
     assert (
         http.post(
@@ -57,6 +59,7 @@ def test_run_events_replay_delete_preserves_original(app_client):
     original.write_text("original")
     cid = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]
     r = http.post("/api/runs", json={"conversation_id": cid, "input": "hello"}).json()
+    assert r["request"]["model"] == "gpt-6-sol"
     first = http.get(f"/api/runs/{r['id']}/events").text.strip().splitlines()
     import json
 
@@ -213,7 +216,7 @@ def test_settings_and_monthly_cost_api(app_client):
     settings = http.get("/api/settings").json()
     assert settings == {
         "title_provider": "openai",
-        "title_model": "gpt-5.6-luna",
+        "title_model": "gpt-6-luna",
         "theme_color": "#25262A",
     }
     updated = http.patch("/api/settings", json={"theme_color": "#abcdef"})

@@ -53,7 +53,7 @@ const systemText = (value: unknown) => legacySystemLabels[text(value)] || text(v
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
   title_provider: "openai",
-  title_model: "gpt-5.6-luna",
+  title_model: "gpt-6-luna",
   theme_color: "#25262A",
 };
 
@@ -543,7 +543,7 @@ export function App() {
     localStorage.getItem(LAST_PROJECT_KEY) || "",
   );
   const [provider, setProvider] = useState("openai");
-  const [model, setModel] = useState("gpt-5.6-sol");
+  const [model, setModel] = useState("gpt-6-sol");
   const [effort, setEffort] = useState("medium");
   const [skills, setSkills] = useState<string[]>([]);
   const [resources, setResources] = useState<string[]>([]);

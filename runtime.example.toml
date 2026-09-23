@@ -29,8 +29,20 @@ path = "/absolute/path/to/research"
 # model = "gpt-5.6-terra"
 # deployment = "my-terra-deployment"
 # [[azure_models]]
+# model = "gpt-5.6-luna"
+# deployment = "my-luna-deployment"
+# [[azure_models]]
 # model = "gpt-6-astra"
 # deployment = "my-astra-deployment"
+# Deploy GPT-6 on Azure first, then add its actual deployment name below.
+# [[azure_models]]
+# model = "gpt-6-sol"
+# deployment = "my-gpt-6-sol-deployment"
+# [[azure_models]]
+# model = "gpt-6-luna"
+# deployment = "my-gpt-6-luna-deployment"
+# Registered deployments appear in both chat and title model selectors.
+# Existing Azure GPT-5.6 title model settings remain unchanged.
 
 # Remote MCP must be reachable by the provider (localhost is not reachable).
 # [[mcp_servers]]

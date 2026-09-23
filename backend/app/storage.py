@@ -64,7 +64,7 @@ class Store:
             # leave completed run streams waiting on an orphaned state.
             c.execute("UPDATE conversations SET title_status='complete' WHERE title_status='generating'")
             c.execute(
-                "INSERT OR IGNORE INTO app_settings VALUES(1,'openai','gpt-5.6-luna','#25262A')"
+                "INSERT OR IGNORE INTO app_settings VALUES(1,'openai','gpt-6-luna','#25262A')"
             )
 
     @contextmanager

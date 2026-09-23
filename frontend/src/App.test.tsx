@@ -722,3 +722,51 @@ it("navigates settings, saves the title model and theme, and shows monthly cost"
   expect((await screen.findAllByText("$0.012345")).length).toBe(2);
   expect(screen.getByText("Tool fees excluded")).toBeInTheDocument();
 });
+
+it("starts new conversations with GPT-6 Sol and offers registered Azure GPT-6 for titles", async () => {
+  localStorage.setItem("workspace-conversation", "c");
+  const config = {
+    providers: [
+      { id: "openai", label: "OpenAI", enabled: true, models: [
+        { id: "gpt-6-sol", model: "gpt-6-sol", label: "GPT-6 Sol", efforts: ["none", "medium"] },
+        { id: "gpt-6-luna", model: "gpt-6-luna", label: "GPT-6 Luna", efforts: ["none", "medium"] },
+      ] },
+      { id: "azure_openai", label: "Azure OpenAI", enabled: true, models: [
+        { id: "azure-old-luna", model: "gpt-5.6-luna", label: "GPT-5.6 Luna", efforts: ["medium"] },
+        { id: "azure-new-luna", model: "gpt-6-luna", label: "GPT-6 Luna", efforts: ["none", "medium"] },
+      ] },
+    ],
+    workspaces: [{ id: "w", label: "Work", path: "/work" }],
+    skills: [], resources: [], mcp_servers: [],
+  };
+  const conversation = { id: "c", workspace_id: "w", title: "New task", updated_at: "2026-09-23T00:00:00Z" };
+  let settings = { title_provider: "openai", title_model: "gpt-6-luna", theme_color: "#25262A" };
+  const patches: Record<string, string>[] = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
+    const url = String(input);
+    if (url === "/api/config") return new Response(JSON.stringify(config));
+    if (url === "/api/conversations") return new Response(JSON.stringify([conversation]));
+    if (url === "/api/conversations/c") return new Response(JSON.stringify({ ...conversation, runs: [] }));
+    if (url.startsWith("/api/conversations/c/files")) return new Response(JSON.stringify([]));
+    if (url === "/api/settings" && options?.method === "PATCH") {
+      const change = JSON.parse(String(options.body));
+      patches.push(change);
+      settings = { ...settings, ...change };
+      return new Response(JSON.stringify(settings));
+    }
+    if (url === "/api/settings") return new Response(JSON.stringify(settings));
+    return new Response(JSON.stringify({}));
+  });
+
+  render(<App />);
+  const modelSelect = await screen.findByRole("combobox", { name: "Model" });
+  await waitFor(() => expect(modelSelect).toHaveValue("gpt-6-sol"));
+  expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("medium");
+
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  expect(screen.getByRole("combobox", { name: "Title model" })).toHaveValue("gpt-6-luna");
+  fireEvent.change(screen.getByRole("combobox", { name: "Title provider" }), { target: { value: "azure_openai" } });
+  await waitFor(() => expect(patches).toContainEqual({ title_provider: "azure_openai", title_model: "azure-old-luna" }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Title model" }), { target: { value: "azure-new-luna" } });
+  await waitFor(() => expect(patches).toContainEqual({ title_provider: "azure_openai", title_model: "azure-new-luna" }));
+});

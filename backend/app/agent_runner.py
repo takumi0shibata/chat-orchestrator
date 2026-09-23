@@ -131,11 +131,27 @@ class RunManager:
             None,
         )
         if not current:
+            preferred_model = (
+                "gpt-6-luna"
+                if configured["title_provider"] == "openai"
+                else "gpt-5.6-luna"
+            )
             current = next(
                 (
                     (provider, item)
                     for provider, item in available
-                    if provider == "openai" and item["id"] == "gpt-5.6-luna"
+                    if provider == configured["title_provider"]
+                    and item["model"] == preferred_model
+                ),
+                None,
+            )
+        if not current and configured["title_provider"] == "azure_openai":
+            current = next(
+                (
+                    (provider, item)
+                    for provider, item in available
+                    if provider == "azure_openai"
+                    and item["model"].startswith("gpt-5.6-")
                 ),
                 None,
             )
@@ -144,7 +160,16 @@ class RunManager:
                 (
                     (provider, item)
                     for provider, item in available
-                    if item["model"] == "gpt-5.6-luna"
+                    if provider == "openai" and item["model"] == "gpt-6-luna"
+                ),
+                None,
+            )
+        if not current:
+            current = next(
+                (
+                    (provider, item)
+                    for provider, item in available
+                    if provider == "azure_openai" and item["model"] == "gpt-5.6-luna"
                 ),
                 None,
             )

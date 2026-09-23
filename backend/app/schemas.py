@@ -29,7 +29,7 @@ class AppSettingsUpdate(Request):
 class RunCreate(Request):
     conversation_id: str
     provider: Literal["openai", "azure_openai"] = "openai"
-    model: str = "gpt-5.6-sol"
+    model: str = "gpt-6-sol"
     reasoning_effort: str = "medium"
     input: str = Field(default="", max_length=1000000)
     attachment_ids: list[str] = Field(default_factory=list)

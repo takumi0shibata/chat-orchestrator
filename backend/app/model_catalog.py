@@ -1,4 +1,12 @@
 MODELS = {
+    "gpt-6-sol": {
+        "label": "GPT-6 Sol",
+        "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+    },
+    "gpt-6-luna": {
+        "label": "GPT-6 Luna",
+        "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+    },
     "gpt-5.6-sol": {
         "label": "GPT-5.6 Sol",
         "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
@@ -20,6 +28,8 @@ MODELS = {
 # Standard API text-token prices in USD per 1M tokens. These values are kept in
 # code so every ledger entry can snapshot the rate that was used at the time.
 MODEL_PRICING = {
+    "gpt-6-sol": {"input": 2.0, "cached_input": 0.2, "cache_write": 2.5, "output": 10.0},
+    "gpt-6-luna": {"input": 0.1, "cached_input": 0.01, "cache_write": 0.125, "output": 0.5},
     "gpt-5.6-sol": {"input": 4.0, "cached_input": 0.4, "cache_write": 5.0, "output": 20.0},
     "gpt-5.6-terra": {"input": 2.0, "cached_input": 0.2, "cache_write": 2.5, "output": 12.0},
     "gpt-5.6-luna": {"input": 0.2, "cached_input": 0.02, "cache_write": 0.25, "output": 1.2},

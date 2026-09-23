@@ -324,6 +324,31 @@ def test_unknown_or_unsupported_models_rejected(tmp_path):
         )
 
 
+def test_title_model_defaults_and_azure_fallback(tmp_path):
+    manager, store, _, _ = setup(tmp_path, [])
+    assert manager.title_selection()["title_model"] == "gpt-6-luna"
+    manager.config.azure_models.append(
+        Deployment(model="gpt-5.6-luna", deployment="azure-old-luna")
+    )
+    store.update_settings(title_provider="azure_openai", title_model="azure-old-luna")
+    assert manager.title_selection()["title_model"] == "azure-old-luna"
+
+    # A missing Azure deployment falls back within Azure's GPT-5.6 family.
+    store.update_settings(title_provider="azure_openai", title_model="missing")
+    assert manager.title_selection() == {
+        "title_provider": "azure_openai",
+        "title_model": "azure-old-luna",
+        "theme_color": "#25262A",
+    }
+
+    manager.config.azure_models.append(
+        Deployment(model="gpt-6-luna", deployment="azure-new-luna")
+    )
+    manager.validate_title_selection("azure_openai", "azure-new-luna")
+    store.update_settings(title_provider="azure_openai", title_model="azure-new-luna")
+    assert manager.title_selection()["title_model"] == "azure-new-luna"
+
+
 def test_model_round_limit(tmp_path):
     async def scenario():
         m, store, c, req = setup(tmp_path, [[shell("ls")]], max_model_rounds=1)
@@ -568,6 +593,32 @@ def test_first_message_generates_one_title_with_selected_model_and_records_cost(
     asyncio.run(scenario())
 
 
+def test_registered_azure_gpt_6_deployments_route_chat_and_title(tmp_path):
+    async def scenario():
+        manager, store, client, request = setup(
+            tmp_path, [[message()]], provider="azure_openai"
+        )
+        manager.config.azure_models.extend([
+            Deployment(model="gpt-6-sol", deployment="azure-new-sol"),
+            Deployment(model="gpt-6-luna", deployment="azure-new-luna"),
+        ])
+        store.update_settings(
+            title_provider="azure_openai", title_model="azure-new-luna"
+        )
+        request = request.model_copy(update={"model": "azure-new-sol"})
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        for _ in range(20):
+            if client.title_calls:
+                break
+            await asyncio.sleep(0)
+        assert store.run(run["id"])["status"] == "completed"
+        assert client.calls[0]["model"] == "azure-new-sol"
+        assert client.title_calls[0]["model"] == "azure-new-luna"
+
+    asyncio.run(scenario())
+
+
 def test_cost_calculation_uses_cache_and_long_context_rates(tmp_path):
     m, store, _, _ = setup(tmp_path, [[message()]])
     m.record_usage(
@@ -593,3 +644,37 @@ def test_cost_calculation_uses_cache_and_long_context_rates(tmp_path):
     assert row["output_rate_nano"] == 1800
     assert row["cost_nano_usd"] == 90_800_000
     assert store.monthly_costs()[0]["usd"] == pytest.approx(0.0908)
+
+
+@pytest.mark.parametrize(
+    ("model", "input_tokens", "expected_rates", "expected_cost"),
+    [
+        ("gpt-6-sol", 1_000, (2_000, 200, 2_500, 10_000), 4_690_000),
+        ("gpt-6-sol", 300_000, (4_000, 400, 5_000, 15_000), 905_000_000),
+        ("gpt-6-luna", 1_000, (100, 10, 125, 500), 234_500),
+        ("gpt-6-luna", 300_000, (200, 20, 250, 750), 45_250_000),
+    ],
+)
+def test_gpt_6_cost_rates(tmp_path, model, input_tokens, expected_rates, expected_cost):
+    manager, store, _, _ = setup(tmp_path, [])
+    cached, cache_write, output = (
+        (200, 100, 300) if input_tokens == 1_000 else (100_000, 50_000, 1_000)
+    )
+    manager.record_usage(
+        "priced-response", "openai", model, "response",
+        {
+            "input_tokens": input_tokens,
+            "input_tokens_details": {
+                "cached_tokens": cached,
+                "cache_write_tokens": cache_write,
+            },
+            "output_tokens": output,
+        },
+    )
+    with store.connect() as connection:
+        row = connection.execute("SELECT * FROM llm_costs WHERE response_id='priced-response'").fetchone()
+    assert (
+        row["input_rate_nano"], row["cached_rate_nano"],
+        row["cache_write_rate_nano"], row["output_rate_nano"],
+    ) == expected_rates
+    assert row["cost_nano_usd"] == expected_cost

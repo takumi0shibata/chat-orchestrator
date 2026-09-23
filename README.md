@@ -60,7 +60,9 @@ Remote MCPはプロバイダ側から接続されるため、ローカルの `lo
 
 ローカルShellではホスト型Skillsの `skill_reference` IDは使いません。標準Skills本体はユーザーが別途用意します。旧skill.yaml / skill.py のローダーや互換機能はありません。
 
-OpenAIの標準モデルは `gpt-5.6-sol`、追加モデルは `gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-6-astra`。推論は標準 `medium`。SolとTerraは `none/low/medium/high/xhigh/max`、LunaとAstraは `low/medium/high/xhigh/max`。モデルの利用権限やAzureの対応状況は契約・デプロイに依存し、エラー時に別モデルへ自動切替しません。同じ会話内でのプロバイダ変更はできません。
+OpenAIの新規会話の標準モデルは `gpt-6-sol`、新規データベースでのタイトル生成の標準モデルは `gpt-6-luna` です。`gpt-6-astra` と GPT-5.6 系も引き続き選べます。推論の標準は `medium`。GPT-6 Sol/LunaとGPT-5.6 Sol/Terraは `none/low/medium/high/xhigh/max`、GPT-6 AstraとGPT-5.6 Lunaは `low/medium/high/xhigh/max` に対応します。既存会話のモデル履歴と保存済みタイトル生成設定は変更しません。
+
+Azure OpenAIでは `runtime.toml` の `azure_models` に登録したデプロイだけが会話・タイトル生成の選択肢に表示されます。GPT-6 Sol/LunaをAzureにデプロイしたら、`model = "gpt-6-sol"` または `model = "gpt-6-luna"` と実際の `deployment` 名を追加し、バックエンドを再起動してください。登録前はGPT-6を表示せず、Azureのタイトル生成に設定したGPT-5.6系デプロイは維持します。モデルの利用権限やAzureの対応状況は契約・デプロイに依存し、エラー時に別モデルへ自動切替しません。同じ会話内でのプロバイダ変更はできません。
 
 ## 実行環境と添付
 
