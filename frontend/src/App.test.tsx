@@ -76,13 +76,14 @@ describe("Run timeline", () => {
     expect(details).not.toHaveAttribute("open");
     fireEvent.click(screen.getByText("Worked for 5s"));
     expect(details).toHaveAttribute("open");
-    const command = document.querySelector("details.command")!;
-    expect(command).not.toHaveAttribute("open");
-    expect(screen.getByText("Ran command")).toBeInTheDocument();
-    fireEvent.click(command.querySelector("summary")!);
-    expect(command).toHaveAttribute("open");
+    const work = document.querySelector("details.work-group")!;
+    expect(work).not.toHaveAttribute("open");
+    expect(screen.getByText("Ran commands")).toBeInTheDocument();
+    fireEvent.click(work.querySelector("summary")!);
+    expect(work).toHaveAttribute("open");
     expect(screen.getByText("200 files analyzed")).toBeInTheDocument();
-    expect(screen.getByText("Work completed")).toBeInTheDocument();
+    expect(document.querySelector(".activity-body")).not.toHaveTextContent("Work completed");
+    expect(document.querySelector(".activity-body")).not.toHaveTextContent("2.0s");
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Stop" }),
@@ -332,7 +333,7 @@ it("uses the composer button as the only stop control for an active run", async 
   await waitFor(() => expect(fetchMock.mock.calls.some(([url, options]) => url === "/api/runs/r/stop" && options?.method === "POST")).toBe(true));
 });
 
-it("shows live work in Activity, preserves manual collapse, and separates the final answer", async () => {
+it("closes Activity at final-answer start and streams the answer outside it", async () => {
   const initial = [event(1, "round", { number: 1 }), event(2, "text_delta", { item_id: "a", text: "Checking files" })];
   const { container, rerender } = render(<RunView run={{ ...run, status: "model_wait" }} timeline={initial} onApproval={vi.fn()} />);
   const details = container.querySelector("details")!;
@@ -346,23 +347,82 @@ it("shows live work in Activity, preserves manual collapse, and separates the fi
     event(4, "command", { call_id: "call", index: 0, command: "npm test" })];
   rerender(<RunView run={{ ...run, status: "command_running" }} timeline={continued} onApproval={vi.fn()} />);
   expect(details).not.toHaveAttribute("open");
-  const command = container.querySelector("details.command")!;
-  expect(command).not.toHaveAttribute("open");
-  expect(command.querySelector(".command-code")).toHaveTextContent("npm test");
-  expect(command.querySelector(".command-label")).toHaveTextContent("Running command");
+  const work = container.querySelector("details.work-group")!;
+  expect(work).not.toHaveAttribute("open");
+  expect(work).toHaveTextContent("Running commands");
   fireEvent.click(details.querySelector("summary")!);
   expect(details).toHaveAttribute("open");
 
-  const timeline = [...continued, event(5, "command_done", { call_id: "call", index: 0, elapsed: 1, outcome: { type: "exit", exit_code: 0 } }),
-    event(6, "round", { number: 2 }), event(7, "text_delta", { item_id: "b", text: "**Final result**" }),
-    event(8, "response", { round: 2, final_item_ids: ["b"], continues: false })];
-  rerender(<RunView run={run} timeline={timeline} onApproval={vi.fn()} />);
+  const beforeAnswer = [...continued, event(5, "command_done", { call_id: "call", index: 0, elapsed: 1, outcome: { type: "exit", exit_code: 0 } }),
+    event(6, "round", { number: 2 }), event(7, "message_phase", { item_id: "b", round: 2, phase: "final_answer" })];
+  rerender(<RunView run={{ ...run, status: "model_wait" }} timeline={beforeAnswer} onApproval={vi.fn()} />);
   await waitFor(() => expect(details).not.toHaveAttribute("open"));
+  expect(container.querySelector(".answer-block")).toBeNull();
+  const streaming = [...beforeAnswer, event(8, "text_delta", { item_id: "b", round: 2, text: "**Final" })];
+  rerender(<RunView run={{ ...run, status: "model_wait" }} timeline={streaming} onApproval={vi.fn()} />);
   expect(container.querySelectorAll(".answer-block")).toHaveLength(1);
-  expect(container.querySelector(".answer-block strong")).toHaveTextContent("Final result");
+  expect(container.querySelector(".answer-block")).toHaveTextContent("Final");
   expect(container.querySelector(".activity-message")).toHaveTextContent("Checking files");
-  fireEvent.click(screen.getByText("Worked for 5s"));
+  fireEvent.click(details.querySelector("summary")!);
   expect(details).toHaveAttribute("open");
+  const finished = [...streaming, event(9, "text_delta", { item_id: "b", round: 2, text: " result**" }),
+    event(10, "response", { round: 2, final_item_ids: ["b"], continues: false })];
+  rerender(<RunView run={run} timeline={finished} onApproval={vi.fn()} />);
+  expect(details).toHaveAttribute("open");
+  expect(container.querySelector(".answer-block strong")).toHaveTextContent("Final result");
+});
+
+it("shows one expandable work line per report interval without process noise", () => {
+  const timeline = [event(1, "status", { label: "Preparing" }),
+    event(2, "round", { number: 1 }),
+    event(3, "text_delta", { item_id: "report", round: 1, text: "Checking the project" }),
+    event(4, "response", { round: 1, continues: true, final_item_ids: [] }),
+    event(5, "command", { call_id: "one", index: 0, command: "pwd" }),
+    event(6, "command_output", { call_id: "one", index: 0, text: "/workspace" }),
+    event(7, "command_done", { call_id: "one", index: 0, elapsed: 0.1, outcome: { type: "exit", exit_code: 0 } }),
+    event(8, "command", { call_id: "two", index: 0, command: "ls" }),
+    event(9, "command_done", { call_id: "two", index: 0, elapsed: 0.1, outcome: { type: "exit", exit_code: 0 } }),
+    event(10, "tool", { id: "web", type: "web_search_call" }),
+    event(11, "tool_result", { id: "web", type: "web_search_call", status: "completed" }),
+    event(12, "text_delta", { item_id: "next", round: 2, text: "Found the files" }),
+    event(13, "tool", { id: "mcp", type: "mcp_call", name: "lookup" }),
+    event(14, "tool_result", { id: "mcp", type: "mcp_call", output: "record" })];
+  const { container } = render(<RunView run={{ ...run, status: "model_wait" }} timeline={timeline} onApproval={vi.fn()} />);
+  const history = container.querySelector(".activity-body")!;
+  expect(history.querySelectorAll(".activity-message")).toHaveLength(2);
+  expect(history.querySelectorAll(".work-group")).toHaveLength(2);
+  expect(history).toHaveTextContent("Ran commands, Searched web");
+  expect(history).toHaveTextContent("Used external tools");
+  for (const noise of ["Preparing", "Model turn", "Response received", "0.1s"]) expect(history).not.toHaveTextContent(noise);
+  const first = history.querySelector(".work-group")!;
+  fireEvent.click(first.querySelector("summary")!);
+  expect(first).toHaveTextContent("$ pwd");
+  expect(first).toHaveTextContent("$ ls");
+  expect(first).toHaveTextContent("/workspace");
+});
+
+it("waits for response IDs when phase is absent, then closes before terminal status", async () => {
+  const start = [event(1, "text_delta", { item_id: "final", round: 1, text: "Answer" })];
+  const { container, rerender } = render(<RunView run={{ ...run, status: "model_wait" }} timeline={start} onApproval={vi.fn()} />);
+  const details = container.querySelector("details.activity")!;
+  expect(details).toHaveAttribute("open");
+  expect(container.querySelector(".answer-block")).toBeNull();
+  rerender(<RunView run={{ ...run, status: "model_wait" }} timeline={[...start,
+    event(2, "response", { round: 1, final_item_ids: ["final"], continues: false })]} onApproval={vi.fn()} />);
+  await waitFor(() => expect(details).not.toHaveAttribute("open"));
+  expect(container.querySelector(".answer-block")).toHaveTextContent("Answer");
+});
+
+it("keeps a phased partial answer and visible error if the run fails", async () => {
+  const timeline = [event(1, "message_phase", { item_id: "final", round: 1, phase: "final_answer" }),
+    event(2, "text_delta", { item_id: "final", round: 1, text: "Partial answer" }),
+    event(3, "error", { message: "Cleanup failed" })];
+  const { container, rerender } = render(<RunView run={{ ...run, status: "model_wait" }} timeline={timeline} onApproval={vi.fn()} />);
+  expect(container.querySelector(".answer-block")).toHaveTextContent("Partial answer");
+  rerender(<RunView run={{ ...run, status: "failed" }} timeline={timeline} onApproval={vi.fn()} />);
+  await waitFor(() => expect(container.querySelector("details.activity")).toHaveAttribute("open"));
+  expect(container.querySelector(".answer-block")).toHaveTextContent("Partial answer");
+  expect(screen.getByRole("alert")).toHaveTextContent("Cleanup failed");
 });
 
 it("opens Activity when an active run fails and when a stopped run is restored", async () => {

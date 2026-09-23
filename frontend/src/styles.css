@@ -389,13 +389,13 @@ h2 {
   font-size: 12px;
   overflow: hidden;
 }
-.activity summary {
+.activity > summary {
   padding: 10px 13px;
   cursor: pointer;
   background: #f8f8f9;
   color: #606168;
 }
-.activity summary span {
+.activity > summary span {
   float: right;
   font-size: 10px;
   color: #898a90;
@@ -405,30 +405,8 @@ h2 {
   max-height: 500px;
   overflow: auto;
 }
-.activity-row {
-  padding: 6px 0;
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  font-size: 11px;
-  color: #6e6f75;
-}
-.activity-row time {
-  color: #999aa0;
-}
-.activity-row pre {
-  width: 100%;
-  max-height: 180px;
-  overflow: auto;
-}
-.command {
-  margin: 4px 0;
-  background: transparent;
-  color: #6e6f75;
-  border-radius: 0;
-  padding: 0;
-}
-.command summary {
+.work-group { margin: 4px 0; }
+.work-group > summary {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -437,34 +415,24 @@ h2 {
   cursor: pointer;
   list-style: none;
 }
-.command summary::-webkit-details-marker { display: none; }
-.command summary:hover { color: #35373c; }
-.command summary .command-label {
-  float: none;
-  color: inherit;
-  font-size: 11px;
-}
-.command summary small {
-  margin: 0 0 0 auto;
-  color: #999aa0;
-  font-size: 10px;
-}
-.command-chevron {
+.work-group > summary::-webkit-details-marker { display: none; }
+.work-group > summary:hover { color: #35373c; }
+.work-chevron {
   display: grid;
   place-items: center;
-  float: none !important;
-  color: inherit !important;
   transition: transform 150ms ease;
 }
-.command[open] .command-chevron { transform: rotate(90deg); }
-.command-details {
+.work-group[open] .work-chevron { transform: rotate(90deg); }
+.work-details {
   margin: 2px 0 10px 22px;
   background: #27282b;
   color: #eeeeef;
   border-radius: 7px;
   padding: 12px;
 }
-.command-details pre {
+.work-detail + .work-detail { border-top: 1px solid #4a4b50; margin-top: 12px; padding-top: 12px; }
+.work-detail-title { font-size: 11px; font-weight: 600; margin-bottom: 6px; }
+.work-details pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, monospace;
@@ -479,7 +447,7 @@ h2 {
   max-height: 260px;
   overflow: auto;
 }
-.command-details small {
+.work-details small {
   display: block;
   color: #a9aab0;
   margin-top: 8px;
@@ -1290,14 +1258,13 @@ h2 {
 
 /* A single, compact entry point for current work and its history. */
 .activity { margin: 10px 0 20px; }
-.activity summary { display: flex; align-items: center; gap: 10px; cursor: pointer; }
-.activity summary::before { content: '▸'; flex-shrink: 0; }
-.activity[open] summary::before { content: '▾'; }
-.activity summary .activity-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: inherit; color: inherit; }
-.activity summary .activity-hint { flex-shrink: 0; font-size: 11px; }
+.activity > summary { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.activity > summary::before { content: '▸'; flex-shrink: 0; }
+.activity[open] > summary::before { content: '▾'; }
+.activity > summary .activity-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: inherit; color: inherit; }
+.activity > summary .activity-hint { flex-shrink: 0; font-size: 11px; }
 .activity-body { max-height: min(480px, 55vh); overflow-y: auto; }
-.activity-message { padding: 14px 0; border-bottom: 1px solid #ededee; }
-.activity-message time { font-size: 11px; color: #878990; }
+.activity-message { padding: 14px 0; }
 .answer-block + .answer-block { margin-top: 24px; }
 .history-search { width: 100%; min-width: 0; margin-bottom: 12px; }
 .history-group-label { padding: 10px 8px 4px; font-size: 10px; }
@@ -1365,7 +1332,7 @@ h2 {
   overflow: visible;
   font-size: 12px;
 }
-.activity summary {
+.activity > summary {
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -1377,11 +1344,11 @@ h2 {
   cursor: pointer;
   list-style: none;
 }
-.activity summary::-webkit-details-marker { display: none; }
-.activity summary::before,
-.activity[open] summary::before { content: none; display: none; }
-.activity summary:hover { color: #35373c; }
-.activity summary .activity-label {
+.activity > summary::-webkit-details-marker { display: none; }
+.activity > summary::before,
+.activity[open] > summary::before { content: none; display: none; }
+.activity > summary:hover { color: #35373c; }
+.activity > summary .activity-label {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -1403,15 +1370,16 @@ h2 {
   overflow: visible;
   padding: 8px 2px 4px;
 }
-.activity-message { padding: 12px 2px; border-bottom: 1px solid #ededee; }
-.activity-message time { font-size: 11px; color: #878990; }
-.activity .command > summary {
+.activity-message { padding: 12px 2px; }
+.activity-message .markdown p:last-child { margin-bottom: 0; }
+.activity .work-group > summary {
   justify-content: flex-start;
   padding: 7px 2px;
   border-bottom: 0;
+  background: transparent;
   color: #6e6f75;
 }
-.activity .command > summary:hover { color: #35373c; }
+.activity .work-group > summary:hover { color: #35373c; }
 
 /* Code block toolbar: language metadata stays outside the copied code. */
 .code-wrap {

@@ -16,11 +16,13 @@ class Stream:
     async def __aiter__(self):
         for i in self.output:
             if i["type"] == "message":
+                yield NS(type="response.output_item.added", item=i)
                 yield NS(
                     type="response.output_text.delta",
                     delta=i["content"][0]["text"],
                     item_id=i["id"],
                 )
+                yield NS(type="response.output_item.done", item=i)
         yield NS(
             type="response.completed",
             response=NS(
@@ -456,6 +458,24 @@ def test_response_events_identify_final_messages(tmp_path):
             (1, True, []), (2, False, ["msg_1"])
         ]
         assert [e["data"]["round"] for e in events if e["type"] == "text_delta"] == [1, 2]
+    asyncio.run(scenario())
+
+
+def test_final_phase_is_emitted_before_text(tmp_path):
+    async def scenario():
+        final = {**message(), "phase": "final_answer"}
+        manager, store, _, request = setup(tmp_path, [[final]])
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        events = store.events(run["id"])
+        phase = next(e for e in events if e["type"] == "message_phase")
+        delta = next(e for e in events if e["type"] == "text_delta")
+        assert phase["seq"] < delta["seq"]
+        assert phase["data"] == {
+            "item_id": final["id"], "round": 1, "phase": "final_answer"
+        }
+        assert len([e for e in events if e["type"] == "message_phase"]) == 1
+
     asyncio.run(scenario())
 
 

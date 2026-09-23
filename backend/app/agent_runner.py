@@ -607,6 +607,7 @@ class RunManager:
                 stream=True,
             )
             response = None
+            message_phases = {}
             try:
                 async for event in stream:
                     kind = event.type
@@ -622,6 +623,19 @@ class RunManager:
                         )
                     elif kind == "response.output_item.added":
                         item = jsonable(event.item)
+                        if item.get("type") == "message" and item.get("phase") in (
+                            "commentary", "final_answer"
+                        ):
+                            message_phases[item["id"]] = item["phase"]
+                            self.store.event(
+                                rid,
+                                "message_phase",
+                                dict(
+                                    item_id=item["id"],
+                                    round=round_index + 1,
+                                    phase=item["phase"],
+                                ),
+                            )
                         if item.get("type") in (
                             "web_search_call",
                             "mcp_call",
@@ -644,6 +658,19 @@ class RunManager:
                             )
                     elif kind == "response.output_item.done":
                         item = jsonable(event.item)
+                        if item.get("type") == "message" and item.get("phase") in (
+                            "commentary", "final_answer"
+                        ) and message_phases.get(item["id"]) != item["phase"]:
+                            message_phases[item["id"]] = item["phase"]
+                            self.store.event(
+                                rid,
+                                "message_phase",
+                                dict(
+                                    item_id=item["id"],
+                                    round=round_index + 1,
+                                    phase=item["phase"],
+                                ),
+                            )
                         if item.get("type") in (
                             "web_search_call",
                             "mcp_call",

@@ -10,7 +10,7 @@ import {
   skillMentionName,
 } from "./lib/skillMention";
 import type { SkillMention } from "./lib/skillMention";
-import { messageBlocks } from "./lib/timeline";
+import { activityEntries, finalAnswerStart, messageBlocks } from "./lib/timeline";
 import { terminal } from "./types";
 import type {
   AgentEvent,
@@ -34,24 +34,6 @@ const MIN_FILES_WIDTH = 240;
 const MAX_FILES_WIDTH = 520;
 const text = (value: unknown) =>
   typeof value === "string" ? value : JSON.stringify(value ?? "");
-const legacySystemLabels: Record<string, string> = {
-  "準備中": "Preparing",
-  "実行を準備しています": "Preparing",
-  "モデル応答待ち": "Waiting for model",
-  "コマンドを実行しています": "Running command",
-  "次の操作を判断しています": "Deciding the next action",
-  "作業が完了しました": "Work completed",
-  "作業フォルダの実行順を待っています": "Waiting for workspace availability",
-  "サンドボックスを起動しています": "Starting sandbox",
-  "長い会話の作業文脈を整理しています": "Organizing conversation context",
-  "作業文脈を圧縮しました": "Conversation context compacted",
-  "外部ツールの実行承認を待っています": "Waiting for external tool approval",
-  "停止しました。既に反映された変更は残ります": "Stopped. Applied changes remain.",
-  "実行時間の上限に達しました。変更済みファイルは保持されます": "Time limit reached. Modified files remain.",
-  "実行に失敗しました。履歴を確認してください": "Run failed. Check the activity log.",
-};
-const systemText = (value: unknown) => legacySystemLabels[text(value)] || text(value);
-
 const DEFAULT_APP_SETTINGS: AppSettings = {
   title_provider: "openai",
   title_model: "gpt-6-luna",
@@ -524,6 +506,79 @@ function Choices({
   );
 }
 
+function WorkGroup({ actions, timeline, status }: {
+  actions: AgentEvent[];
+  timeline: AgentEvent[];
+  status: string;
+}) {
+  const category = (action: AgentEvent) => action.type === "command" ? "command" :
+    action.type === "approval" ? "approval" :
+      action.data.type === "web_search_call" ? "web" : "tool";
+  const categories = [...new Set(actions.map(category))];
+  const commandDone = (action: AgentEvent) => timeline.find((event) =>
+    event.type === "command_done" && event.data.call_id === action.data.call_id &&
+    event.data.index === action.data.index);
+  const toolResult = (action: AgentEvent) => timeline.find((event) =>
+    event.type === "tool_result" && event.data.id === action.data.id);
+  const labels = categories.map((kind) => {
+    const matching = actions.filter((action) => category(action) === kind);
+    if (kind === "command") return matching.some((action) => !commandDone(action)) && !terminal(status)
+      ? "Running commands" : "Ran commands";
+    if (kind === "web") return matching.some((action) => !toolResult(action)) && !terminal(status)
+      ? "Searching web" : "Searched web";
+    if (kind === "tool") return matching.some((action) => !toolResult(action)) && !terminal(status)
+      ? "Using external tools" : "Used external tools";
+    return "Requested approval";
+  });
+  return (
+    <details className="work-group">
+      <summary>
+        <span className="work-chevron" aria-hidden="true"><Icon name="chevron-right" size={14} /></span>
+        <span>{labels.join(", ")}</span>
+      </summary>
+      <div className="work-details">
+        {actions.map((action) => {
+          if (action.type === "command") {
+            const output = timeline.filter((event) => event.type === "command_output" &&
+              event.data.call_id === action.data.call_id && event.data.index === action.data.index);
+            const done = commandDone(action);
+            const outcome = done?.data.outcome as Record<string, unknown> | undefined;
+            const result = outcome?.type === "exit" ? `Exit code ${text(outcome.exit_code)}` :
+              outcome?.type ? text(outcome.type) : done ? "Completed" : terminal(status) ? "Interrupted" : "Running…";
+            return (
+              <div className="work-detail" key={action.seq}>
+                <div className="work-detail-title">Command</div>
+                <pre className="command-code">$ {text(action.data.command)}</pre>
+                {output.length > 0 && <pre className="command-output">{output.map((event) => text(event.data.text)).join("")}</pre>}
+                <small>{result}</small>
+              </div>
+            );
+          }
+          if (action.type === "tool") {
+            const result = toolResult(action);
+            const title = action.data.type === "web_search_call" ? "Web search" :
+              text(action.data.name || action.data.server_label || "External tool");
+            return (
+              <div className="work-detail" key={action.seq}>
+                <div className="work-detail-title">{title}</div>
+                {Boolean(result?.data.output || result?.data.error) &&
+                  <pre className="command-output">{text(result?.data.output || result?.data.error)}</pre>}
+                {Boolean(result?.data.status) && <small>{text(result?.data.status)}</small>}
+              </div>
+            );
+          }
+          return (
+            <div className="work-detail" key={action.seq}>
+              <div className="work-detail-title">Approval requested</div>
+              <small>{text(action.data.server_label || "External tool")} / {text(action.data.name)}</small>
+            </div>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
 export function RunView({
   run,
   timeline,
@@ -536,27 +591,26 @@ export function RunView({
   const [clock, setClock] = useState(Date.now());
   const [pending, setPending] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState("");
-  const [activityOpen, setActivityOpen] = useState(run.status !== "completed");
+  const finalStart = finalAnswerStart(timeline);
+  const [activityOpen, setActivityOpen] = useState(run.status !== "completed" && finalStart === null);
+  const autoClosedFor = useRef<number | null>(finalStart);
   useEffect(() => {
     if (terminal(run.status)) return;
     const timer = setInterval(() => setClock(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [run.status]);
+  useLayoutEffect(() => {
+    if (finalStart !== null && autoClosedFor.current !== finalStart) {
+      autoClosedFor.current = finalStart;
+      setActivityOpen(false);
+    }
+  }, [finalStart]);
   useEffect(() => {
-    if (run.status === "completed") setActivityOpen(false);
+    if (run.status === "completed" && finalStart === null) setActivityOpen(false);
     else if (["failed", "stopped"].includes(run.status)) setActivityOpen(true);
-  }, [run.status]);
+  }, [run.status, finalStart]);
   const blocks = messageBlocks(timeline, run.status);
-  const activityBlocks = run.status === "completed"
-    ? blocks.filter((block) => block.progress)
-    : blocks;
-  const activityEvents = [
-    ...timeline.filter((e) => !["text_delta", "command_output", "artifacts", "conversation_title"].includes(e.type)),
-    ...activityBlocks.map((block) => ({
-      run_id: run.id, seq: block.seq, created_at: block.created_at,
-      type: "progress_message", data: { text: block.content } as Record<string, unknown>,
-    })),
-  ].sort((a, b) => a.seq - b.seq);
+  const activity = activityEntries(timeline, blocks, run.status);
   const approvals = timeline.filter(
     (e) =>
       e.type === "approval" &&
@@ -607,80 +661,16 @@ export function RunView({
             <span className="activity-chevron" aria-hidden="true"><Icon name="chevron-right" size={15} /></span>
           </summary>
           <div className="activity-body">
-            {activityEvents.map((e) => {
-                if (e.type === "progress_message") return (
-                  <div className="activity-message" key={e.seq}>
-                    <time>{new Date(e.created_at).toLocaleTimeString()}</time>
-                    <MarkdownContent conversationId={run.conversation_id} content={text(e.data.text)} />
-                  </div>
-                );
-                if (e.type === "command") {
-                  const output = timeline.filter(
-                    (o) =>
-                      o.type === "command_output" &&
-                      o.data.call_id === e.data.call_id &&
-                      o.data.index === e.data.index,
-                  );
-                  const done = timeline.find(
-                    (o) =>
-                      o.type === "command_done" &&
-                      o.data.call_id === e.data.call_id &&
-                      o.data.index === e.data.index,
-                  );
-                  return (
-                    <details className="command" key={e.seq}>
-                      <summary>
-                        <span className="command-chevron" aria-hidden="true"><Icon name="chevron-right" size={14} /></span>
-                        <span className="command-label">
-                          {done ? "Ran command" : terminal(run.status) ? "Command interrupted" : "Running command"}
-                        </span>
-                        {done && <small>{Number(done.data.elapsed).toFixed(1)}s</small>}
-                      </summary>
-                      <div className="command-details">
-                        <pre className="command-code">
-                          $ {text(e.data.command)}
-                        </pre>
-                        {output.length > 0 && (
-                          <pre className="command-output">
-                            {output.map((o) => text(o.data.text)).join("")}
-                          </pre>
-                        )}
-                        <small>
-                          {e.data.timeout_seconds != null && `Limit: ${Number(e.data.timeout_seconds)}s · `}
-                          {done
-                            ? `${text(done.data.outcome)} · ${Number(done.data.elapsed).toFixed(1)}s`
-                            : terminal(run.status)
-                              ? "Interrupted"
-                              : "Running…"}
-                        </small>
-                      </div>
-                    </details>
-                  );
-                }
-                if (e.type === "command_done") return null;
-                return (
-                  <div className="activity-row" key={e.seq}>
-                    <time>{new Date(e.created_at).toLocaleTimeString()}</time>
-                    <span>
-                      {systemText(
-                        e.type === "round" ? `Model turn ${text(e.data.number)}` :
-                        e.type === "response" ? (e.data.continues ? "Response received · continuing" : "Response received") :
-                        e.type === "tool" ? (e.data.type === "web_search_call" ? "Web search" : `Tool: ${text(e.data.name || e.data.server_label || e.data.type)}`) :
-                        e.type === "tool_result" ? `Tool result: ${text(e.data.name || e.data.type)}` :
-                        e.data.label || e.data.message || e.data.name || e.type,
-                      )}
-                    </span>
-                    {e.type === "tool_result" && (
-                      <pre>
-                        {text(e.data.output || e.data.error || e.data.status)}
-                      </pre>
-                    )}
-                  </div>
-                );
-              })}
+            {activity.map((entry) => entry.kind === "message" ? (
+              <div className="activity-message" key={entry.block.key}>
+                <MarkdownContent conversationId={run.conversation_id} content={entry.block.content} />
+              </div>
+            ) : (
+              <WorkGroup key={entry.seq} actions={entry.actions} timeline={timeline} status={run.status} />
+            ))}
           </div>
         </details>
-        {run.status === "completed" && blocks.filter((block) => !block.progress).map((block) => (
+        {blocks.filter((block) => block.final || (run.status === "completed" && !block.progress)).map((block) => (
           <div className="answer-block" key={block.key}><MarkdownContent conversationId={run.conversation_id} content={block.content} /></div>
         ))}
         {!terminal(run.status) &&

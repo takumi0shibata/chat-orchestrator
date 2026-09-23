@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityLabel, messageBlocks } from "./timeline";
+import { activityEntries, activityLabel, finalAnswerStart, messageBlocks } from "./timeline";
 import type { AgentEvent } from "../types";
 const e = (seq: number, type: string, data: Record<string, unknown> = {}): AgentEvent =>
   ({ run_id: "r", seq, type, data, created_at: "2026-09-18T00:00:00Z" });
@@ -35,6 +35,35 @@ describe("message reconstruction", () => {
       e(5, "response", { final_item_ids: ["final"], continues: false })];
     expect(messageBlocks(events, "completed").map((b) => b.progress)).toEqual([true, false]);
   });
+  it("identifies phased final text before the response completes, including a failed run", () => {
+    const events = [e(1, "message_phase", { item_id: "before", round: 1, phase: "commentary" }),
+      e(2, "text_delta", { item_id: "before", round: 1, text: "Checking" }),
+      e(3, "message_phase", { item_id: "final", round: 1, phase: "final_answer" }),
+      e(4, "text_delta", { item_id: "final", round: 1, text: "Done" })];
+    expect(finalAnswerStart(events)).toBe(3);
+    expect(messageBlocks(events, "model_wait").map((block) => block.progress)).toEqual([true, false]);
+    expect(messageBlocks(events, "failed").map((block) => block.progress)).toEqual([true, false]);
+  });
+  it("uses completed response IDs when no phase is available", () => {
+    const events = [e(1, "text_delta", { item_id: "final", text: "Done" }),
+      e(2, "response", { final_item_ids: ["final"] })];
+    expect(finalAnswerStart(events.slice(0, 1))).toBeNull();
+    expect(finalAnswerStart(events)).toBe(2);
+  });
+});
+
+it("groups adjacent work by progress reports while omitting system events", () => {
+  const events = [e(1, "status", { label: "Preparing" }),
+    e(2, "text_delta", { item_id: "a", text: "First report" }),
+    e(3, "command", { call_id: "c1", index: 0 }),
+    e(4, "command_done", { call_id: "c1", index: 0 }),
+    e(5, "round", { number: 2 }), e(6, "command", { call_id: "c2", index: 0 }),
+    e(7, "tool", { id: "web", type: "web_search_call" }),
+    e(8, "text_delta", { item_id: "b", text: "Second report" }),
+    e(9, "tool", { id: "mcp", type: "mcp_call" })];
+  const entries = activityEntries(events, messageBlocks(events, "model_wait"), "model_wait");
+  expect(entries.map((entry) => entry.kind === "message" ? entry.block.content : entry.actions.map((action) => action.seq)))
+    .toEqual(["First report", [3, 6, 7], "Second report", [9]]);
 });
 
 describe("current activity", () => {
