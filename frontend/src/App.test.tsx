@@ -4,8 +4,8 @@ import { App, RunView } from "./App";
 import type { AgentEvent, Run } from "./types";
 
 vi.mock("./components/HostTerminalPanel", () => ({
-  HostTerminalPanel: ({ workspacePath }: { workspacePath: string }) =>
-    <div data-testid="host-terminal-mock">{workspacePath}</div>,
+  HostTerminalPanel: ({ currentWorkspacePath, visible }: { currentWorkspacePath: string; visible: boolean }) =>
+    <div data-testid="host-terminal-mock" data-visible={visible}>{currentWorkspacePath}</div>,
 }));
 
 const run: Run = {
@@ -654,7 +654,7 @@ it("opens and closes Files from the same panel icon even before selecting a chat
   await waitFor(() => expect(screen.getByText("Explore, analyze, create.")).toBeInTheDocument());
 });
 
-it("places the terminal beside the sidebar and closes it on chat change", async () => {
+it("keeps the terminal mounted when the chat changes", async () => {
   const conversation = { id: "new", workspace_id: "w", title: "New chat", updated_at: run.updated_at };
   let created = false;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
@@ -685,11 +685,12 @@ it("places the terminal beside the sidebar and closes it on chat change", async 
   expect(shell).toHaveClass("with-files");
   expect(screen.getByTestId("host-terminal-mock")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "New chat" }));
-  await waitFor(() => expect(screen.queryByTestId("host-terminal-mock")).not.toBeInTheDocument());
-  expect(shell).not.toHaveClass("has-terminal");
+  await waitFor(() => expect(screen.getByTestId("host-terminal-mock")).toHaveTextContent("/work"));
+  expect(screen.getByTestId("host-terminal-mock")).toHaveAttribute("data-visible", "true");
+  expect(shell).toHaveClass("has-terminal");
 });
 
-it("toggles the host terminal with Cmd+J", async () => {
+it("toggles the host terminal with Cmd+J without unmounting it", async () => {
   const conversation = { id: "new", workspace_id: "w", title: "New chat", updated_at: run.updated_at };
   let created = false;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
@@ -710,14 +711,15 @@ it("toggles the host terminal with Cmd+J", async () => {
     return new Response(JSON.stringify([]));
   });
 
-  render(<App />);
+  const { container } = render(<App />);
   await screen.findByRole("button", { name: "Show host terminal" });
   fireEvent.keyDown(document, { key: "j", metaKey: true });
   expect(await screen.findByTestId("host-terminal-mock")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Hide host terminal" })).toHaveAttribute("aria-keyshortcuts", "Meta+J");
 
   fireEvent.keyDown(document, { key: "j", metaKey: true });
-  await waitFor(() => expect(screen.queryByTestId("host-terminal-mock")).not.toBeInTheDocument());
+  await waitFor(() => expect(screen.getByTestId("host-terminal-mock")).toHaveAttribute("data-visible", "false"));
+  expect(container.querySelector(".app-shell")).not.toHaveClass("has-terminal");
 });
 
 it("renders a lazy file tree with typed icons, caching, refresh, empty and retry states", async () => {

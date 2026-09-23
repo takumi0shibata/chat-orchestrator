@@ -814,7 +814,8 @@ export function App() {
   const [loadingFolders, setLoadingFolders] = useState<string[]>([]);
   const [fileErrors, setFileErrors] = useState<Record<string, string>>({});
   const [showFiles, setShowFiles] = useState(() => window.innerWidth > 1100);
-  const [terminalOwner, setTerminalOwner] = useState("");
+  const [terminalMounted, setTerminalMounted] = useState(false);
+  const [terminalVisible, setTerminalVisible] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(() => {
     const stored = Number(localStorage.getItem(TERMINAL_HEIGHT_KEY));
     return clampTerminalHeight(stored > 0 ? stored : 300);
@@ -842,9 +843,7 @@ export function App() {
   const currentWorkspace = config?.workspaces.find(
     (w) => w.id === (current?.workspace_id || workspace),
   );
-  const terminalContext = settingsPage === "chat" && currentWorkspace
-    ? `${cid || "draft"}:${currentWorkspace.id}` : "";
-  const terminalVisible = Boolean(terminalContext && terminalOwner === terminalContext);
+  const terminalAvailable = settingsPage === "chat" && Boolean(currentWorkspace);
   const activeRun = runs.find((r) => !terminal(r.status));
   const active = Boolean(activeRun);
   const selectedProvider = config?.providers.find((p) => p.id === provider);
@@ -870,17 +869,20 @@ export function App() {
     (a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id),
   );
 
-  useEffect(() => { setTerminalOwner(""); }, [terminalContext]);
   useEffect(() => {
     const toggleTerminal = (event: globalThis.KeyboardEvent) => {
       if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== "j") return;
-      if (!terminalContext) return;
+      if (!terminalAvailable) return;
       event.preventDefault();
-      setTerminalOwner((owner) => owner === terminalContext ? "" : terminalContext);
+      setTerminalMounted(true);
+      setTerminalVisible((visible) => !visible);
     };
     document.addEventListener("keydown", toggleTerminal);
     return () => document.removeEventListener("keydown", toggleTerminal);
-  }, [terminalContext]);
+  }, [terminalAvailable]);
+  useEffect(() => {
+    if (!terminalAvailable) setTerminalVisible(false);
+  }, [terminalAvailable]);
   useEffect(() => {
     const resize = () => setTerminalHeight((value) => clampTerminalHeight(value));
     window.addEventListener("resize", resize);
@@ -1442,7 +1444,7 @@ export function App() {
       className={`app-shell ${showFiles && settingsPage === "chat" ? "with-files" : "without-files"} ${terminalVisible ? "has-terminal" : ""} ${resizingSidebar ? "is-resizing-sidebar" : ""} ${resizingFiles ? "is-resizing-files" : ""}`}
       style={{ "--sidebar-width": `${sidebarWidth}px`, "--files-width": `${filesWidth}px`, "--terminal-height": `${terminalHeight}px`, ...themeVariables(appSettings.theme_color) } as CSSProperties}
     >
-      {settingsPage === "chat" && currentWorkspace && <button
+      {terminalAvailable && <button
         className="panel-toggle terminal-toggle"
         type="button"
         aria-label={terminalVisible ? "Hide host terminal" : "Show host terminal"}
@@ -1450,7 +1452,10 @@ export function App() {
         aria-keyshortcuts="Meta+J"
         aria-controls="host-terminal-panel"
         aria-expanded={terminalVisible}
-        onClick={() => setTerminalOwner(terminalVisible ? "" : terminalContext)}
+        onClick={() => {
+          setTerminalMounted(true);
+          setTerminalVisible((visible) => !visible);
+        }}
       >
         <Icon name="terminal" size={20} />
       </button>}
@@ -1966,14 +1971,17 @@ export function App() {
           Created files appear here. Select a file to download it.
         </p>
       </aside>}
-      {terminalVisible && currentWorkspace && <div id="host-terminal-panel" className="terminal-grid-cell">
+      {terminalMounted && currentWorkspace && <div id="host-terminal-panel"
+        className={`terminal-grid-cell ${terminalVisible ? "" : "is-hidden"}`}
+        aria-hidden={!terminalVisible}>
         <Suspense fallback={<div className="terminal-loading">Opening host terminal…</div>}>
           <HostTerminalPanel
-            workspaceId={currentWorkspace.id}
-            workspacePath={currentWorkspace.path}
+            currentWorkspaceId={currentWorkspace.id}
+            currentWorkspacePath={currentWorkspace.path}
+            visible={terminalVisible}
             height={terminalHeight}
             onHeightChange={changeTerminalHeight}
-            onClose={() => { setTerminalOwner(""); setFileRevision((value) => value + 1); }}
+            onClose={() => { setTerminalVisible(false); setFileRevision((value) => value + 1); }}
           />
         </Suspense>
       </div>}

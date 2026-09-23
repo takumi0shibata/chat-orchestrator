@@ -53,8 +53,8 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 it("keeps tabs independent, sends input and resize, and closes each socket", async () => {
   const onClose = vi.fn();
   const onHeightChange = vi.fn();
-  const { unmount } = render(<HostTerminalPanel workspaceId="work" workspacePath="/work"
-    height={300} onHeightChange={onHeightChange} onClose={onClose} />);
+  const { unmount } = render(<HostTerminalPanel currentWorkspaceId="work" currentWorkspacePath="/work"
+    visible height={300} onHeightChange={onHeightChange} onClose={onClose} />);
   await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
   const first = FakeWebSocket.instances[0];
   expect(first.url).toContain("/api/terminals/work");
@@ -79,4 +79,71 @@ it("keeps tabs independent, sends input and resize, and closes each socket", asy
   expect(onClose).toHaveBeenCalledOnce();
   unmount();
   expect(first.closed).toBe(true);
+});
+
+it("keeps the socket alive while the panel is hidden", async () => {
+  const props = {
+    currentWorkspaceId: "work",
+    currentWorkspacePath: "/work",
+    height: 300,
+    onHeightChange: vi.fn(),
+    onClose: vi.fn(),
+  };
+  const { rerender, unmount } = render(<HostTerminalPanel {...props} visible />);
+  await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+  const socket = FakeWebSocket.instances[0];
+  socket.open();
+
+  rerender(<HostTerminalPanel {...props} visible={false} />);
+  expect(socket.closed).toBe(false);
+  rerender(<HostTerminalPanel {...props} visible />);
+  expect(socket.closed).toBe(false);
+  unmount();
+  expect(socket.closed).toBe(true);
+});
+
+it("keeps the old workspace terminal while warning and opening a new workspace tab", async () => {
+  const onClose = vi.fn();
+  const { rerender } = render(<HostTerminalPanel currentWorkspaceId="work" currentWorkspacePath="/work"
+    visible height={300} onHeightChange={vi.fn()} onClose={onClose} />);
+  await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+  const first = FakeWebSocket.instances[0];
+  first.open();
+
+  rerender(<HostTerminalPanel currentWorkspaceId="other" currentWorkspacePath="/other"
+    visible height={300} onHeightChange={vi.fn()} onClose={onClose} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "This terminal's workspace does not match this chat's current project",
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "Terminal 1" }));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+  rerender(<HostTerminalPanel currentWorkspaceId="another" currentWorkspacePath="/another"
+    visible height={300} onHeightChange={vi.fn()} onClose={onClose} />);
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Open new terminal" }));
+  await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+  expect(first.closed).toBe(false);
+  expect(FakeWebSocket.instances[1].url).toContain("/api/terminals/another");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("creates a replacement terminal after the last tab is explicitly closed", async () => {
+  const onClose = vi.fn();
+  const { rerender } = render(<HostTerminalPanel currentWorkspaceId="work" currentWorkspacePath="/work"
+    visible height={300} onHeightChange={vi.fn()} onClose={onClose} />);
+  await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+  const first = FakeWebSocket.instances[0];
+  first.open();
+  fireEvent.click(screen.getByRole("button", { name: "Close terminal 1" }));
+  expect(onClose).toHaveBeenCalledOnce();
+  await waitFor(() => expect(first.closed).toBe(true));
+
+  rerender(<HostTerminalPanel currentWorkspaceId="work" currentWorkspacePath="/work"
+    visible height={300} onHeightChange={vi.fn()} onClose={onClose} />);
+  await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+  expect(FakeWebSocket.instances[1].url).toContain("/api/terminals/work");
 });

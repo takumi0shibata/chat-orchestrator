@@ -4,7 +4,14 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
 type TabStatus = "connecting" | "running" | "exited" | "error";
-type Tab = { id: number; generation: number; status: TabStatus; code?: number };
+type Tab = {
+  id: number;
+  generation: number;
+  status: TabStatus;
+  code?: number;
+  workspaceId: string;
+  workspacePath: string;
+};
 
 function socketUrl(workspaceId: string) {
   const url = new URL(`/api/terminals/${encodeURIComponent(workspaceId)}`, window.location.href);
@@ -125,26 +132,60 @@ function TerminalView({ workspaceId, active, onStatus }: {
   return <div ref={container} className="terminal-surface" />;
 }
 
-export function HostTerminalPanel({ workspaceId, workspacePath, height, onHeightChange, onClose }: {
-  workspaceId: string;
-  workspacePath: string;
+export function HostTerminalPanel({ currentWorkspaceId, currentWorkspacePath, visible, height, onHeightChange, onClose }: {
+  currentWorkspaceId: string;
+  currentWorkspacePath: string;
+  visible: boolean;
   height: number;
   onHeightChange: (height: number) => void;
   onClose: () => void;
 }) {
   const nextId = useRef(2);
-  const [tabs, setTabs] = useState<Tab[]>([{ id: 1, generation: 0, status: "connecting" }]);
+  const [tabs, setTabs] = useState<Tab[]>([{
+    id: 1,
+    generation: 0,
+    status: "connecting",
+    workspaceId: currentWorkspaceId,
+    workspacePath: currentWorkspacePath,
+  }]);
   const [activeId, setActiveId] = useState(1);
   const activeTab = tabs.find((tab) => tab.id === activeId);
+  const mismatchKey = activeTab && activeTab.workspaceId !== currentWorkspaceId
+    ? `${activeTab.id}:${currentWorkspaceId}`
+    : "";
+  const [dismissedWarningKey, setDismissedWarningKey] = useState("");
+  const showMismatchWarning = Boolean(mismatchKey && dismissedWarningKey !== mismatchKey);
+
+  useEffect(() => {
+    if (visible && tabs.length === 0) {
+      const id = nextId.current++;
+      setTabs([{
+        id,
+        generation: 0,
+        status: "connecting",
+        workspaceId: currentWorkspaceId,
+        workspacePath: currentWorkspacePath,
+      }]);
+      setActiveId(id);
+    }
+  }, [currentWorkspaceId, currentWorkspacePath, tabs.length, visible]);
 
   const addTab = () => {
     if (tabs.length >= 8) return;
     const id = nextId.current++;
-    setTabs((previous) => [...previous, { id, generation: 0, status: "connecting" }]);
+    setTabs((previous) => [...previous, {
+      id,
+      generation: 0,
+      status: "connecting",
+      workspaceId: currentWorkspaceId,
+      workspacePath: currentWorkspacePath,
+    }]);
     setActiveId(id);
   };
   const closeTab = (id: number) => {
     if (tabs.length === 1) {
+      setTabs([]);
+      setActiveId(0);
       onClose();
       return;
     }
@@ -163,6 +204,16 @@ export function HostTerminalPanel({ workspaceId, workspacePath, height, onHeight
   };
 
   return <section className="terminal-panel" aria-label="Host terminal">
+    {showMismatchWarning && (
+      <div className="terminal-warning" role="alert">
+        <span className="terminal-warning-icon" aria-hidden="true">!</span>
+        <span className="terminal-warning-message">This terminal&apos;s workspace does not match this chat&apos;s current project</span>
+        <div className="terminal-warning-actions">
+          <button type="button" onClick={() => setDismissedWarningKey(mismatchKey)}>Dismiss</button>
+          <button type="button" onClick={addTab} disabled={tabs.length >= 8}>Open new terminal</button>
+        </div>
+      </div>
+    )}
     <div className="terminal-resizer" role="separator" aria-label="Resize terminal" aria-orientation="horizontal"
       aria-valuemin={120} aria-valuemax={Math.round(window.innerHeight * 0.7)} aria-valuenow={height} tabIndex={0}
       onPointerDown={(event) => { if (event.button === 0) event.currentTarget.setPointerCapture(event.pointerId); }}
@@ -190,11 +241,11 @@ export function HostTerminalPanel({ workspaceId, workspacePath, height, onHeight
         <button type="button" className="terminal-restart" onClick={restart}>Restart</button>}
       <button type="button" className="terminal-panel-close" aria-label="Close terminal panel" onClick={onClose}>×</button>
     </div>
-    <div className="terminal-workspace" title={workspacePath}>{workspacePath}</div>
+    <div className="terminal-workspace" title={activeTab?.workspacePath || currentWorkspacePath}>{activeTab?.workspacePath || currentWorkspacePath}</div>
     <div className="terminal-content">
       {tabs.map((tab) => <div key={`${tab.id}:${tab.generation}`} id={`terminal-tab-${tab.id}`}
         role="tabpanel" aria-label={`Terminal ${tab.id}`} className="terminal-tab-content" hidden={tab.id !== activeId}>
-        <TerminalView workspaceId={workspaceId} active={tab.id === activeId}
+        <TerminalView workspaceId={tab.workspaceId} active={tab.id === activeId}
           onStatus={(status, code) => updateStatus(tab.id, status, code)} />
       </div>)}
     </div>
