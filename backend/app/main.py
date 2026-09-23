@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -23,6 +23,17 @@ from app.schemas import (
     RunCreate,
 )
 from app.storage import TERMINAL, Store
+from app.terminal import HostTerminal, terminal_size, wait_process_exit
+
+
+TERMINAL_ORIGINS = {
+    "http://localhost:5173", "http://127.0.0.1:5173",
+    "http://localhost:8000", "http://127.0.0.1:8000",
+}
+TERMINAL_HOSTS = {
+    "localhost:5173", "127.0.0.1:5173",
+    "localhost:8000", "127.0.0.1:8000", "testserver",
+}
 
 
 def create_app(settings=None, manager_factory=RunManager):
@@ -60,11 +71,16 @@ def create_app(settings=None, manager_factory=RunManager):
                 store,
                 manager,
             )
+            app.state.terminals = set()
             await manager.recover()
             try:
                 yield
             finally:
-                await manager.shutdown()
+                try:
+                    for terminal_session in list(app.state.terminals):
+                        await terminal_session.close()
+                finally:
+                    await manager.shutdown()
 
     app = FastAPI(title="Local Responses Workspace", lifespan=lifespan)
     app.add_middleware(
@@ -264,6 +280,97 @@ def create_app(settings=None, manager_factory=RunManager):
     async def approval(rid: str, body: Approval):
         app.state.manager.approve(rid, body)
         return {"ok": True}
+
+    @app.websocket("/api/terminals/{workspace_id}")
+    async def host_terminal(websocket: WebSocket, workspace_id: str):
+        if (
+            websocket.headers.get("host") not in TERMINAL_HOSTS
+            or websocket.headers.get("origin") not in TERMINAL_ORIGINS
+            or websocket.headers.get("sec-fetch-site") == "cross-site"
+        ):
+            await websocket.close(code=1008)
+            return
+        workspace = next(
+            (w for w in app.state.config.workspaces if w.id == workspace_id), None
+        )
+        if workspace is None:
+            await websocket.close(code=1008)
+            return
+        await websocket.accept()
+        terminal_session = None
+        tasks = []
+        try:
+            initial = await asyncio.wait_for(websocket.receive(), timeout=5)
+            if initial["type"] != "websocket.receive" or initial.get("text") is None:
+                return
+            if len(initial["text"]) > 4096:
+                raise ValueError("Terminal control message too large")
+            size = json.loads(initial["text"])
+            if not isinstance(size, dict) or size.get("type") != "init":
+                raise ValueError("Expected terminal initialization")
+            cols, rows = terminal_size(size.get("cols"), size.get("rows"))
+            if len(app.state.terminals) >= 16:
+                raise ValueError("Too many terminal tabs are open")
+            terminal_session = HostTerminal(workspace.path)
+            app.state.terminals.add(terminal_session)
+            await terminal_session.start(cols, rows)
+
+            async def output():
+                while chunk := await terminal_session.read():
+                    await websocket.send_bytes(chunk)
+                await wait_process_exit(terminal_session.process, 2)
+                code = terminal_session.process.returncode
+                await websocket.send_json({"type": "exit", "code": code})
+
+            async def input_stream():
+                while True:
+                    frame = await websocket.receive()
+                    if frame["type"] == "websocket.disconnect":
+                        return
+                    if frame.get("bytes") is not None:
+                        await terminal_session.write(frame["bytes"])
+                    elif frame.get("text") is not None:
+                        if len(frame["text"]) > 4096:
+                            raise ValueError("Terminal control message too large")
+                        control = json.loads(frame["text"])
+                        if not isinstance(control, dict) or control.get("type") != "resize":
+                            raise ValueError("Invalid terminal control message")
+                        terminal_session.resize(control.get("cols"), control.get("rows"))
+
+            tasks = [asyncio.create_task(output()), asyncio.create_task(input_stream())]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            for task in done:
+                task.result()
+        except (ValueError, json.JSONDecodeError, TimeoutError) as error:
+            try:
+                await websocket.send_json({"type": "error", "message": str(error)})
+            except RuntimeError:
+                pass
+        except (OSError, RuntimeError):
+            try:
+                await websocket.send_json({"type": "error", "message": "Host terminal could not start"})
+            except RuntimeError:
+                pass
+        except WebSocketDisconnect:
+            pass
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            if terminal_session is not None:
+                try:
+                    await terminal_session.close()
+                finally:
+                    app.state.terminals.discard(terminal_session)
+            try:
+                await websocket.close()
+            except RuntimeError:
+                pass
 
     @app.get("/api/runs/{rid}/events")
     async def events(rid: str, after: int = Query(0, ge=0)):

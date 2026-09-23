@@ -1412,6 +1412,7 @@ h2 {
 .panel-toggle:focus-visible { outline: 2px solid #8b9d91; outline-offset: 2px; }
 .files-panel { padding-top: 16px; }
 .files-header { min-height: 32px; padding-right: 44px; }
+.app-shell:has(> .terminal-toggle) .files-header { padding-right: 84px; }
 @media (min-width: 701px) {
   .without-files .chat-column { padding-right: 64px; }
 }
@@ -1793,6 +1794,47 @@ h2 {
   .sidebar nav { display: block; max-height: 105px; margin: 0; }
   .sidebar-heading { margin-top: 8px; }
   .project-conversations { padding-left: 12px; }
+}
+
+/* The terminal occupies only the area to the right of the history sidebar. */
+.app-shell.has-terminal { grid-template-rows: minmax(0, 1fr) var(--terminal-height); }
+.app-shell.has-terminal > .sidebar { grid-column: 1; grid-row: 1 / 3; }
+.app-shell.has-terminal > .main { grid-column: 2; grid-row: 1; }
+.app-shell.has-terminal > .files-panel { grid-column: 3; grid-row: 1; }
+.terminal-grid-cell { grid-column: 2 / -1; grid-row: 2; min-width: 0; min-height: 0; overflow: hidden; }
+.terminal-loading { height: 100%; padding: 18px; background: #17191e; color: #b9bdc6; }
+.panel-toggle.terminal-toggle { right: 57px; }
+
+.terminal-panel { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; border-top: 1px solid #353942; background: #17191e; color: #e6e7ea; }
+.terminal-resizer { position: absolute; z-index: 2; top: -4px; left: 0; right: 0; height: 8px; cursor: row-resize; touch-action: none; }
+.terminal-resizer:focus-visible { outline: 2px solid #a6b8aa; outline-offset: -2px; }
+.terminal-toolbar { display: flex; align-items: center; gap: 8px; flex: none; min-height: 41px; padding: 5px 12px; border-bottom: 1px solid #30343c; }
+.terminal-heading { flex: none; font-size: 11px; font-weight: 650; color: #b9bdc6; }
+.terminal-tabs { display: flex; gap: 4px; min-width: 0; flex: 1; overflow-x: auto; scrollbar-width: thin; }
+.terminal-tab { display: flex; align-items: center; flex: none; border: 1px solid #393d46; border-radius: 7px; background: #272a31; }
+.terminal-tab:has([aria-selected="true"]) { background: #393d46; }
+.terminal-tab button, .terminal-add, .terminal-panel-close, .terminal-restart { border: 0; background: transparent; color: #d9dce1; }
+.terminal-tab button:hover, .terminal-add:hover, .terminal-panel-close:hover, .terminal-restart:hover { background: #4b5059; }
+.terminal-tab [role="tab"] { max-width: 150px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 4px 8px; font-size: 11px; }
+.terminal-tab-close { padding: 2px 6px; font-size: 17px; line-height: 1; }
+.terminal-add, .terminal-panel-close { flex: none; padding: 2px 7px; font-size: 20px; line-height: 1; }
+.terminal-restart { flex: none; padding: 3px 7px; font-size: 11px; }
+.terminal-workspace { flex: none; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 4px 15px 0; color: #9da3ae; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.terminal-content { position: relative; flex: 1; min-height: 0; }
+.terminal-tab-content { position: absolute; inset: 0; padding: 7px 13px 10px; }
+.terminal-tab-content[hidden] { display: none; }
+.terminal-surface { width: 100%; height: 100%; }
+.terminal-surface .xterm { height: 100%; }
+
+@media (min-width: 701px) and (max-width: 1100px) {
+  .app-shell.has-terminal > .files-panel.is-open { bottom: var(--terminal-height); }
+}
+@media (max-width: 700px) {
+  .app-shell.has-terminal { grid-template-rows: auto minmax(0, 1fr) var(--terminal-height); }
+  .app-shell.has-terminal > .sidebar { grid-column: 1; grid-row: 1; }
+  .app-shell.has-terminal > .main { grid-column: 1; grid-row: 2; }
+  .terminal-grid-cell { grid-column: 1; grid-row: 3; }
+  .app-shell.has-terminal > .files-panel.is-open { bottom: var(--terminal-height); }
 }
 
 @media (prefers-reduced-motion: reduce) {

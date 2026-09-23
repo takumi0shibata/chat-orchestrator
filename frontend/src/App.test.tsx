@@ -3,6 +3,11 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { App, RunView } from "./App";
 import type { AgentEvent, Run } from "./types";
 
+vi.mock("./components/HostTerminalPanel", () => ({
+  HostTerminalPanel: ({ workspacePath }: { workspacePath: string }) =>
+    <div data-testid="host-terminal-mock">{workspacePath}</div>,
+}));
+
 const run: Run = {
   id: "r",
   conversation_id: "c",
@@ -647,6 +652,41 @@ it("opens and closes Files from the same panel icon even before selecting a chat
   fireEvent.click(toggle);
   expect(container.querySelector("#files-panel")).not.toHaveClass("is-open");
   await waitFor(() => expect(screen.getByText("Explore, analyze, create.")).toBeInTheDocument());
+});
+
+it("places the terminal beside the sidebar and closes it on chat change", async () => {
+  const conversation = { id: "new", workspace_id: "w", title: "New chat", updated_at: run.updated_at };
+  let created = false;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
+    const url = String(input);
+    if (url === "/api/config") return new Response(JSON.stringify({
+      providers: [], workspaces: [{ id: "w", label: "Work", path: "/work" }],
+      skills: [], resources: [], mcp_servers: [],
+    }));
+    if (url === "/api/settings") return new Response(JSON.stringify({
+      title_provider: "openai", title_model: "gpt-6-luna", theme_color: "#25262A",
+    }));
+    if (url === "/api/conversations" && options?.method === "POST") {
+      created = true;
+      return new Response(JSON.stringify(conversation));
+    }
+    if (url === "/api/conversations") return new Response(JSON.stringify(created ? [conversation] : []));
+    if (url === "/api/conversations/new") return new Response(JSON.stringify({ ...conversation, runs: [] }));
+    return new Response(JSON.stringify([]));
+  });
+  const { container } = render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Show host terminal" }));
+  expect(await screen.findByTestId("host-terminal-mock")).toHaveTextContent("/work");
+  const shell = container.querySelector(".app-shell");
+  expect(shell).toHaveClass("has-terminal");
+  expect(shell?.querySelector(":scope > .sidebar")).toBeInTheDocument();
+  expect(shell?.querySelector(":scope > .terminal-grid-cell")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /files panel/ }));
+  expect(shell).toHaveClass("with-files");
+  expect(screen.getByTestId("host-terminal-mock")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+  await waitFor(() => expect(screen.queryByTestId("host-terminal-mock")).not.toBeInTheDocument());
+  expect(shell).not.toHaveClass("has-terminal");
 });
 
 it("renders a lazy file tree with typed icons, caching, refresh, empty and retry states", async () => {

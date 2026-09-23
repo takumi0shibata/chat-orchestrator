@@ -1,4 +1,4 @@
-import { DragEvent as ReactDragEvent, FormEvent, KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { DragEvent as ReactDragEvent, FormEvent, KeyboardEvent, Suspense, lazy, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { api, events } from "./api";
 import { MarkdownContent } from "./components/MarkdownContent";
@@ -26,12 +26,20 @@ import type {
 } from "./types";
 
 const LAST_PROJECT_KEY = "workspace-last-project";
+const HostTerminalPanel = lazy(() => import("./components/HostTerminalPanel").then((module) => ({ default: module.HostTerminalPanel })));
 const SIDEBAR_WIDTH_KEY = "workspace-sidebar-width";
 const MIN_SIDEBAR_WIDTH = 200;
 const MAX_SIDEBAR_WIDTH = 400;
 const FILES_WIDTH_KEY = "workspace-files-width";
+const TERMINAL_HEIGHT_KEY = "workspace-terminal-height";
 const MIN_FILES_WIDTH = 240;
 const MAX_FILES_WIDTH = 520;
+function clampTerminalHeight(value: number) {
+  const available = window.innerHeight - (window.innerWidth <= 700 ? 300 : 220);
+  const maximum = Math.max(120, Math.min(Math.round(window.innerHeight * 0.7), available));
+  const minimum = Math.min(180, maximum);
+  return Math.max(minimum, Math.min(maximum, Math.round(value)));
+}
 const text = (value: unknown) =>
   typeof value === "string" ? value : JSON.stringify(value ?? "");
 const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -106,9 +114,10 @@ function elapsedLabel(seconds: number) {
   return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
-function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "check" | "close" | "copy" | "spark" | "pin" | "panel-right" | "compose" | "search" | "folder" | "folder-open" | "chevron-right" | "chevron-down" | "gear"; size?: number }) {
+function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "check" | "close" | "copy" | "spark" | "pin" | "panel-right" | "terminal" | "compose" | "search" | "folder" | "folder-open" | "chevron-right" | "chevron-down" | "gear"; size?: number }) {
   const paths = {
     "panel-right": <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M15 4v16" /></>,
+    terminal: <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="m7 9 3 3-3 3M12 16h5" /></>,
     "chevron-right": <path d="m9 18 6-6-6-6" />,
     compose: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" /></>,
     search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></>,
@@ -805,6 +814,11 @@ export function App() {
   const [loadingFolders, setLoadingFolders] = useState<string[]>([]);
   const [fileErrors, setFileErrors] = useState<Record<string, string>>({});
   const [showFiles, setShowFiles] = useState(() => window.innerWidth > 1100);
+  const [terminalOwner, setTerminalOwner] = useState("");
+  const [terminalHeight, setTerminalHeight] = useState(() => {
+    const stored = Number(localStorage.getItem(TERMINAL_HEIGHT_KEY));
+    return clampTerminalHeight(stored > 0 ? stored : 300);
+  });
   const [fileRevision, setFileRevision] = useState(0);
   const [error, setError] = useState("");
   const [connection, setConnection] = useState("");
@@ -828,6 +842,9 @@ export function App() {
   const currentWorkspace = config?.workspaces.find(
     (w) => w.id === (current?.workspace_id || workspace),
   );
+  const terminalContext = settingsPage === "chat" && currentWorkspace
+    ? `${cid || "draft"}:${currentWorkspace.id}` : "";
+  const terminalVisible = Boolean(terminalContext && terminalOwner === terminalContext);
   const activeRun = runs.find((r) => !terminal(r.status));
   const active = Boolean(activeRun);
   const selectedProvider = config?.providers.find((p) => p.id === provider);
@@ -852,6 +869,19 @@ export function App() {
   const sortedConversations = (items: Conversation[]) => [...items].sort(
     (a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id),
   );
+
+  useEffect(() => { setTerminalOwner(""); }, [terminalContext]);
+  useEffect(() => {
+    const resize = () => setTerminalHeight((value) => clampTerminalHeight(value));
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
+
+  function changeTerminalHeight(value: number) {
+    const next = clampTerminalHeight(value);
+    setTerminalHeight(next);
+    localStorage.setItem(TERMINAL_HEIGHT_KEY, String(next));
+  }
 
   function rememberProject(projectId: string) {
     setWorkspace(projectId);
@@ -1399,9 +1429,20 @@ export function App() {
 
   return (
     <div
-      className={`app-shell ${showFiles && settingsPage === "chat" ? "with-files" : "without-files"} ${resizingSidebar ? "is-resizing-sidebar" : ""} ${resizingFiles ? "is-resizing-files" : ""}`}
-      style={{ "--sidebar-width": `${sidebarWidth}px`, "--files-width": `${filesWidth}px`, ...themeVariables(appSettings.theme_color) } as CSSProperties}
+      className={`app-shell ${showFiles && settingsPage === "chat" ? "with-files" : "without-files"} ${terminalVisible ? "has-terminal" : ""} ${resizingSidebar ? "is-resizing-sidebar" : ""} ${resizingFiles ? "is-resizing-files" : ""}`}
+      style={{ "--sidebar-width": `${sidebarWidth}px`, "--files-width": `${filesWidth}px`, "--terminal-height": `${terminalHeight}px`, ...themeVariables(appSettings.theme_color) } as CSSProperties}
     >
+      {settingsPage === "chat" && currentWorkspace && <button
+        className="panel-toggle terminal-toggle"
+        type="button"
+        aria-label={terminalVisible ? "Hide host terminal" : "Show host terminal"}
+        title={terminalVisible ? "Hide host terminal" : "Show host terminal"}
+        aria-controls="host-terminal-panel"
+        aria-expanded={terminalVisible}
+        onClick={() => setTerminalOwner(terminalVisible ? "" : terminalContext)}
+      >
+        <Icon name="terminal" size={20} />
+      </button>}
       {settingsPage === "chat" && <button
         ref={filesToggle}
         className="panel-toggle"
@@ -1914,6 +1955,17 @@ export function App() {
           Created files appear here. Select a file to download it.
         </p>
       </aside>}
+      {terminalVisible && currentWorkspace && <div id="host-terminal-panel" className="terminal-grid-cell">
+        <Suspense fallback={<div className="terminal-loading">Opening host terminal…</div>}>
+          <HostTerminalPanel
+            workspaceId={currentWorkspace.id}
+            workspacePath={currentWorkspace.path}
+            height={terminalHeight}
+            onHeightChange={changeTerminalHeight}
+            onClose={() => { setTerminalOwner(""); setFileRevision((value) => value + 1); }}
+          />
+        </Suspense>
+      </div>}
     </div>
   );
 }
