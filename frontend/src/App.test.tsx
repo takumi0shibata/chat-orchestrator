@@ -216,8 +216,26 @@ it("restores selected conversation and replays persistent events on reload", asy
   expect(screen.queryByRole("button", { name: "Remove Web Search" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Add attachments and tools" }));
   fireEvent.click(screen.getByRole("button", { name: "Web Search" }));
-  fireEvent.change(screen.getByRole("combobox", { name: "Model" }), { target: { value: "gpt-5.6-luna" } });
-  fireEvent.change(screen.getByRole("combobox", { name: "Reasoning effort" }), { target: { value: "high" } });
+  const modelSelector = screen.getByRole("button", { name: "Model" });
+  fireEvent.click(modelSelector);
+  const modelMenu = screen.getByRole("listbox", { name: "Model" });
+  fireEvent.keyDown(modelMenu, { key: "ArrowDown" });
+  fireEvent.keyDown(modelMenu, { key: "Enter" });
+  expect(modelSelector).toHaveTextContent("GPT-5.6 Luna");
+  const effortSelector = screen.getByRole("button", { name: "Reasoning effort" });
+  fireEvent.click(effortSelector);
+  fireEvent.click(screen.getByRole("option", { name: "high" }));
+  expect(effortSelector).toHaveTextContent("high");
+  fireEvent.click(modelSelector);
+  fireEvent.pointerDown(document.body);
+  expect(screen.queryByRole("listbox", { name: "Model" })).not.toBeInTheDocument();
+  fireEvent.click(modelSelector);
+  fireEvent.click(screen.getByRole("option", { name: "GPT-5.6 Sol" }));
+  expect(effortSelector).toHaveTextContent("medium");
+  fireEvent.click(modelSelector);
+  fireEvent.click(screen.getByRole("option", { name: "GPT-5.6 Luna" }));
+  fireEvent.click(effortSelector);
+  fireEvent.click(screen.getByRole("option", { name: "high" }));
   const message = screen.getByRole("textbox", { name: "Message" });
   fireEvent.change(message, { target: { value: "Analyze the report" } });
   fireEvent.keyDown(message, { key: "Enter", shiftKey: true });
@@ -461,7 +479,9 @@ it("groups chats by project and creates from the recent or chosen project", asyn
   fireEvent.click(expandedAlpha);
   expect(alphaConversations).not.toHaveClass("is-expanded");
   expect(alphaConversations).toHaveAttribute("aria-hidden", "true");
-  expect(screen.getAllByRole("button", { name: "Beta chat" })).toHaveLength(2);
+  const betaTitles = screen.getAllByRole("button", { name: "Beta chat" });
+  expect(betaTitles).toHaveLength(2);
+  expect(betaTitles[0]).toHaveClass("history-title");
   expect(screen.queryByText("Recents")).not.toBeInTheDocument();
 
   const sidebarResize = screen.getByRole("separator", { name: "Resize sidebar" });
@@ -763,14 +783,19 @@ it("starts new conversations with GPT-6 Sol and offers registered Azure GPT-6 fo
   });
 
   render(<App />);
-  const modelSelect = await screen.findByRole("combobox", { name: "Model" });
-  await waitFor(() => expect(modelSelect).toHaveValue("gpt-6-sol"));
+  const modelSelect = await screen.findByRole("button", { name: "Model" });
+  await waitFor(() => expect(modelSelect).toHaveTextContent("GPT-6 Sol"));
   const expectedOrder = [
     "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
     "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
   ];
-  expect(Array.from((modelSelect as HTMLSelectElement).options, (option) => option.value)).toEqual(expectedOrder);
-  expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("medium");
+  fireEvent.click(modelSelect);
+  expect(Array.from(screen.getAllByRole("option"), (option) => option.textContent)).toEqual([
+    "GPT-6 Astra", "GPT-6 Sol", "GPT-6 Luna", "GPT-5.6 Sol", "GPT-5.6 Terra", "GPT-5.6 Luna",
+  ]);
+  fireEvent.keyDown(screen.getByRole("listbox", { name: "Model" }), { key: "Escape" });
+  expect(screen.queryByRole("listbox", { name: "Model" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Reasoning effort" })).toHaveTextContent("medium");
 
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
   const titleModelSelect = screen.getByRole("combobox", { name: "Title model" });

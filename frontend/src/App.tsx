@@ -1,4 +1,4 @@
-import { DragEvent as ReactDragEvent, FormEvent, KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { DragEvent as ReactDragEvent, FormEvent, KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { api, events } from "./api";
 import { MarkdownContent } from "./components/MarkdownContent";
@@ -102,7 +102,7 @@ function elapsedLabel(seconds: number) {
   return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
-function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "check" | "close" | "spark" | "pin" | "panel-right" | "compose" | "search" | "folder" | "folder-open" | "chevron-right" | "gear"; size?: number }) {
+function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "check" | "close" | "spark" | "pin" | "panel-right" | "compose" | "search" | "folder" | "folder-open" | "chevron-right" | "chevron-down" | "gear"; size?: number }) {
   const paths = {
     "panel-right": <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M15 4v16" /></>,
     "chevron-right": <path d="m9 18 6-6-6-6" />,
@@ -110,6 +110,7 @@ function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "
     search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></>,
     folder: <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5Z" />,
     "folder-open": <><path d="M3 10V7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5V10" /><path d="M4.4 10h15.2a2 2 0 0 1 1.9 2.6l-1.4 4.5A2.7 2.7 0 0 1 17.5 19h-12a2.7 2.7 0 0 1-2.6-3.4l1.5-5.6Z" /></>,
+    "chevron-down": <path d="m6 9 6 6 6-6" />,
     pin: <><path d="m8 3 8 0-1 6 3 3v2H6v-2l3-3-1-6Z" /><path d="M12 14v7" /></>,
     refresh: <><path d="M20 11a8 8 0 1 0-2.2 6.4" /><path d="M20 4v7h-7" /></>,
     paperclip: <path d="m20.5 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5l9.5-9.5a4 4 0 0 1 5.7 5.7l-9.5 9.5a2 2 0 0 1-2.8-2.8l8.8-8.8" />,
@@ -120,6 +121,147 @@ function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "
     gear: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" /></>,
   };
   return <svg aria-hidden="true" data-icon={name} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
+}
+
+type PopoverSelectOption = { value: string; label: string };
+
+function PopoverSelect({ label, value, options, onChange, disabled = false, className = "" }: {
+  label: string;
+  value: string;
+  options: PopoverSelectOption[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const menuId = `popover-select-${useId().replace(/:/g, "")}`;
+  const selectedIndex = options.findIndex((option) => option.value === value);
+  const selectedOption = options[selectedIndex];
+  const selectedLabel = selectedOption?.label || value;
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0);
+    listRef.current?.focus();
+  }, [open, selectedIndex]);
+
+  function close() {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  function selectOption(index: number) {
+    const option = options[index];
+    if (!option) return;
+    onChange(option.value);
+    close();
+  }
+
+  function openMenu(index = selectedIndex >= 0 ? selectedIndex : 0) {
+    if (disabled || options.length === 0) return;
+    setActiveIndex(index);
+    setOpen(true);
+  }
+
+  function handleTriggerKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(event.key)) {
+      event.preventDefault();
+      openMenu(event.key === "ArrowUp" ? options.length - 1 : undefined);
+    }
+  }
+
+  function handleListKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key === "Tab") {
+      setOpen(false);
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.max(0, Math.min(options.length - 1, index + (event.key === "ArrowDown" ? 1 : -1))));
+      return;
+    }
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      setActiveIndex(event.key === "Home" ? 0 : options.length - 1);
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      selectOption(activeIndex);
+    }
+  }
+
+  return (
+    <div className={`popover-select ${className}`.trim()} ref={rootRef}>
+      <button
+        ref={triggerRef}
+        className="popover-select-trigger"
+        type="button"
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={menuId}
+        disabled={disabled}
+        onClick={() => (open ? close() : openMenu())}
+        onKeyDown={handleTriggerKeyDown}
+      >
+        <span>{selectedLabel}</span>
+        <Icon name="chevron-down" size={14} />
+      </button>
+      {open && (
+        <div
+          ref={listRef}
+          className="popover-select-menu"
+          id={menuId}
+          role="listbox"
+          tabIndex={-1}
+          aria-label={label}
+          aria-activedescendant={options[activeIndex] ? `${menuId}-option-${activeIndex}` : undefined}
+          onKeyDown={handleListKeyDown}
+        >
+          {options.map((option, index) => (
+            <button
+              className={`popover-select-option ${index === activeIndex ? "is-active" : ""}`}
+              id={`${menuId}-option-${index}`}
+              key={option.value}
+              type="button"
+              role="option"
+              tabIndex={-1}
+              aria-selected={option.value === value}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => selectOption(index)}
+            >
+              <span>{option.label}</span>
+              {option.value === value && <Icon name="check" size={15} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 type FileKind = "pdf" | "image" | "document" | "spreadsheet" | "presentation" | "code" | "archive" | "generic";
@@ -1158,7 +1300,7 @@ export function App() {
   function conversationRow(conversation: Conversation, nested = false) {
     return (
       <div className={`conversation ${nested ? "nested" : ""} ${conversation.id === cid ? "selected" : ""}`} key={conversation.id}>
-        <button disabled={busy} onClick={() => selectConversation(conversation)}>{conversation.title}</button>
+        <button className="history-title" disabled={busy} onClick={() => selectConversation(conversation)}>{conversation.title}</button>
         <button className="history-action pin" aria-label={`${conversation.pinned ? "Unpin" : "Pin"} ${conversation.title}`} aria-pressed={Boolean(conversation.pinned)} disabled={pinPending.includes(conversation.id)} onClick={() => void togglePin(conversation)}><Icon name="pin" size={14} /></button>
         <button className="history-action delete" aria-label={`Delete ${conversation.title}`} disabled={busy || pinPending.includes(conversation.id) || (conversation.id === cid && active)} onClick={() => void removeConversation(conversation.id)}>×</button>
       </div>
@@ -1557,29 +1699,25 @@ export function App() {
                   }}
                 />
                 <div className="composer-selection">
-                  <select
-                    aria-label="Model"
+                  <PopoverSelect
+                    label="Model"
                     value={model}
                     disabled={active}
-                    onChange={(e) => {
-                      setModel(e.target.value);
+                    className="model-select"
+                    options={orderedModels(models).map((m) => ({ value: m.id, label: m.label }))}
+                    onChange={(value) => {
+                      setModel(value);
                       setEffort("medium");
                     }}
-                  >
-                    {orderedModels(models).map((m) => (
-                      <option key={m.id} value={m.id}>{m.label}</option>
-                    ))}
-                  </select>
-                  <select
-                    aria-label="Reasoning effort"
+                  />
+                  <PopoverSelect
+                    label="Reasoning effort"
                     value={effort}
                     disabled={active}
-                    onChange={(e) => setEffort(e.target.value)}
-                  >
-                    {selectedModel?.efforts.map((v) => (
-                      <option key={v} value={v}>{v}</option>
-                    ))}
-                  </select>
+                    className="effort-select"
+                    options={(selectedModel?.efforts || []).map((value) => ({ value, label: value }))}
+                    onChange={setEffort}
+                  />
                 </div>
                 {activeRun ? (
                   <button
