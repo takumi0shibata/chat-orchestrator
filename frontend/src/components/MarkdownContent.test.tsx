@@ -4,6 +4,18 @@ import { describe, expect, it, vi } from "vitest";
 import { MarkdownContent } from "./MarkdownContent";
 
 describe("MarkdownContent", () => {
+  it("renders saved artifact links and completes streamed equations", () => {
+    const { container, rerender } = render(<MarkdownContent conversationId="conversation-1" content={"[結果](file:///workspace/結果.md)\n\n\\(x^2"} />);
+    expect(screen.getByRole("link", { name: "結果" })).toHaveAttribute("href", `/api/conversations/conversation-1/download?path=${encodeURIComponent("結果.md")}`);
+    expect(screen.getByRole("link", { name: "結果" })).toHaveAttribute("download");
+    expect(container.querySelector(".katex")).toBeNull();
+    expect(container.textContent).toContain("\\(x^2");
+
+    rerender(<MarkdownContent conversationId="conversation-2" content={"[結果](file:///workspace/結果.md)\n\n\\(x^2\\)"} />);
+    expect(screen.getByRole("link", { name: "結果" })).toHaveAttribute("href", `/api/conversations/conversation-2/download?path=${encodeURIComponent("結果.md")}`);
+    expect(container.querySelector(".katex")).not.toBeNull();
+  });
+
   it("copies literal code from fenced blocks with language tags", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(window.navigator, "clipboard", {

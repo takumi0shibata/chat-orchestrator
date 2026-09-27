@@ -862,6 +862,20 @@ h2 {
 .markdown p {
   margin-bottom: 15px;
 }
+.markdown eq { display: inline-block; }
+.markdown eqn { display: block; }
+.markdown .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: .25em 0;
+}
+.markdown .katex { overflow-wrap: normal; }
+.markdown section.eqno {
+  display: flex;
+  align-items: center;
+  gap: 1em;
+}
+.markdown section.eqno > eqn { min-width: 0; flex: 1; }
 .markdown h1,
 .markdown h2,
 .markdown h3 {

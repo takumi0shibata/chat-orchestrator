@@ -234,16 +234,16 @@ def test_settings_and_monthly_cost_api(app_client):
     assert costs["months"][0]["usd"] == 0
 
 
-def test_japanese_artifact_download(app_client):
+@pytest.mark.parametrize("filename", ["結果.docx", "結果.md", "結果 (最終).docx"])
+def test_japanese_artifact_download(app_client, filename):
     from urllib.parse import quote
     http, work, _ = app_client
     cid = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]
     (work / "reviews").mkdir()
-    for extension in ("docx", "md"):
-        path = f"reviews/結果.{extension}"
-        (work / path).write_bytes(b"artifact")
-        response = http.get(f"/api/conversations/{cid}/download?path={quote(path, safe='')}")
-        assert response.status_code == 200
-        assert response.content == b"artifact"
-        assert "attachment" in response.headers["content-disposition"]
-        assert quote(f"結果.{extension}") in response.headers["content-disposition"]
+    path = f"reviews/{filename}"
+    (work / path).write_bytes(b"artifact")
+    response = http.get(f"/api/conversations/{cid}/download?path={quote(path, safe='')}")
+    assert response.status_code == 200
+    assert response.content == b"artifact"
+    assert "attachment" in response.headers["content-disposition"]
+    assert quote(filename) in response.headers["content-disposition"]

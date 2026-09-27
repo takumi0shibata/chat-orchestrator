@@ -110,7 +110,10 @@ it("resolves Japanese sandbox artifacts through the conversation download API", 
   const html = markdownToHtml("[Word版](sandbox:/workspace/reviews/結果.docx)\n[Markdown版](sandbox:/workspace/reviews/%E7%B5%90%E6%9E%9C.md)", "conversation-1");
   expect(html).toContain('/api/conversations/conversation-1/download?path=reviews%2F%E7%B5%90%E6%9E%9C.docx');
   expect(html).toContain('reviews%2F%E7%B5%90%E6%9E%9C.md');
-  expect(html).toContain('download>Word版</a>');
+  const root = document.createElement("div");
+  root.innerHTML = html;
+  expect(root.querySelector("a")).toHaveAttribute("download");
+  expect(root.querySelector("a")).toHaveTextContent("Word版");
 });
 
 it("keeps unsafe or unscoped artifact paths inert", () => {
@@ -118,4 +121,118 @@ it("keeps unsafe or unscoped artifact paths inert", () => {
     expect(markdownToHtml(`[file](${path})`, "conversation-1")).not.toContain('<a ');
   }
   expect(markdownToHtml('[file](sandbox:/workspace/result.md)')).not.toContain('<a ');
+});
+
+describe("artifact links", () => {
+  function render(markdown: string, conversationId = "conversation-1") {
+    const root = document.createElement("div");
+    root.innerHTML = markdownToHtml(markdown, conversationId);
+    return root;
+  }
+
+  it.each([
+    "sandbox:/workspace/レビュー結果.md",
+    "file:///workspace/レビュー結果.md",
+    "/workspace/レビュー結果.md",
+    "レビュー結果.md",
+    "./レビュー結果.md",
+  ])("downloads workspace files from %s", (url) => {
+    const link = render(`[結果](${url})`).querySelector("a");
+    expect(link).toHaveAttribute("href", `/api/conversations/conversation-1/download?path=${encodeURIComponent("レビュー結果.md")}`);
+    expect(link).toHaveAttribute("download");
+    expect(link).not.toHaveAttribute("target");
+  });
+
+  it.each([
+    "<sandbox:/workspace/reviews/結果 (最終).docx>",
+    "file:///workspace/reviews/結果%20(最終).docx",
+    "reviews/結果%20%28最終%29.docx",
+  ])("preserves spaces, parentheses and inline code labels: %s", (url) => {
+    const link = render(`[\`結果.docx\`](${url})`).querySelector("a");
+    expect(link).toHaveAttribute("href", `/api/conversations/conversation-1/download?path=${encodeURIComponent("reviews/結果 (最終).docx")}`);
+    expect(link?.querySelector("code")).toHaveTextContent("結果.docx");
+  });
+
+  it("supports reference links and encodes the conversation independently", () => {
+    const link = render("[report][file]\n\n[file]: sandbox:/workspace/report.md", "conversation /2").querySelector("a");
+    expect(link).toHaveAttribute("href", "/api/conversations/conversation%20%2F2/download?path=report.md");
+  });
+
+  it.each([
+    "file:///etc/passwd", "file://other/workspace/report.md", "/etc/passwd",
+    "../secret", "reports/../secret", "reports/%2e%2e/secret", "%2fetc/passwd",
+    "sandbox:/input/file", "sandbox:/workspace/%ZZ", "report%ZZ.md",
+    "javascript:alert(1)", "javascript%3Aalert(1)", "data:text/html,bad",
+    "//evil.example/report.md", "report.md?path=secret", "report.md#fragment",
+    "sandbox:/workspace/%5csecret", "sandbox:/workspace/%00secret",
+  ])("does not render unsafe links: %s", (url) => {
+    expect(render(`[file](${url})`).querySelector("a")).toBeNull();
+  });
+
+  it("keeps external links in a separate tab and escapes raw HTML", () => {
+    const root = render('[web](https://example.com/a?q=1&x=2)\n<script>alert(1)</script>');
+    expect(root.querySelector("a")).toHaveAttribute("target", "_blank");
+    expect(root.querySelector("a")).toHaveAttribute("rel", "noreferrer");
+    expect(root.querySelector("a")).not.toHaveAttribute("download");
+    expect(root.querySelector("script")).toBeNull();
+    expect(root.textContent).toContain("<script>alert(1)</script>");
+  });
+
+  it("does not linkify paths inside inline or fenced code", () => {
+    const root = render("`[file](report.md)`\n\n```markdown\n[file](report.md)\n```");
+    expect(root.querySelector("a")).toBeNull();
+  });
+});
+
+describe("LaTeX math", () => {
+  function render(markdown: string) {
+    const root = document.createElement("div");
+    root.innerHTML = markdownToHtml(markdown, "conversation-1");
+    return root;
+  }
+
+  it.each(["$x^2$", String.raw`\(x^2\)`])("renders inline math: %s", (input) => {
+    const root = render(`式は${input}です。`);
+    expect(root.querySelector("p .katex")).not.toBeNull();
+    expect(root.querySelector(".katex-display")).toBeNull();
+    expect(root.querySelector("annotation")?.textContent).toBe("x^2");
+  });
+
+  it.each(["$$x^2$$", String.raw`\[x^2\]`])("renders display math: %s", (input) => {
+    expect(render(input).querySelector(".katex-display")).not.toBeNull();
+    expect(render(`式：${input}です。`).querySelector(".katex-display")).not.toBeNull();
+  });
+
+  it.each(["$$", String.raw`\[`])("renders multiline equations: %s", (opening) => {
+    const closing = opening === "$$" ? "$$" : String.raw`\]`;
+    const root = render(`${opening}\n\\begin{aligned}\nx &= 1 \\\\\ny &= 2\n\\end{aligned}\n${closing}`);
+    expect(root.querySelector(".katex-display .katex")).not.toBeNull();
+    expect(root.querySelector(".katex-error")).toBeNull();
+  });
+
+  it("renders math inside lists and tables", () => {
+    const root = render("- $x^2$\n\n| 式 |\n| --- |\n| \\(y^2\\) |");
+    expect(root.querySelector("li .katex")).not.toBeNull();
+    expect(root.querySelector("td .katex")).not.toBeNull();
+  });
+
+  it("leaves math inside code and escaped dollars literal", () => {
+    const root = render("`$x$`\n\n```latex\n\\(x\\)\n$$x$$\n```\n\n\\$x\\$ and $5 and $10");
+    expect(root.querySelector(".katex")).toBeNull();
+    expect(root.querySelector("pre code")?.textContent).toBe("\\(x\\)\n$$x$$\n");
+    expect(root.textContent).toContain("$x$ and $5 and $10");
+  });
+
+  it.each(["$x", "$$x", "$$x$", String.raw`\(x`, String.raw`\[x`])("retains incomplete streaming math: %s", (input) => {
+    const root = render(input);
+    expect(root.querySelector(".katex, .katex-error")).toBeNull();
+    expect(root.textContent?.trim()).toBe(input);
+  });
+
+  it("keeps rendering after invalid math and refuses trusted HTML commands", () => {
+    const root = render(String.raw`$\frac{<img src=x onerror=alert(1)>}$` + "\n\nAfter\n\n" + String.raw`$\href{javascript:alert(1)}{click}$`);
+    expect(root.querySelector(".katex-error")).not.toBeNull();
+    expect(root.textContent).toContain("After");
+    expect(root.querySelector("img, a, script, [onerror]")).toBeNull();
+  });
 });
