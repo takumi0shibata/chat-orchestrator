@@ -235,6 +235,8 @@ h2 {
   flex: 1;
   overflow: auto;
   scroll-behavior: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
 }
 .chat-header {
   display: flex;
@@ -1770,17 +1772,33 @@ h2 {
   line-height: 1.35;
   padding: 6px 8px;
 }
+.conversation { align-items: center; }
 .conversation .history-action {
-  display: none;
-  flex: 0 0 24px;
-  width: 24px;
-  padding: 4px;
-  opacity: 1;
-  pointer-events: auto;
+  display: grid;
+  place-items: center;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  margin-right: 2px;
+  border-radius: 6px;
+  color: #72757c;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s, background-color .12s, color .12s;
 }
 .conversation:hover .history-action,
-.conversation:focus-within .history-action { display: grid; }
-.conversation .pin { display: none; place-items: center; }
+.conversation:focus-within .history-action { opacity: 1; pointer-events: auto; }
+.conversation .history-action:hover { background: #d9dce0; color: #34363c; }
+.conversation .history-action.delete:hover { background: #f5dfe0; color: #a02e38; }
+.conversation .history-action[aria-pressed="true"] { color: #315c47; }
+.conversation .history-action[aria-pressed="true"] svg { fill: #315c4726; }
+.conversation .history-action:focus-visible { outline: 2px solid #698a76; outline-offset: 1px; }
+.conversation .history-action:disabled { cursor: default; }
+.file-tree-file, .file-tree-directory { cursor: grab; }
+.file-tree-file:active, .file-tree-directory:active { cursor: grabbing; }
+.composer-box.is-path-dragging { border-color: #698a76; box-shadow: 0 0 0 2px #698a7633; }
+.path-drop-hint { position: absolute; top: 8px; right: 12px; pointer-events: none; padding: 4px 8px; border-radius: 5px; background: #e9f2ec; color: #315c47; font-size: 12px; }
 
 @media (hover: none) {
   .project-new,

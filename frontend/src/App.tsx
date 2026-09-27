@@ -389,6 +389,8 @@ function FileTypeIcon({ name }: { name: string }) {
   );
 }
 
+const WORKSPACE_FILE_MIME = "application/x-chat-workspace-file";
+
 function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle, onRetry, conversationId, depth = 0 }: {
   entries: WorkspaceFile[];
   childrenByPath: Record<string, WorkspaceFile[]>;
@@ -400,18 +402,23 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
   conversationId: string;
   depth?: number;
 }) {
+  function startDrag(event: ReactDragEvent<HTMLButtonElement>, entry: WorkspaceFile) {
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData(WORKSPACE_FILE_MIME, JSON.stringify({ conversationId, path: entry.path }));
+  }
   return (
     <ul className={depth ? "file-tree file-tree-children" : "file-tree"}>
       {entries.map((entry) => {
         const isExpanded = expanded.includes(entry.path);
         if (!entry.directory) return (
           <li key={entry.path}>
-            <a className="file-tree-row file-tree-file" href={`/api/conversations/${conversationId}/download?path=${encodeURIComponent(entry.path)}`} download title={entry.name}>
+            <button className="file-tree-row file-tree-file" type="button" draggable title={`${entry.path} — Drag to the message input`}
+              onDragStart={(event) => startDrag(event, entry)}>
               <span className="file-tree-spacer" />
               <FileTypeIcon name={entry.name} />
               <span className="file-tree-name">{entry.name}</span>
               <small>{formatFileSize(entry.size)}</small>
-            </a>
+            </button>
           </li>
         );
         const children = childrenByPath[entry.path];
@@ -419,7 +426,7 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
         const error = errors[entry.path];
         return (
           <li key={entry.path}>
-            <button className="file-tree-row file-tree-directory" type="button" aria-expanded={isExpanded} onClick={() => onToggle(entry)} title={entry.name}>
+            <button className="file-tree-row file-tree-directory" type="button" draggable aria-expanded={isExpanded} onClick={() => onToggle(entry)} title={`${entry.path} — Click to expand or collapse; drag to the message input`} onDragStart={(event) => startDrag(event, entry)}>
               <span className={`file-tree-chevron ${isExpanded ? "is-expanded" : ""}`}><Icon name="chevron-right" size={13} /></span>
               <span className="folder-icon"><Icon name={isExpanded ? "folder-open" : "folder"} size={17} /></span>
               <span className="file-tree-name">{entry.name}</span>
@@ -808,7 +815,6 @@ export function App() {
   const [direct, setDirect] = useState<string[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [timelines, setTimelines] = useState<Record<string, AgentEvent[]>>({});
-  const [revision, setRevision] = useState(0);
   const [filesByPath, setFilesByPath] = useState<Record<string, WorkspaceFile[]>>({});
   const [expandedFolders, setExpandedFolders] = useState<string[]>([]);
   const [loadingFolders, setLoadingFolders] = useState<string[]>([]);
@@ -825,6 +831,7 @@ export function App() {
   const [connection, setConnection] = useState("");
   const [busy, setBusy] = useState(false);
   const [draggingFiles, setDraggingFiles] = useState(false);
+  const [draggingPath, setDraggingPath] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
   const [loadedCid, setLoadedCid] = useState("");
   const filesToggle = useRef<HTMLButtonElement>(null);
@@ -836,7 +843,12 @@ export function App() {
   const fileRequestIds = useRef<Record<string, number>>({});
   const dragDepth = useRef(0);
   const plusWrap = useRef<HTMLDivElement>(null);
-  const bottom = useRef<HTMLDivElement>(null);
+  const runSubscription = useRef<{ conversationId: string; start: (run: Run) => void } | null>(null);
+  const selectedConversation = useRef(cid);
+  selectedConversation.current = cid;
+  const pendingSelection = useRef<number | null>(null);
+  const chatContent = useRef<HTMLDivElement>(null);
+  const scrollSnapshot = useRef({ top: 0, height: 0, viewport: 0 });
   const scroll = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   const current = conversations.find((c) => c.id === cid);
@@ -1003,11 +1015,15 @@ export function App() {
   useEffect(() => {
     localStorage.setItem("workspace-conversation", cid);
     const abort = new AbortController();
+    follow.current = true;
     setRuns([]);
     setTimelines({});
     setLoadedCid("");
     setConnection("");
     if (!cid || !config) return;
+    const subscribed = new Set<string>();
+    const disconnected = new Set<string>();
+    const updateConnection = () => setConnection(disconnected.size ? "Reconnecting. The run continues on the server." : "");
     async function watch(run: Run) {
       let cursor = 0;
       while (!abort.signal.aborted) {
@@ -1040,26 +1056,42 @@ export function App() {
               setConversations((old) => old.map((item) => item.id === run.conversation_id ? { ...item, title } : item));
               setSearchResults((old) => old?.map((item) => item.id === run.conversation_id ? { ...item, title } : item) || null);
             }
-            setConnection("");
+            disconnected.delete(run.id);
+            updateConnection();
           });
           if (abort.signal.aborted) return;
           const latest = await api<Run>(`/runs/${run.id}`, {
             signal: abort.signal,
           });
+          if (abort.signal.aborted) return;
           if (terminal(latest.status)) {
+            disconnected.delete(run.id);
+            updateConnection();
             setRuns((old) => old.map((r) => (r.id === run.id ? latest : r)));
             return;
           }
           throw new Error("stream disconnected");
         } catch {
           if (abort.signal.aborted) return;
-          setConnection(
-            "Reconnecting. The run continues on the server.",
-          );
-          await new Promise((resolve) => setTimeout(resolve, 1500));
+          disconnected.add(run.id);
+          updateConnection();
+          await new Promise<void>((resolve) => {
+            const finish = () => { clearTimeout(timer); abort.signal.removeEventListener("abort", finish); resolve(); };
+            const timer = setTimeout(finish, 1500);
+            abort.signal.addEventListener("abort", finish, { once: true });
+          });
         }
       }
     }
+    const subscription = {
+      conversationId: cid,
+      start(run: Run) {
+        if (abort.signal.aborted || subscribed.has(run.id)) return;
+        subscribed.add(run.id);
+        void watch(run);
+      },
+    };
+    runSubscription.current = subscription;
     api<Conversation & { runs: Run[] }>(`/conversations/${cid}`, {
       signal: abort.signal,
     })
@@ -1077,13 +1109,16 @@ export function App() {
           setMcps(last.mcp_ids);
           setWeb(last.web_search);
         }
-        for (const run of c.runs) void watch(run);
+        for (const run of c.runs) subscription.start(run);
       })
       .catch((e) => {
         if (!abort.signal.aborted) setError(String(e));
       });
-    return () => abort.abort();
-  }, [cid, revision, configReady]);
+    return () => {
+      abort.abort();
+      if (runSubscription.current === subscription) runSubscription.current = null;
+    };
+  }, [cid, configReady]);
 
   useEffect(() => {
     setFilesByPath({});
@@ -1142,9 +1177,26 @@ export function App() {
     const paths = changedConversation ? [""] : ["", ...expandedFolders];
     for (const path of paths) void loadFileFolder(path, cid);
   }, [cid, fileRevision]);
-  useEffect(() => {
-    if (follow.current) bottom.current?.scrollIntoView?.({ block: "end" });
-  }, [timelines]);
+  function followLatest() {
+    const element = scroll.current;
+    if (!element) return;
+    if (follow.current) element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+    scrollSnapshot.current = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
+  }
+  useLayoutEffect(() => {
+    if (pendingSelection.current !== null && messageInput.current) {
+      messageInput.current.focus({ preventScroll: true });
+      messageInput.current.setSelectionRange(pendingSelection.current, pendingSelection.current);
+      pendingSelection.current = null;
+    }
+    followLatest();
+  });
+  useLayoutEffect(() => {
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(followLatest) : null;
+    if (scroll.current) observer?.observe(scroll.current);
+    if (chatContent.current) observer?.observe(chatContent.current);
+    return () => observer?.disconnect();
+  }, [cid, settingsPage]);
   useEffect(() => {
     if (!plusOpen) return;
     const closeOutside = (event: PointerEvent) => {
@@ -1165,6 +1217,7 @@ export function App() {
     if (canDropFiles) return;
     dragDepth.current = 0;
     setDraggingFiles(false);
+    setDraggingPath(false);
   }, [canDropFiles]);
   useEffect(() => {
     if (settingsPage !== "cost") return;
@@ -1222,9 +1275,10 @@ export function App() {
     if (!canSend) return;
     setError("");
     setBusy(true);
-    follow.current = true;
+    const submittingCid = cid;
+    const subscription = runSubscription.current;
     try {
-      await api<Run>("/runs", {
+      const createdRun = await api<Run>("/runs", {
         method: "POST",
         body: JSON.stringify({
           conversation_id: cid,
@@ -1240,11 +1294,14 @@ export function App() {
           web_search: web,
         }),
       });
+      if (selectedConversation.current !== submittingCid || runSubscription.current !== subscription) return;
+      follow.current = true;
+      setRuns((old) => old.some((run) => run.id === createdRun.id) ? old : [...old, createdRun]);
+      subscription?.start(createdRun);
       setInput("");
       setSkillMention(null);
       setAttachments([]);
       setDirect([]);
-      setRevision((v) => v + 1);
       await refreshConversations();
     } catch (e) {
       setError(String(e));
@@ -1332,6 +1389,24 @@ export function App() {
       setBusy(false);
     }
   }
+  function isWorkspaceFileDrag(event: ReactDragEvent<HTMLElement>) {
+    return Array.from(event.dataTransfer.types).includes(WORKSPACE_FILE_MIME);
+  }
+  function handlePathDrop(event: ReactDragEvent<HTMLTextAreaElement>) {
+    if (!isWorkspaceFileDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setDraggingPath(false);
+    if (!canDropFiles) return;
+    try {
+      const data = JSON.parse(event.dataTransfer.getData(WORKSPACE_FILE_MIME));
+      if (data.conversationId !== cid || typeof data.path !== "string" || !data.path || data.path.startsWith("/") || data.path.split("/").some((part: string) => part === "..")) return;
+      const { selectionStart: start, selectionEnd: end } = event.currentTarget;
+      pendingSelection.current = start + data.path.length;
+      setInput(input.slice(0, start) + data.path + input.slice(end));
+      setSkillMention(null);
+    } catch { /* Ignore unsupported drag data. */ }
+  }
   function isFileDrag(event: ReactDragEvent<HTMLElement>) {
     return Array.from(event.dataTransfer.types).includes("Files");
   }
@@ -1358,6 +1433,11 @@ export function App() {
     setDraggingFiles(true);
   }
   function handleDragOver(event: ReactDragEvent<HTMLElement>) {
+    if (isWorkspaceFileDrag(event)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "none";
+      return;
+    }
     if (!isFileDrag(event)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1371,6 +1451,7 @@ export function App() {
     if (dragDepth.current === 0) setDraggingFiles(false);
   }
   function handleDrop(event: ReactDragEvent<HTMLElement>) {
+    if (isWorkspaceFileDrag(event)) { event.preventDefault(); return; }
     if (!isFileDrag(event)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1426,8 +1507,8 @@ export function App() {
     return (
       <div className={`conversation ${nested ? "nested" : ""} ${conversation.id === cid ? "selected" : ""}`} key={conversation.id}>
         <button className="history-title" disabled={busy} onClick={() => selectConversation(conversation)}>{conversation.title}</button>
-        <button className="history-action pin" aria-label={`${conversation.pinned ? "Unpin" : "Pin"} ${conversation.title}`} aria-pressed={Boolean(conversation.pinned)} disabled={pinPending.includes(conversation.id)} onClick={() => void togglePin(conversation)}><Icon name="pin" size={14} /></button>
-        <button className="history-action delete" aria-label={`Delete ${conversation.title}`} disabled={busy || pinPending.includes(conversation.id) || (conversation.id === cid && active)} onClick={() => void removeConversation(conversation.id)}>×</button>
+        <button className="history-action pin" title={conversation.pinned ? "Unpin chat" : "Pin chat"} aria-label={`${conversation.pinned ? "Unpin" : "Pin"} ${conversation.title}`} aria-pressed={Boolean(conversation.pinned)} disabled={pinPending.includes(conversation.id)} onClick={() => void togglePin(conversation)}><Icon name="pin" size={14} /></button>
+        <button className="history-action delete" title="Delete chat" aria-label={`Delete ${conversation.title}`} disabled={busy || pinPending.includes(conversation.id) || (conversation.id === cid && active)} onClick={() => void removeConversation(conversation.id)}><Icon name="close" size={14} /></button>
       </div>
     );
   }
@@ -1620,11 +1701,15 @@ export function App() {
         <div
           className="chat-scroll"
           ref={scroll}
+          onWheel={(event) => { if (event.deltaY < 0) follow.current = false; }}
           onScroll={() => {
             const el = scroll.current;
-            if (el)
-              follow.current =
-                el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+            if (!el) return;
+            const previous = scrollSnapshot.current;
+            const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 2;
+            if (nearBottom) follow.current = true;
+            else if (el.scrollTop < previous.top && el.scrollHeight === previous.height && el.clientHeight === previous.viewport) follow.current = false;
+            scrollSnapshot.current = { top: el.scrollTop, height: el.scrollHeight, viewport: el.clientHeight };
           }}
         >
           {!cid ? (
@@ -1649,7 +1734,7 @@ export function App() {
               </div>
             </div>
           ) : (
-            <div className="chat-column">
+            <div className="chat-column" ref={chatContent}>
               {runs.length === 0 && (
                 <div className="welcome compact">
                   <h2>What would you like to work on?</h2>
@@ -1669,7 +1754,6 @@ export function App() {
                   }}
                 />
               ))}
-              <div ref={bottom} />
             </div>
           )}
         </div>
@@ -1680,7 +1764,7 @@ export function App() {
                 {connection}
               </p>
             )}
-            <div className="composer-box" ref={composerBox}>
+            <div className={`composer-box ${draggingPath ? "is-path-dragging" : ""}`} ref={composerBox}>
               <div className="attachments">
                 {attachments.map((a) => (
                   <div className="attachment" key={a.id}>
@@ -1716,6 +1800,20 @@ export function App() {
               </div>
               <textarea
                 ref={messageInput}
+                onDragEnter={(event) => {
+                  if (!isWorkspaceFileDrag(event)) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setDraggingPath(canDropFiles);
+                }}
+                onDragOver={(event) => {
+                  if (!isWorkspaceFileDrag(event)) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  event.dataTransfer.dropEffect = canDropFiles ? "copy" : "none";
+                }}
+                onDragLeave={() => setDraggingPath(false)}
+                onDrop={handlePathDrop}
                 aria-label="Message"
                 aria-autocomplete="list"
                 aria-controls={skillMentionOpen ? "skill-mention-list" : undefined}
@@ -1732,6 +1830,7 @@ export function App() {
                 disabled={busy || active}
                 rows={3}
               />
+              {draggingPath && <span className="path-drop-hint" role="status">Drop to insert relative path</span>}
               {skillMentionOpen && (
                 <div className="skill-mention-menu" id="skill-mention-list" role="listbox" aria-label="Skills">
                   {skillMatches.map((skill, index) => (
@@ -1968,7 +2067,7 @@ export function App() {
           {filesByPath[""] && <FileTree entries={filesByPath[""]} childrenByPath={filesByPath} expanded={expandedFolders} loading={loadingFolders} errors={fileErrors} onToggle={toggleFileFolder} onRetry={(path) => void loadFileFolder(path)} conversationId={cid} />}
         </div>
         <p className="files-note">
-          Created files appear here. Select a file to download it.
+          Drag a file or folder to the message input to insert its relative path.
         </p>
       </aside>}
       {terminalMounted && currentWorkspace && <div id="host-terminal-panel"

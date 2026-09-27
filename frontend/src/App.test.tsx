@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { App, RunView } from "./App";
 import type { AgentEvent, Run } from "./types";
@@ -256,6 +256,7 @@ it("restores selected conversation and replays persistent events on reload", asy
         { name: "report.csv", path: "report.csv", directory: false, size: 100 },
       ];
     else if (url === "/api/runs/r") body = run;
+    else if (url === "/api/runs") body = run;
     return new Response(JSON.stringify(body));
   });
   render(<App />);
@@ -300,10 +301,8 @@ it("restores selected conversation and replays persistent events on reload", asy
   await waitFor(() => expect(fetchMock.mock.calls.filter(([url, options]) => url === "/api/runs" && options?.method === "POST")).toHaveLength(1));
   const sent = fetchMock.mock.calls.find(([url, options]) => url === "/api/runs" && options?.method === "POST");
   expect(JSON.parse(String(sent?.[1]?.body))).toMatchObject({ model: "gpt-5.6-luna", reasoning_effort: "high", web_search: true, skill_ids: ["academic-writing"], input: "Analyze the report" });
-  expect(screen.getByRole("link", { name: /report.csv/ })).toHaveAttribute(
-    "href",
-    "/api/conversations/c/download?path=report.csv",
-  );
+  expect(screen.getByRole("button", { name: /report.csv/ })).toHaveAttribute("draggable", "true");
+  expect(screen.getByRole("button", { name: /report.csv/ })).not.toHaveAttribute("href");
 });
 
 it("selects configured skills with an @ mention and sends their ids without the mention text", async () => {
@@ -765,15 +764,16 @@ it("renders a lazy file tree with typed icons, caching, refresh, empty and retry
   const { container } = render(<App />);
   const documents = await screen.findByRole("button", { name: "documents" });
   expect(documents).toHaveAttribute("aria-expanded", "false");
-  expect(screen.getByRole("link", { name: /photo.png/ }).querySelector('[data-icon="file-image"]')).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: /data.csv/ }).querySelector('[data-icon="file-spreadsheet"]')).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: /photo.png/ })).toHaveTextContent("2.0 MB");
-  expect(screen.getByRole("link", { name: /.DS_Store/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /photo.png/ }).querySelector('[data-icon="file-image"]')).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /data.csv/ }).querySelector('[data-icon="file-spreadsheet"]')).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /photo.png/ })).toHaveTextContent("2.0 MB");
+  expect(screen.getByRole("button", { name: /.DS_Store/ })).toBeInTheDocument();
 
   fireEvent.click(documents);
   expect(documents).toHaveAttribute("aria-expanded", "true");
-  const report = await screen.findByRole("link", { name: /report.pdf/ });
-  expect(report).toHaveAttribute("href", "/api/conversations/c/download?path=documents%2Freport.pdf");
+  const report = await screen.findByRole("button", { name: /report.pdf/ });
+  expect(report).toHaveAttribute("draggable", "true");
+  expect(report).not.toHaveAttribute("href");
   expect(report).toHaveTextContent("1.5 KB");
   expect(report.querySelector('[data-icon="file-pdf"]')).toBeInTheDocument();
   fireEvent.click(documents);
@@ -785,7 +785,7 @@ it("renders a lazy file tree with typed icons, caching, refresh, empty and retry
   fireEvent.click(screen.getByRole("button", { name: "broken" }));
   expect(await screen.findByText("Couldn’t load folder.")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Retry loading broken" }));
-  expect(await screen.findByRole("link", { name: /fixed.py/ })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: /fixed.py/ })).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "Refresh files" }));
   await waitFor(() => expect(calls[""]).toBe(2));
@@ -1043,4 +1043,238 @@ it("shows five recent chats per project and reveals ten more at a time", async (
   await waitFor(() => expect(projectHistory()).toHaveLength(17));
   expect(screen.getByRole("button", { name: "History 16" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+});
+
+
+const uxConfig = {
+  providers: [{ id: "openai", label: "OpenAI", enabled: true, models: [{ id: "gpt-5.6-sol", model: "gpt-5.6-sol", label: "Sol", efforts: ["medium"], default_effort: "medium" }] }],
+  workspaces: [{ id: "w", label: "Work", path: "/work" }], skills: [], resources: [], mcp_servers: [],
+};
+const uxConversation = { id: "c", workspace_id: "w", title: "UX chat", updated_at: run.updated_at };
+const fileMime = "application/x-chat-workspace-file";
+function workspaceDrag(conversationId = "c", path = "資料/結果 report.csv") {
+  const data: Record<string, string> = { [fileMime]: JSON.stringify({ conversationId, path }) };
+  return { types: [fileMime], setData: vi.fn((type: string, value: string) => { data[type] = value; }), getData: vi.fn((type: string) => data[type] || ""), effectAllowed: "", dropEffect: "" };
+}
+function mockUxApi(extra?: (url: string, options?: RequestInit) => Response | Promise<Response> | undefined) {
+  localStorage.setItem("workspace-conversation", "c");
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
+    const url = String(input);
+    const override = extra?.(url, options);
+    if (override) return override;
+    const body = url === "/api/config" ? uxConfig
+      : url === "/api/settings" ? { title_provider: "openai", title_model: "gpt-5.6-sol", theme_color: "#25262A" }
+      : url === "/api/conversations" ? [uxConversation]
+      : url === "/api/conversations/c" ? { ...uxConversation, runs: [] }
+      : url.includes("/files") ? [{ name: "結果 report.csv", path: "資料/結果 report.csv", directory: false, size: 10 }]
+      : {};
+    return new Response(JSON.stringify(body));
+  });
+}
+
+it("inserts workspace paths at the caret and replaces selections without uploading or downloading", async () => {
+  const fetchMock = mockUxApi();
+  const { container } = render(<App />);
+  const file = await screen.findByRole("button", { name: /結果 report.csv/ });
+  const message = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
+  await waitFor(() => expect(message).toBeEnabled());
+  const transfer = workspaceDrag();
+  fireEvent.dragStart(file, { dataTransfer: transfer });
+  expect(transfer.setData).toHaveBeenCalledWith(fileMime, JSON.stringify({ conversationId: "c", path: "資料/結果 report.csv" }));
+  expect(transfer.effectAllowed).toBe("copy");
+  fireEvent.click(file);
+  expect(file).not.toHaveAttribute("href");
+  fireEvent.change(message, { target: { value: "この を編集して" } });
+  message.setSelectionRange(3, 3);
+  fireEvent.dragEnter(message, { dataTransfer: transfer });
+  expect(screen.getByRole("status")).toHaveTextContent("Drop to insert relative path");
+  fireEvent.drop(message, { dataTransfer: transfer });
+  expect(message).toHaveValue("この 資料/結果 report.csvを編集して");
+  expect(message).toHaveFocus();
+  expect(message.selectionStart).toBe(3 + "資料/結果 report.csv".length);
+  fireEvent.change(message, { target: { value: "この旧パスを編集して" } });
+  message.setSelectionRange(2, 5);
+  fireEvent.drop(message, { dataTransfer: transfer });
+  expect(message).toHaveValue("この資料/結果 report.csvを編集して");
+  fireEvent.drop(container.querySelector(".chat-scroll")!, { dataTransfer: transfer });
+  expect(message).toHaveValue("この資料/結果 report.csvを編集して");
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/download") || url === "/api/attachments")).toBe(false);
+});
+
+it("rejects paths from other conversations and malformed drag data", async () => {
+  mockUxApi();
+  render(<App />);
+  await screen.findByRole("button", { name: /結果 report.csv/ });
+  const message = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
+  fireEvent.change(message, { target: { value: "keep" } });
+  for (const transfer of [workspaceDrag("other"), workspaceDrag("c", "../outside"), workspaceDrag("c", "/absolute"), { types: [fileMime], getData: () => "bad json" }]) {
+    fireEvent.drop(message, { dataTransfer: transfer });
+    expect(message).toHaveValue("keep");
+  }
+});
+
+it("keeps old messages and their DOM across second and third sends, subscribing only to new runs", async () => {
+  let next = 1;
+  const createdRuns: Record<string, Run> = { r: run };
+  const fetchMock = mockUxApi((url, options) => {
+    if (url === "/api/conversations/c") return new Response(JSON.stringify({ ...uxConversation, runs: [run] }));
+    if (url === "/api/runs" && options?.method === "POST") {
+      const request = JSON.parse(String(options.body));
+      const created = { ...run, id: `r${++next}`, status: "running", request };
+      createdRuns[created.id] = created;
+      return new Response(JSON.stringify(created));
+    }
+    if (url.includes("/events?")) return new Response(
+      JSON.stringify(event(1, "command", { call_id: "cmd", index: 0, command: "ls" })) + "\n" +
+      JSON.stringify(event(2, "message_phase", { phase: "final_answer", item_id: "answer" })) + "\n" +
+      JSON.stringify(event(3, "text_delta", { item_id: "answer", text: url.includes("/r/events") ? "Original answer" : "Next answer" })) + "\n" +
+      JSON.stringify(event(4, "status", { status: "completed" })) + "\n",
+    );
+    if (/^\/api\/runs\/r/.test(url)) return new Response(JSON.stringify({ ...createdRuns[url.split("/").pop()!], status: "completed" }));
+  });
+  render(<App />);
+  const originalAnswer = await screen.findByText("Original answer");
+  const activity = screen.getByText(/^Worked/).closest("details")!;
+  fireEvent.click(activity.querySelector("summary")!);
+  const message = screen.getByRole("textbox", { name: "Message" });
+  for (const input of ["Second turn", "Third turn"]) {
+    await waitFor(() => expect(message).toBeEnabled());
+    fireEvent.change(message, { target: { value: input } });
+    fireEvent.keyDown(message, { key: "Enter" });
+    await screen.findByText(input);
+    expect(screen.getByText("Original answer")).toBe(originalAnswer);
+    expect(activity).toHaveAttribute("open");
+  }
+  await waitFor(() => expect(message).toHaveValue(""));
+  expect(fetchMock.mock.calls.filter(([url]) => url === "/api/conversations/c")).toHaveLength(1);
+  for (const id of ["r", "r2", "r3"]) {
+    expect(fetchMock.mock.calls.filter(([url]) => url === `/api/runs/${id}/events?after=0`)).toHaveLength(1);
+  }
+});
+
+it("retains the draft and attachments when sending fails", async () => {
+  mockUxApi((url, options) => {
+    if (url === "/api/attachments") return new Response(JSON.stringify([{ id: "a", name: "input.txt", path: "input.txt", size: 1 }]));
+    if (url === "/api/runs" && options?.method === "POST") return new Response(JSON.stringify({ detail: "Send failed" }), { status: 500 });
+  });
+  const { container } = render(<App />);
+  await screen.findByRole("button", { name: /結果 report.csv/ });
+  fireEvent.drop(container.querySelector(".main")!, { dataTransfer: { types: ["Files"], files: [new File(["x"], "input.txt")], items: [] } });
+  await screen.findByRole("button", { name: "Remove input.txt" });
+  const message = screen.getByRole("textbox", { name: "Message" });
+  await waitFor(() => expect(message).toBeEnabled());
+  fireEvent.change(message, { target: { value: "Keep my draft" } });
+  fireEvent.keyDown(message, { key: "Enter" });
+  await screen.findByText(/Send failed/);
+  expect(message).toHaveValue("Keep my draft");
+  expect(screen.getByRole("button", { name: "Remove input.txt" })).toBeInTheDocument();
+});
+
+it("reconnects from the last event sequence and aborts subscriptions when switching conversations", async () => {
+  let firstSignal: AbortSignal | undefined;
+  let reconnectSignal: AbortSignal | undefined;
+  const other = { ...uxConversation, id: "other", title: "Other chat" };
+  const fetchMock = mockUxApi((url, options) => {
+    if (url === "/api/conversations") return new Response(JSON.stringify([uxConversation, other]));
+    if (url === "/api/conversations/c") return new Response(JSON.stringify({ ...uxConversation, runs: [{ ...run, status: "running" }] }));
+    if (url === "/api/conversations/other") return new Response(JSON.stringify({ ...other, runs: [] }));
+    if (url === "/api/runs/r/events?after=0") {
+      firstSignal = options?.signal as AbortSignal;
+      return new Response(JSON.stringify(event(7, "text_delta", { text: "Before disconnect" })) + "\n");
+    }
+    if (url === "/api/runs/r") return new Response(JSON.stringify({ ...run, status: "running" }));
+    if (url === "/api/runs/r/events?after=7") {
+      reconnectSignal = options?.signal as AbortSignal;
+      return new Promise<Response>((_, reject) => options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+    }
+  });
+  render(<App />);
+  await screen.findByText("Before disconnect");
+  await screen.findByText("Reconnecting. The run continues on the server.");
+  await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === "/api/runs/r/events?after=7")).toBe(true), { timeout: 2500 });
+  const message = screen.getByRole("textbox", { name: "Message" });
+  fireEvent.drop(message, { dataTransfer: workspaceDrag() });
+  expect(message).toHaveValue("");
+  fireEvent.click(screen.getByRole("button", { name: "Other chat" }));
+  await waitFor(() => expect(screen.queryByText("Before disconnect")).not.toBeInTheDocument());
+  expect(firstSignal?.aborted).toBe(true);
+  expect(reconnectSignal?.aborted).toBe(true);
+  expect(screen.queryByText("Reconnecting. The run continues on the server.")).not.toBeInTheDocument();
+});
+
+it("follows content and viewport resizing but keeps the position when the user scrolls up", async () => {
+  let notifyResize: () => void = () => {};
+  const OriginalObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class { constructor(callback: () => void) { notifyResize = callback; } observe() {} disconnect() {} unobserve() {} } as unknown as typeof ResizeObserver;
+  try {
+    mockUxApi();
+    const { container } = render(<App />);
+    await screen.findByRole("button", { name: /結果 report.csv/ });
+    const scroll = container.querySelector(".chat-scroll") as HTMLElement;
+    let height = 2000, viewport = 500;
+    Object.defineProperties(scroll, { scrollHeight: { configurable: true, get: () => height }, clientHeight: { configurable: true, get: () => viewport } });
+    act(() => notifyResize());
+    expect(scroll.scrollTop).toBe(1500);
+    height = 2200;
+    act(() => notifyResize());
+    expect(scroll.scrollTop).toBe(1700);
+    viewport = 400;
+    act(() => notifyResize());
+    expect(scroll.scrollTop).toBe(1800);
+    fireEvent.wheel(scroll, { deltaY: -100 });
+    scroll.scrollTop = 1200;
+    fireEvent.scroll(scroll);
+    height = 2400;
+    act(() => notifyResize());
+    expect(scroll.scrollTop).toBe(1200);
+    scroll.scrollTop = 2000;
+    fireEvent.scroll(scroll);
+    height = 2600;
+    act(() => notifyResize());
+    expect(scroll.scrollTop).toBe(2200);
+    height = 2100; // Activity collapses at answer start.
+    act(() => notifyResize());
+    expect(scroll.scrollTop).toBe(1700);
+  } finally { globalThis.ResizeObserver = OriginalObserver; }
+});
+
+
+it("inserts collapsed, expanded and nested folder paths while keeping click-to-toggle behavior", async () => {
+  const fetchMock = mockUxApi((url) => {
+    if (url.startsWith("/api/conversations/c/files")) {
+      const path = new URL(url, "http://localhost").searchParams.get("path");
+      return new Response(JSON.stringify(path === "資料"
+        ? [{ name: "下書き folder", path: "資料/下書き folder", directory: true, size: 0 }]
+        : [{ name: "資料", path: "資料", directory: true, size: 0 }]));
+    }
+  });
+  render(<App />);
+  const folder = await screen.findByRole("button", { name: "資料" });
+  const message = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
+  await waitFor(() => expect(message).toBeEnabled());
+  const transfer = workspaceDrag();
+  expect(folder).toHaveAttribute("draggable", "true");
+  fireEvent.dragStart(folder, { dataTransfer: transfer });
+  expect(folder).toHaveAttribute("aria-expanded", "false");
+  expect(transfer.getData(fileMime)).toBe(JSON.stringify({ conversationId: "c", path: "資料" }));
+  fireEvent.drop(message, { dataTransfer: transfer });
+  expect(message).toHaveValue("資料");
+  expect(message).toHaveFocus();
+
+  fireEvent.click(folder);
+  const nested = await screen.findByRole("button", { name: "下書き folder" });
+  expect(folder).toHaveAttribute("aria-expanded", "true");
+  fireEvent.dragStart(folder, { dataTransfer: transfer });
+  expect(folder).toHaveAttribute("aria-expanded", "true");
+  fireEvent.change(message, { target: { value: "この を編集して" } });
+  message.setSelectionRange(3, 3);
+  fireEvent.dragStart(nested, { dataTransfer: transfer });
+  expect(nested).toHaveAttribute("aria-expanded", "false");
+  fireEvent.drop(message, { dataTransfer: transfer });
+  expect(message).toHaveValue("この 資料/下書き folderを編集して");
+  expect(message.selectionStart).toBe(3 + "資料/下書き folder".length);
+  fireEvent.click(folder);
+  expect(folder).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByRole("button", { name: "下書き folder" })).not.toBeInTheDocument();
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/download") || url === "/api/attachments")).toBe(false);
 });
