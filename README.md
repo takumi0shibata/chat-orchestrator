@@ -72,14 +72,14 @@ Azure OpenAIでは `runtime.toml` の `azure_models` に登録したデプロイ
 
 ## 実行環境と添付
 
-[sandbox/](sandbox/)にアプリとは独立したPython依存ロックがあります。LibreOffice、Poppler、日本語フォント、Office/PDFライブラリ、NumPy、Pandas、Polars、SciPy、CPU版PyTorch、scikit-learn、Matplotlib、Seaborn、Transformers、Datasetsを含みます。初回ビルドは大きなダウンロードが発生します。
+[sandbox/](sandbox/)にアプリとは独立したPython依存ロックがあります。LibreOffice、Poppler、日本語フォント、Office/PDFライブラリ、NumPy、Pandas、Polars、SciPy、CPU版PyTorch、scikit-learn、Matplotlib、Seaborn、Transformers、Datasets、pytestを含みます。初回ビルドは大きなダウンロードが発生します。
 
 - `/workspace`: 元ファイルを直接読み書きする領域。
 - `/input/<attachment-id>/<filename>`: アプリに添付した原本。読み取り専用。加工結果は `/workspace` に保存。
 - `/skills/<id>`、`/resources/<id>`: 選択したSkills／モデル・データ。読み取り専用。
 - `/tmp`: 実行終了で破棄される一時領域。
 
-コンテナは非root・ネットワーク無効・root filesystem読み取り専用・追加capabilityなしで起動します。APIキーやホストの環境変数は渡しません。コマンドは非対話実行です。Pythonは `python ...` でコンテナに用意済みの `/opt/runtime/.venv` を使います。通常の `uv run` も `UV_PROJECT_ENVIRONMENT=/opt/runtime/.venv`、`UV_NO_SYNC=1`、`UV_FROZEN=1` によりこの環境を使い、ホストの `.venv` とロックファイルを同期しません（[uvの仕様](https://docs.astral.sh/uv/concepts/projects/sync/)）。この設定は意図的な上書きや直接のファイル削除を禁止するものではありません。ホストの環境をactivateしたり、依頼のない依存更新を行わないでください。作業先は `/workspace` であり、`cd` に続くコマンドは `&&` でつないでください。成果物の変更一覧では `.venv`、`venv`、`node_modules`、`.git`、`__pycache__`、`.pytest_cache`、`.ruff_cache` を探索から除外します。NLPモデルは事前配置し、Transformers等はofflineモードで動かします。追加ライブラリは `sandbox/pyproject.toml` を変更し、`uv lock --project sandbox` とイメージ再ビルドで導入します。macOS DockerからMetal/MPSは利用しません。
+コンテナは非root・ネットワーク無効・root filesystem読み取り専用・追加capabilityなしで起動します。APIキーやホストの環境変数は渡しません。コマンドは非対話実行です。Pythonは `python ...` でコンテナに用意済みの `/opt/runtime/.venv` を使います。作業フォルダのPythonテストは `pytest -q` または `python -m pytest -q` で実行できます。通常の `uv run` も `UV_PROJECT_ENVIRONMENT=/opt/runtime/.venv`、`UV_NO_SYNC=1`、`UV_FROZEN=1` によりこの環境を使い、ホストの `.venv` とロックファイルを同期しません（[uvの仕様](https://docs.astral.sh/uv/concepts/projects/sync/)）。この設定は意図的な上書きや直接のファイル削除を禁止するものではありません。ホストの環境をactivateしたり、依頼のない依存更新を行わないでください。作業先は `/workspace` であり、`cd` に続くコマンドは `&&` でつないでください。成果物の変更一覧では `.venv`、`venv`、`node_modules`、`.git`、`__pycache__`、`.pytest_cache`、`.ruff_cache` を探索から除外します。NLPモデルは事前配置し、Transformers等はofflineモードで動かします。追加ライブラリは `sandbox/pyproject.toml` を変更し、`uv lock --project sandbox` とイメージ再ビルドで導入します。macOS DockerからMetal/MPSは利用しません。
 
 Doclingによる自動抽出はありません。通常の添付はShellで必要な部分を読みます。添付ボタンとチャット領域へのドラッグ＆ドロップは同じアップロード処理を使い、フォルダの再帰添付は行いません。PNG/JPEG/WebP/PDFはUIで「モデルに直接添付」を選べます（1ファイル20 MiB、合計40 MiBまで、通常アップロードは1ファイル50 MiB）。直接添付するとその内容をResponsesへ送ります。ローカルShellで読んだ内容・出力もモデルに返されるため、ローカル実行は完全オフラインではありません。
 

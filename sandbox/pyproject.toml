@@ -6,7 +6,8 @@ dependencies = [
  "numpy", "pandas", "polars", "scipy", "torch", "scikit-learn", "matplotlib", "seaborn",
  "transformers", "datasets", "sentencepiece", "safetensors",
  "python-docx", "openpyxl", "python-pptx", "pypdf", "pdfplumber", "pymupdf",
- "pillow", "reportlab", "xlrd", "xlsxwriter", "beautifulsoup4", "lxml"
+ "pillow", "reportlab", "xlrd", "xlsxwriter", "beautifulsoup4", "lxml",
+ "pytest>=8.4.2,<9"
 ]
 
 [[tool.uv.index]]

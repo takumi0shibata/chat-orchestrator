@@ -184,6 +184,35 @@ def test_uv_run_preserves_host_environment_and_lockfile(tmp_path):
     asyncio.run(scenario())
 
 
+def test_pytest_runs_workspace_tests_in_sandbox(tmp_path):
+    async def scenario():
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "test_example.py").write_text(
+            "import numpy as np\n\n"
+            "def test_sandbox_dependency():\n"
+            "    assert np.array([1, 2, 3]).sum() == 6\n"
+        )
+        sandbox = Sandbox(
+            Settings(_env_file=None),
+            Folder(id="w", label="w", path=work),
+            uuid4().hex,
+            [],
+            [],
+            tmp_path / "input",
+        )
+        await sandbox.start()
+        try:
+            for command in ("pytest -q", "python -m pytest -q"):
+                result = await sandbox.execute(command, emit)
+                assert result["outcome"]["exit_code"] == 0, result
+                assert "1 passed" in result["stdout"], result
+        finally:
+            await sandbox.close()
+
+    asyncio.run(scenario())
+
+
 def test_find_longer_than_model_ten_second_hint(tmp_path):
     async def scenario():
         (tmp_path / "target.txt").write_text("target")
