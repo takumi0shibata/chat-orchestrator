@@ -55,3 +55,19 @@ def test_azure_gpt_6_requires_deployment_registration():
     assert validate_model("azure_openai", "azure-sol", "none", config)["model"] == "gpt-6-sol"
     assert validate_model("azure_openai", "azure-luna", "max", config)["model"] == "gpt-6-luna"
     assert pricing_for("azure_openai", "azure-luna", config)[0] == "gpt-6-luna"
+
+
+@pytest.mark.parametrize("provider,selection", [("openai", "gpt-6.1-sol"), ("azure_openai", "azure-sol-61")])
+def test_gpt_6_1_sol_supports_reasoning_and_deployment_pricing(provider, selection):
+    config = RuntimeConfig(azure_models=[Deployment(id="azure-sol-61", model="gpt-6.1-sol", deployment="sol-61-actual")])
+    capability = validate_model(provider, selection, "medium", config)
+    assert capability["label"] == "GPT-6.1 Sol"
+    assert capability["efforts"] == ["low", "medium", "high", "xhigh", "max"]
+    for effort in capability["efforts"]:
+        validate_model(provider, selection, effort, config)
+    for effort in ["none", "minimal"]:
+        with pytest.raises(ValueError):
+            validate_model(provider, selection, effort, config)
+    assert pricing_for(provider, selection, config) == (
+        "gpt-6.1-sol", {"input": 2.0, "cached_input": 0.1, "cache_write": 2.5, "output": 10.0}
+    )

@@ -128,7 +128,7 @@ def setup(tmp_path, outputs, provider="openai", sandbox=FakeSandbox, **settings)
     cid = store.create_conversation("work")["id"]
     client = Client(outputs)
     manager = RunManager(
-        s, cfg, store, client_factory=lambda _: client, sandbox_factory=sandbox
+        s, cfg, store, client_factory=lambda *_: client, sandbox_factory=sandbox
     )
     request = RunCreate(
         conversation_id=cid,
@@ -414,7 +414,7 @@ def test_cleanup_failure_blocks_workspace_then_recovers(tmp_path, monkeypatch):
 
         monkeypatch.setattr("app.agent_runner.docker", cleanup)
         recovered = RunManager(
-            manager.settings, manager.config, store, client_factory=lambda _: client
+            manager.settings, manager.config, store, client_factory=lambda *_: client
         )
         await recovered.recover()
         assert not store.needs_cleanup(run["id"])
@@ -671,6 +671,8 @@ def test_cost_calculation_uses_cache_and_long_context_rates(tmp_path):
     [
         ("gpt-6-sol", 1_000, (2_000, 200, 2_500, 10_000), 4_690_000),
         ("gpt-6-sol", 300_000, (4_000, 400, 5_000, 15_000), 905_000_000),
+        ("gpt-6.1-sol", 1_000, (2_000, 100, 2_500, 10_000), 4_670_000),
+        ("gpt-6.1-sol", 300_000, (4_000, 200, 5_000, 15_000), 885_000_000),
         ("gpt-6-luna", 1_000, (100, 10, 125, 500), 234_500),
         ("gpt-6-luna", 300_000, (200, 20, 250, 750), 45_250_000),
     ],

@@ -60,6 +60,17 @@ class Store:
                 c.execute(
                     "ALTER TABLE conversations ADD COLUMN title_status TEXT NOT NULL DEFAULT 'complete'"
                 )
+            if "azure_connection_id" not in columns:
+                c.execute("ALTER TABLE conversations ADD COLUMN azure_connection_id TEXT")
+                c.execute("UPDATE conversations SET azure_connection_id='default' WHERE provider='azure_openai'")
+                # Recovery may add context to an interrupted legacy Azure run
+                # whose conversation did not yet have a provider.
+                for row in c.execute("SELECT conversation_id,request FROM runs").fetchall():
+                    if json.loads(row["request"]).get("provider") == "azure_openai":
+                        c.execute("UPDATE conversations SET azure_connection_id='default' WHERE id=? AND provider IS NULL",
+                                  (row["conversation_id"],))
+            if "azure_endpoint" not in columns:
+                c.execute("ALTER TABLE conversations ADD COLUMN azure_endpoint TEXT")
             # A process restart cannot resume the independent title request. Do not
             # leave completed run streams waiting on an orphaned state.
             c.execute("UPDATE conversations SET title_status='complete' WHERE title_status='generating'")
@@ -82,7 +93,7 @@ class Store:
         needle = query.strip().casefold()
         with self.connect() as c:
             rows = [dict(r) for r in c.execute(
-                "SELECT id,workspace_id,title,updated_at,pinned FROM conversations "
+                "SELECT id,workspace_id,title,updated_at,pinned,azure_connection_id FROM conversations "
                 "ORDER BY pinned DESC,updated_at DESC,id"
             )]
             if needle:
@@ -202,9 +213,26 @@ class Store:
                       (json.dumps(context), request["provider"], request["model"], now(), cid))
             c.execute("UPDATE run_context_state SET recovered=1 WHERE run_id=?", (rid,))
 
-    def create_run(self, request):
+    def bind_legacy_azure(self, endpoint):
+        with self.connect() as c:
+            c.execute(
+                "UPDATE conversations SET azure_endpoint=? WHERE azure_connection_id='default' AND azure_endpoint IS NULL",
+                (endpoint,),
+            )
+
+    def create_run(self, request, *, azure_binding=None):
         rid = uuid4().hex
         with self.connect() as c:
+            if azure_binding:
+                connection_id, endpoint = azure_binding
+                updated = c.execute(
+                    """UPDATE conversations SET azure_connection_id=?,azure_endpoint=?,provider='azure_openai'
+                       WHERE id=? AND (provider IS NULL OR provider='azure_openai') AND (azure_connection_id IS NULL OR
+                         (azure_connection_id=? AND azure_endpoint=?))""",
+                    (connection_id, endpoint, request["conversation_id"], connection_id, endpoint),
+                )
+                if not updated.rowcount:
+                    raise ValueError("Azure接続先が異なります。新規チャットを作成してください。")
             c.execute(
                 "INSERT INTO runs VALUES(?,?,?,?,?,?)",
                 (

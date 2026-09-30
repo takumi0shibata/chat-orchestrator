@@ -31,18 +31,43 @@ path = "/absolute/path/to/research"
 # [[azure_models]]
 # model = "gpt-5.6-luna"
 # deployment = "my-luna-deployment"
+# Models without connection_id use AZURE_OPENAI_ENDPOINT/API_KEY (default).
+# Keep that endpoint unchanged to continue existing Azure conversations.
+# Register a separate resource for GPT-6. Secrets stay in .env/environment.
+# The connection ID "default" is reserved for the legacy environment settings.
+# [[azure_connections]]
+# id = "gpt6"
+# label = "GPT-6用Azure"
+# endpoint_env = "AZURE_GPT6_ENDPOINT"
+# api_key_env = "AZURE_GPT6_API_KEY"
+
+# Deploy GPT-6 on Azure first, then add the actual deployment names below.
+# id is the app's selection ID (defaults to deployment when omitted).
+# Distinct IDs allow the same deployment name on different resources.
 # [[azure_models]]
+# id = "gpt6-astra"
 # model = "gpt-6-astra"
-# deployment = "my-astra-deployment"
-# Deploy GPT-6 on Azure first, then add its actual deployment name below.
+# deployment = "my-gpt-6-astra-deployment"
+# connection_id = "gpt6"
 # [[azure_models]]
+# id = "gpt6-sol"
 # model = "gpt-6-sol"
 # deployment = "my-gpt-6-sol-deployment"
+# connection_id = "gpt6"
 # [[azure_models]]
+# id = "gpt61-sol"
+# model = "gpt-6.1-sol"
+# deployment = "my-gpt-6-1-sol-deployment"
+# connection_id = "gpt6"
+# [[azure_models]]
+# id = "gpt6-luna"
 # model = "gpt-6-luna"
 # deployment = "my-gpt-6-luna-deployment"
+# connection_id = "gpt6"
 # Registered deployments appear in both chat and title model selectors.
 # Existing Azure GPT-5.6 title model settings remain unchanged.
+# Changing connections requires a new chat; switching models within one is allowed.
+# Restart the backend after editing runtime.toml or credential settings.
 
 # Remote MCP must be reachable by the provider (localhost is not reachable).
 # [[mcp_servers]]

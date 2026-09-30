@@ -23,12 +23,17 @@ MODELS = {
         "label": "GPT-6 Astra",
         "efforts": ["low", "medium", "high", "xhigh", "max"],
     },
+    "gpt-6.1-sol": {
+        "label": "GPT-6.1 Sol",
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+    },
 }
 
 # Standard API text-token prices in USD per 1M tokens. These values are kept in
 # code so every ledger entry can snapshot the rate that was used at the time.
 MODEL_PRICING = {
     "gpt-6-sol": {"input": 2.0, "cached_input": 0.2, "cache_write": 2.5, "output": 10.0},
+    "gpt-6.1-sol": {"input": 2.0, "cached_input": 0.1, "cache_write": 2.5, "output": 10.0},
     "gpt-6-luna": {"input": 0.1, "cached_input": 0.01, "cache_write": 0.125, "output": 0.5},
     "gpt-5.6-sol": {"input": 4.0, "cached_input": 0.4, "cache_write": 5.0, "output": 20.0},
     "gpt-5.6-terra": {"input": 2.0, "cached_input": 0.2, "cache_write": 2.5, "output": 12.0},
@@ -41,7 +46,7 @@ def base_model_for(provider, model, config):
     if provider == "openai":
         return model if model in MODELS else None
     if provider == "azure_openai":
-        deployment = next((d for d in config.azure_models if d.deployment == model), None)
+        deployment = next((d for d in config.azure_models if d.selection_id == model), None)
         return deployment.model if deployment and deployment.model in MODELS else None
     return None
 
@@ -56,7 +61,7 @@ def models_for(provider, config):
         return [dict(id=k, model=k, **v) for k, v in MODELS.items()]
     if provider == "azure_openai":
         return [
-            dict(id=d.deployment, model=d.model, **MODELS[d.model])
+            dict(id=d.selection_id, model=d.model, **MODELS[d.model])
             for d in config.azure_models
             if d.model in MODELS
         ]

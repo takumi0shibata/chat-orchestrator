@@ -5,7 +5,8 @@ from pathlib import Path
 
 import tomllib
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from dotenv import dotenv_values
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -84,6 +85,19 @@ class MCPServer(BaseModel):
 class Deployment(BaseModel):
     model: str
     deployment: str
+    id: str | None = Field(default=None, pattern=IDENTIFIER)
+    connection_id: str = Field(default="default", pattern=IDENTIFIER)
+
+    @property
+    def selection_id(self):
+        return self.id or self.deployment
+
+
+class AzureConnection(BaseModel):
+    id: str = Field(pattern=IDENTIFIER)
+    label: str
+    endpoint_env: str = Field(pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+    api_key_env: str = Field(pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 class RuntimeConfig(BaseModel):
@@ -94,6 +108,7 @@ class RuntimeConfig(BaseModel):
     resources: list[Folder] = Field(default_factory=list)
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     azure_models: list[Deployment] = Field(default_factory=list)
+    azure_connections: list[AzureConnection] = Field(default_factory=list)
 
     @field_validator("project_doc_fallback_filenames")
     @classmethod
@@ -120,6 +135,14 @@ class RuntimeConfig(BaseModel):
         for group in (self.workspaces, self.skills, self.resources, self.mcp_servers):
             if len({x.id for x in group}) != len(group):
                 raise ValueError("Duplicate configuration IDs")
+        connection_ids = [x.id for x in self.azure_connections]
+        if "default" in connection_ids or len(set(connection_ids)) != len(connection_ids):
+            raise ValueError("Azure connection IDs must be unique; default is reserved")
+        model_ids = [x.selection_id for x in self.azure_models]
+        if len(set(model_ids)) != len(model_ids):
+            raise ValueError("Duplicate Azure model selection IDs; specify distinct id values")
+        if any(x.connection_id not in {*connection_ids, "default"} for x in self.azure_models):
+            raise ValueError("Unknown Azure connection ID")
         # Parent/child mounts would bypass same-workspace serialization.
         for i, folder in enumerate(self.workspaces):
             for other in self.workspaces[i + 1 :]:
@@ -131,6 +154,7 @@ class RuntimeConfig(BaseModel):
 
 
 class Settings(BaseSettings):
+    _credential_env: dict[str, str | None] = PrivateAttr(default_factory=dict)
     model_config = SettingsConfigDict(
         env_file=(str(ROOT / "backend/.env"), str(ROOT / ".env")), extra="ignore"
     )
@@ -154,6 +178,18 @@ class Settings(BaseSettings):
     max_output_chars: int = Field(default=64000, ge=1024)
     compact_token_threshold: int = Field(default=100000, ge=1000)
     max_upload_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
+
+    def __init__(self, **values):
+        env_files = values.get("_env_file", self.model_config["env_file"])
+        super().__init__(**values)
+        if isinstance(env_files, (str, Path)):
+            env_files = [env_files]
+        for path in env_files or []:
+            self._credential_env.update(dotenv_values(path))
+        self._credential_env.update(os.environ)
+
+    def credential_env(self, name):
+        return self._credential_env.get(name)
 
     @property
     def outbound_proxy_url(self):

@@ -6,8 +6,9 @@ import re
 from time import monotonic
 
 from app.attachments import direct_input, file_snapshot
-from app.model_catalog import models_for, pricing_for, validate_model
+from app.model_catalog import pricing_for, validate_model
 from app.openai_client import build_openai_client
+from app.provider_routes import ProviderRoutes
 from app.project_instructions import load_project_instructions
 from app.sandbox import Sandbox, command_time_limit, docker
 from app.storage import TERMINAL, now
@@ -49,30 +50,24 @@ class RunManager:
         self.clients = {}
         self.client_factory = client_factory
         self.sandbox_factory = sandbox_factory
+        self.routes = ProviderRoutes(settings, config, allow_unconfigured=bool(client_factory))
+        default = self.routes.azure["default"]
+        if self.routes.available(default):
+            self.store.bind_legacy_azure(default.base_url)
 
-    def client(self, provider):
-        if provider not in self.clients:
+    def client(self, provider, model):
+        route = self.routes.resolve(provider, model)
+        cache_key = (provider, route.connection.id)
+        if cache_key not in self.clients:
             if self.client_factory:
-                self.clients[provider] = self.client_factory(provider)
+                self.clients[cache_key] = self.client_factory(provider, route.connection.id)
             else:
-                key = (
-                    self.settings.openai_api_key
-                    if provider == "openai"
-                    else self.settings.azure_openai_api_key
-                )
-                if not key or (
-                    provider == "azure_openai"
-                    and not self.settings.azure_openai_endpoint
-                ):
-                    raise ValueError("Provider is not configured")
-                self.clients[provider] = build_openai_client(
+                self.clients[cache_key] = build_openai_client(
                     settings=self.settings,
-                    api_key=key,
-                    base_url=self.settings.azure_openai_base_url
-                    if provider == "azure_openai"
-                    else None,
+                    api_key=route.connection.api_key,
+                    base_url=route.connection.base_url,
                 )
-        return self.clients[provider]
+        return self.clients[cache_key]
 
     def select(self, entries, ids):
         mapping = {x.id: x for x in entries}
@@ -92,13 +87,23 @@ class RunManager:
         validate_model(
             request.provider, request.model, request.reasoning_effort, self.config
         )
-        if conversation["provider"] and conversation["provider"] != request.provider:
+        if (conversation["provider"] and conversation["provider"] != request.provider) or (
+            conversation["azure_connection_id"] and request.provider != "azure_openai"
+        ):
             raise ValueError("Create a new conversation to change provider")
+        if conversation["azure_connection_id"] and conversation["azure_endpoint"] is None:
+            raise ValueError("旧Azure接続先を解決できません。新規チャットを作成してください。")
+        route = self.routes.resolve(request.provider, request.model)
+        if request.provider == "azure_openai" and conversation["azure_connection_id"]:
+            if (conversation["azure_connection_id"], conversation["azure_endpoint"]) != (
+                route.connection.id, route.connection.base_url
+            ):
+                raise ValueError("Azure接続先が異なるか、旧接続先を解決できません。新規チャットを作成してください。")
         self.select(self.config.skills, request.skill_ids)
         self.select(self.config.resources, request.resource_ids)
         for mcp in self.select(self.config.mcp_servers, request.mcp_ids):
             mcp.tool()
-        self.client(request.provider)
+        self.client(request.provider, request.model)
         if not request.input.strip() and not request.attachment_ids:
             raise ValueError("Provide a message or attachments")
         if not set(request.direct_attachment_ids).issubset(request.attachment_ids):
@@ -116,13 +121,7 @@ class RunManager:
         configured = self.store.settings()
         available = []
         for provider in ("openai", "azure_openai"):
-            enabled = bool(self.client_factory) or (
-                bool(self.settings.openai_api_key)
-                if provider == "openai"
-                else bool(self.settings.azure_openai_api_key and self.settings.azure_openai_endpoint)
-            )
-            if enabled:
-                available.extend((provider, item) for item in models_for(provider, self.config))
+            available.extend((provider, item) for item in self.routes.models(provider))
         current = next(
             (
                 (provider, item)
@@ -185,12 +184,7 @@ class RunManager:
         return configured
 
     def validate_title_selection(self, provider, model):
-        enabled = bool(self.client_factory) or (
-            bool(self.settings.openai_api_key)
-            if provider == "openai"
-            else bool(self.settings.azure_openai_api_key and self.settings.azure_openai_endpoint)
-        )
-        if not enabled or not any(item["id"] == model for item in models_for(provider, self.config)):
+        if not any(item["id"] == model for item in self.routes.models(provider)):
             raise ValueError("Unsupported or unavailable title model")
 
     def record_usage(self, response_id, provider, model, kind, usage):
@@ -238,7 +232,9 @@ class RunManager:
 
     def start(self, request):
         self.validate(request)
-        run = self.store.create_run(request.model_dump())
+        route = self.routes.resolve(request.provider, request.model)
+        binding = (route.connection.id, route.connection.base_url) if request.provider == "azure_openai" else None
+        run = self.store.create_run(request.model_dump(), azure_binding=binding)
         if self.store.claim_title(request.conversation_id):
             title_task = asyncio.create_task(self.generate_title(run["id"], request))
             self.title_tasks.add(title_task)
@@ -273,8 +269,8 @@ class RunManager:
                 ]
                 source = "Attached files: " + ", ".join(names)
             async with asyncio.timeout(60):
-                response = await self.client(provider).responses.create(
-                    model=model,
+                response = await self.client(provider, model).responses.create(
+                    model=self.routes.resolve(provider, model).deployment,
                     input=source[:12000],
                     instructions=(
                         "Create a concise title that captures the user's task. Use the same language as the user. "
@@ -299,8 +295,8 @@ class RunManager:
             self.record_usage(
                 getattr(response, "id", ""), provider, model, "title", getattr(response, "usage", None)
             )
-        except Exception:
-            log.warning("Unable to generate title for conversation %s", request.conversation_id, exc_info=True)
+        except Exception as error:
+            log.warning("Unable to generate title for conversation %s: %s", request.conversation_id, self.redact(str(error)))
             title = fallback
         if self.store.finish_title(request.conversation_id, title):
             try:
@@ -385,8 +381,7 @@ class RunManager:
 
     def redact(self, text):
         for secret in [
-            self.settings.openai_api_key,
-            self.settings.azure_openai_api_key,
+            *self.routes.secrets(),
             *(
                 os.environ.get(m.authorization_env or "")
                 for m in self.config.mcp_servers
@@ -527,7 +522,8 @@ class RunManager:
     async def loop(
         self, rid, request, sandbox, skills, resources, project_instructions=None
     ):
-        client = self.client(request.provider)
+        client = self.client(request.provider, request.model)
+        deployment = self.routes.resolve(request.provider, request.model).deployment
         context = list(self.store.conversation(request.conversation_id)["context"])
         content = []
         if request.input:
@@ -578,7 +574,7 @@ class RunManager:
                     rid, "model_wait", "Organizing the context of a long conversation"
                 )
                 compacted = await client.responses.compact(
-                    model=request.model, input=context, instructions=instructions
+                    model=deployment, input=context, instructions=instructions
                 )
                 context = [jsonable(i) for i in compacted.output]
                 self.record_usage(
@@ -594,7 +590,7 @@ class RunManager:
             self.store.status(rid, "model_wait", "Deciding the next action")
             self.store.event(rid, "round", dict(number=round_index + 1))
             stream = await client.responses.create(
-                model=request.model,
+                model=deployment,
                 input=(
                     [project_instructions.message(), *context]
                     if project_instructions

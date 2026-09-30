@@ -7,6 +7,9 @@ export interface Model {
   model: string;
   label: string;
   efforts: string[];
+  deployment?: string;
+  connection_id?: string;
+  connection_label?: string;
 }
 export interface Provider extends Named {
   enabled: boolean;
@@ -45,6 +48,7 @@ export interface Conversation {
   title: string;
   workspace_id: string;
   provider?: string;
+  azure_connection_id?: string | null;
   updated_at: string;
 }
 export interface RunRequest {

@@ -146,10 +146,8 @@ def create_app(settings=None, manager_factory=RunManager):
                 dict(
                     id="azure_openai",
                     label="Azure OpenAI",
-                    enabled=bool(
-                        settings.azure_openai_api_key and settings.azure_openai_endpoint
-                    ),
-                    models=models_for("azure_openai", c),
+                    enabled=bool(app.state.manager.routes.models("azure_openai")),
+                    models=app.state.manager.routes.models("azure_openai"),
                 ),
             ],
             workspaces=[
@@ -195,20 +193,20 @@ def create_app(settings=None, manager_factory=RunManager):
     async def new_conversation(body: ConversationCreate):
         app.state.manager.select(app.state.config.workspaces, [body.workspace_id])
         c = app.state.store.create_conversation(body.workspace_id)
-        return {k: v for k, v in c.items() if k != "context"}
+        return {k: v for k, v in c.items() if k not in {"context", "azure_endpoint"}}
 
     @app.get("/api/conversations/{cid}")
     async def conversation(cid: str):
         c = app.state.store.conversation(cid)
         return {
-            **{k: v for k, v in c.items() if k != "context"},
+            **{k: v for k, v in c.items() if k not in {"context", "azure_endpoint"}},
             "runs": app.state.store.runs(cid),
         }
 
     @app.patch("/api/conversations/{cid}")
     async def update_conversation(cid: str, body: ConversationUpdate):
         c = app.state.store.pin_conversation(cid, body.pinned)
-        return {k: v for k, v in c.items() if k != "context"}
+        return {k: v for k, v in c.items() if k not in {"context", "azure_endpoint"}}
 
     @app.delete("/api/conversations/{cid}")
     async def delete_conversation(cid: str):

@@ -55,7 +55,8 @@ Docker Composeはイメージのビルド専用です (`docker compose --profile
 - `workspaces`: ID・表示名・絶対パス。相互に重なるディレクトリは禁止。APIキーやアプリ設定・状態を含むフォルダは登録しないでください。
 - `skills`: 外部で用意した標準 `SKILL.md` を含むフォルダ。front matterの `name` / `description` を読み、Responsesのlocal shellへ渡します。読み取り専用の `/skills/<id>` に配置します。
 - `resources`: 事前ダウンロードしたNLPモデルやデータ等。実行ごとに選択し、読み取り専用の `/resources/<id>` に配置します。
-- `azure_models`: `model` に実際のモデルID、`deployment` にAzureのデプロイ名を記載。UIの名前とAPIへ渡すデプロイ名を分離しています。
+- `azure_connections`: 接続先ID・表示名・Endpoint/APIキーの環境変数名を登録。実値は `.env` またはプロセス環境変数に保存します。
+- `azure_models`: `model` にモデルID、`deployment` にAzureのデプロイ名、`connection_id` に接続先IDを記載。任意の `id` はアプリの選択用IDで、省略時はデプロイ名を使います。選択用IDは全Azureモデルで一意にしてください。
 - `mcp_servers`: HTTPS URL、明示的な `allowed_tools`、任意の `authorization_env`。トークンはバックエンドの環境変数としてexportします。MCP実行はAPIの承認要求をチャットで許可／拒否します。
 - `project_doc_max_bytes`: ワークスペース直下から読み込むプロジェクト指示の最大バイト数。既定は32 KiBです。
 - `project_doc_fallback_filenames`: `AGENTS.override.md`、`AGENTS.md` がない場合に確認する代替ファイル名。パスではなくファイル名だけを指定します。
@@ -66,9 +67,45 @@ Remote MCPはプロバイダ側から接続されるため、ローカルの `lo
 
 ローカルShellではホスト型Skillsの `skill_reference` IDは使いません。標準Skills本体はユーザーが別途用意します。旧skill.yaml / skill.py のローダーや互換機能はありません。
 
-OpenAIの新規会話の標準モデルは `gpt-6-sol`、新規データベースでのタイトル生成の標準モデルは `gpt-6-luna` です。`gpt-6-astra` と GPT-5.6 系も引き続き選べます。推論の標準は `medium`。GPT-6 Sol/LunaとGPT-5.6 Sol/Terraは `none/low/medium/high/xhigh/max`、GPT-6 AstraとGPT-5.6 Lunaは `low/medium/high/xhigh/max` に対応します。既存会話のモデル履歴と保存済みタイトル生成設定は変更しません。
+OpenAIの新規会話の標準モデルは `gpt-6-sol`、新規データベースでのタイトル生成の標準モデルは `gpt-6-luna` です。`gpt-6.1-sol`、`gpt-6-astra` と GPT-5.6 系も選べます。推論の標準は `medium`。GPT-6 Sol/LunaとGPT-5.6 Sol/Terraは `none/low/medium/high/xhigh/max`、GPT-6.1 Sol・GPT-6 Astra・GPT-5.6 Lunaは `low/medium/high/xhigh/max` に対応します。既存会話のモデル履歴と保存済みタイトル生成設定は変更しません。
 
-Azure OpenAIでは `runtime.toml` の `azure_models` に登録したデプロイだけが会話・タイトル生成の選択肢に表示されます。GPT-6 Sol/LunaをAzureにデプロイしたら、`model = "gpt-6-sol"` または `model = "gpt-6-luna"` と実際の `deployment` 名を追加し、バックエンドを再起動してください。登録前はGPT-6を表示せず、Azureのタイトル生成に設定したGPT-5.6系デプロイは維持します。モデルの利用権限やAzureの対応状況は契約・デプロイに依存し、エラー時に別モデルへ自動切替しません。同じ会話内でのプロバイダ変更はできません。
+Azure OpenAIでは `runtime.toml` の `azure_models` に登録し、接続先のEndpointとAPIキーが設定されたデプロイだけが会話・タイトル生成の選択肢に表示されます。GPT-6 Astra・Sol・Lunaは対応済みです。新しいAzureリソースを使う場合は、以下のように接続先を登録して各デプロイに紐づけます。
+
+```toml
+[[azure_connections]]
+id = "gpt6"
+label = "GPT-6用Azure"
+endpoint_env = "AZURE_GPT6_ENDPOINT"
+api_key_env = "AZURE_GPT6_API_KEY"
+
+[[azure_models]]
+id = "gpt6-astra"
+model = "gpt-6-astra"
+deployment = "実際のAstraデプロイ名"
+connection_id = "gpt6"
+
+[[azure_models]]
+id = "gpt6-sol"
+model = "gpt-6-sol"
+deployment = "実際のSolデプロイ名"
+connection_id = "gpt6"
+
+[[azure_models]]
+id = "gpt6-luna"
+model = "gpt-6-luna"
+deployment = "実際のLunaデプロイ名"
+connection_id = "gpt6"
+```
+
+`.env` に `AZURE_GPT6_ENDPOINT=https://YOUR-RESOURCE.openai.azure.com/` と `AZURE_GPT6_API_KEY=...` を設定し、バックエンドを再起動してください。EndpointはリソースのルートURLまたは `/openai/v1/` までのHTTPS URLを指定します。モデルが別リソースにある場合は接続先をそれぞれ登録します。会話・タイトル生成・履歴圧縮は、選択したモデルの接続先と実際のデプロイ名を使用します。APIキーやEndpointの実値は画面/APIには返しません。
+
+任意名の環境変数も、プロセス環境変数 → ルート `.env` → `backend/.env` の順で優先します。認証情報不足の接続先は、そのモデルだけを選択肢から外し、必要な環境変数名をログに表示します。重複ID、不明な接続先、不正なEndpointは起動時の設定エラーになります。
+
+GPT-6.1 Solも、`model = "gpt-6.1-sol"` と実際のデプロイ名を `azure_models` に登録すれば利用できます。接続先の紐づけは他モデルと同じです。設定例は `runtime.example.toml` にあります。
+
+`connection_id` を省略した既存モデルは、従来の `AZURE_OPENAI_ENDPOINT` と `AZURE_OPENAI_API_KEY` を使う `default` 接続先になります。`default` は予約IDです。既存会話を継続するには従来Endpointを維持し、新リソースは別の接続先として追加してください。旧DBのAzure会話は初回移行時に `default` と従来Endpointへ紐づけます。
+
+最初のチャット実行で接続先を固定します。同じ接続先内ではモデルを変更できますが、接続先IDやEndpointが変わる場合は新規チャットが必要です。APIキーだけの更新は会話を継続できます。タイトル生成の接続先は会話とは独立し、有効な保存済み設定を維持します。モデルの利用権限やAzureの対応状況は契約・デプロイに依存し、エラー時に別モデルや接続先へ自動切替しません。同じ会話内でのプロバイダ変更はできません。
 
 ## 実行環境と添付
 

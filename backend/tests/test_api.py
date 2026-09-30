@@ -23,7 +23,7 @@ def app_client(tmp_path):
     app = create_app(
         settings,
         lambda s, c, st: RunManager(
-            s, c, st, client_factory=lambda _: client, sandbox_factory=FakeSandbox
+            s, c, st, client_factory=lambda *_: client, sandbox_factory=FakeSandbox
         ),
     )
     with TestClient(app) as http:

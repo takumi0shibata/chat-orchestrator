@@ -43,6 +43,48 @@ const event = (
 beforeEach(() => localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
 
+it.each([false, true])("shows Azure connection labels and filters a bound chat: %s", async (bound) => {
+  localStorage.setItem("workspace-conversation", "c");
+  const azureModels = [
+    { id: "old-luna", model: "gpt-5.6-luna", label: "GPT-5.6 Luna", efforts: ["medium"], connection_id: "default", connection_label: "既存Azure", deployment: "shared-name" },
+    { id: "old-astra", model: "gpt-6-astra", label: "GPT-6 Astra", efforts: ["medium"], connection_id: "default", connection_label: "既存Azure", deployment: "old-astra-actual" },
+    { id: "new-sol", model: "gpt-6-sol", label: "GPT-6 Sol", efforts: ["medium"], connection_id: "new", connection_label: "新リージョン", deployment: "shared-name" },
+    { id: "new-luna", model: "gpt-6-luna", label: "GPT-6 Luna", efforts: ["medium"], connection_id: "new", connection_label: "新リージョン", deployment: "new-luna-actual" },
+  ];
+  const conversation = { id: "c", workspace_id: "w", title: "Azure chat", updated_at: run.updated_at, azure_connection_id: bound ? "default" : null };
+  const previous = { ...run, request: { ...run.request, provider: "azure_openai", model: "old-luna" } };
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = String(input);
+    if (url === "/api/config") return new Response(JSON.stringify({
+      providers: [{ id: "azure_openai", label: "Azure OpenAI", enabled: true, models: azureModels }],
+      workspaces: [{ id: "w", label: "Work", path: "/work" }], skills: [], resources: [], mcp_servers: [],
+    }));
+    if (url === "/api/settings") return new Response(JSON.stringify({ title_provider: "azure_openai", title_model: "new-luna", theme_color: "#25262A" }));
+    if (url === "/api/conversations") return new Response(JSON.stringify([conversation]));
+    if (url === "/api/conversations/c") return new Response(JSON.stringify({ ...conversation, runs: bound ? [previous] : [] }));
+    if (url.includes("/events")) return new Response("");
+    if (url === "/api/runs/r") return new Response(JSON.stringify(previous));
+    return new Response(JSON.stringify([]));
+  });
+  render(<App />);
+  await screen.findByRole("textbox", { name: "Message" });
+  const model = screen.getByRole("button", { name: "Model" });
+  await waitFor(() => expect(model).toHaveTextContent("GPT-5.6 Luna · 既存Azure"));
+  fireEvent.click(model);
+  const options = screen.getAllByRole("option").map((option) => option.textContent);
+  expect(options).toEqual(bound
+    ? ["GPT-6 Astra · 既存Azure", "GPT-5.6 Luna · 既存Azure"]
+    : ["GPT-6 Astra · 既存Azure", "GPT-6 Sol · 新リージョン", "GPT-6 Luna · 新リージョン", "GPT-5.6 Luna · 既存Azure"]);
+  if (bound) expect(screen.getByText("別接続先のモデルは新規チャットで選択してください。")).toBeInTheDocument();
+  else expect(screen.queryByText("別接続先のモデルは新規チャットで選択してください。")).not.toBeInTheDocument();
+  fireEvent.keyDown(screen.getByRole("listbox", { name: "Model" }), { key: "Escape" });
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  const titles = screen.getByRole("combobox", { name: "Title model" }) as HTMLSelectElement;
+  expect(titles).toHaveValue("new-luna");
+  expect(Array.from(titles.options, (option) => option.value)).toEqual(["old-astra", "new-sol", "new-luna", "old-luna"]);
+  expect(titles.selectedOptions[0].textContent).toBe("GPT-6 Luna · 新リージョン · new-luna-actual");
+});
+
 describe("Run timeline", () => {
   it("copies the user message and the combined assistant Markdown", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -937,10 +979,12 @@ it("starts new conversations with GPT-6 Sol and offers registered Azure GPT-6 fo
         { id: "gpt-5.6-terra", model: "gpt-5.6-terra", label: "GPT-5.6 Terra", efforts: ["medium"] },
         { id: "gpt-5.6-luna", model: "gpt-5.6-luna", label: "GPT-5.6 Luna", efforts: ["medium"] },
         { id: "gpt-6-astra", model: "gpt-6-astra", label: "GPT-6 Astra", efforts: ["medium"] },
+        { id: "gpt-6.1-sol", model: "gpt-6.1-sol", label: "GPT-6.1 Sol", efforts: ["low", "medium", "high", "xhigh", "max"] },
       ] },
       { id: "azure_openai", label: "Azure OpenAI", enabled: true, models: [
         { id: "azure-old-luna", model: "gpt-5.6-luna", label: "GPT-5.6 Luna", efforts: ["medium"] },
         { id: "azure-new-luna", model: "gpt-6-luna", label: "GPT-6 Luna", efforts: ["none", "medium"] },
+        { id: "azure-sol-61", model: "gpt-6.1-sol", label: "GPT-6.1 Sol", efforts: ["low", "medium", "high", "xhigh", "max"] },
       ] },
     ],
     workspaces: [{ id: "w", label: "Work", path: "/work" }],
@@ -969,15 +1013,15 @@ it("starts new conversations with GPT-6 Sol and offers registered Azure GPT-6 fo
   const modelSelect = await screen.findByRole("button", { name: "Model" });
   await waitFor(() => expect(modelSelect).toHaveTextContent("GPT-6 Sol"));
   const expectedOrder = [
-    "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+    "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna",
     "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
   ];
   fireEvent.click(modelSelect);
   expect(Array.from(screen.getAllByRole("option"), (option) => option.textContent)).toEqual([
-    "GPT-6 Astra", "GPT-6 Sol", "GPT-6 Luna", "GPT-5.6 Sol", "GPT-5.6 Terra", "GPT-5.6 Luna",
+    "GPT-6 Astra", "GPT-6.1 Sol", "GPT-6 Sol", "GPT-6 Luna", "GPT-5.6 Sol", "GPT-5.6 Terra", "GPT-5.6 Luna",
   ]);
   expect(Array.from(screen.getByRole("listbox", { name: "Model" }).querySelectorAll("[data-model-icon]"), (icon) => icon.getAttribute("data-model-icon"))).toEqual([
-    "astra", "sol", "luna", "sol", "terra", "luna",
+    "astra", "sol", "sol", "luna", "sol", "terra", "luna",
   ]);
   fireEvent.keyDown(screen.getByRole("listbox", { name: "Model" }), { key: "Escape" });
   expect(screen.queryByRole("listbox", { name: "Model" })).not.toBeInTheDocument();
@@ -988,6 +1032,14 @@ it("starts new conversations with GPT-6 Sol and offers registered Azure GPT-6 fo
   ]);
   fireEvent.keyDown(screen.getByRole("listbox", { name: "Reasoning effort" }), { key: "Escape" });
 
+  fireEvent.click(modelSelect);
+  fireEvent.click(screen.getByRole("option", { name: "GPT-6.1 Sol" }));
+  fireEvent.click(screen.getByRole("button", { name: "Reasoning effort" }));
+  expect(Array.from(screen.getByRole("listbox", { name: "Reasoning effort" }).querySelectorAll('[role="option"]'), (option) => option.textContent)).toEqual([
+    "Light", "Medium", "High", "Extra High", "Max",
+  ]);
+  fireEvent.keyDown(screen.getByRole("listbox", { name: "Reasoning effort" }), { key: "Escape" });
+
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
   const titleModelSelect = screen.getByRole("combobox", { name: "Title model" });
   expect(titleModelSelect).toHaveValue("gpt-6-luna");
@@ -995,10 +1047,12 @@ it("starts new conversations with GPT-6 Sol and offers registered Azure GPT-6 fo
   fireEvent.change(screen.getByRole("combobox", { name: "Title provider" }), { target: { value: "azure_openai" } });
   await waitFor(() => expect(patches).toContainEqual({ title_provider: "azure_openai", title_model: "azure-old-luna" }));
   expect(Array.from((titleModelSelect as HTMLSelectElement).options, (option) => option.value)).toEqual([
-    "azure-new-luna", "azure-old-luna",
+    "azure-sol-61", "azure-new-luna", "azure-old-luna",
   ]);
   fireEvent.change(screen.getByRole("combobox", { name: "Title model" }), { target: { value: "azure-new-luna" } });
   await waitFor(() => expect(patches).toContainEqual({ title_provider: "azure_openai", title_model: "azure-new-luna" }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Title model" }), { target: { value: "azure-sol-61" } });
+  await waitFor(() => expect(patches).toContainEqual({ title_provider: "azure_openai", title_model: "azure-sol-61" }));
 });
 
 it("shows five recent chats per project and reveals ten more at a time", async () => {

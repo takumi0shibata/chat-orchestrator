@@ -41,7 +41,7 @@ def test_live_local_shell(tmp_path, model):
         manager = RunManager(settings, config, store)
         try:
             try:
-                await manager.client("openai").models.retrieve(model)
+                await manager.client("openai", model).models.retrieve(model)
             except (NotFoundError, PermissionDeniedError):
                 pytest.skip(f"{model} is not available to the configured API account")
             req = RunCreate(

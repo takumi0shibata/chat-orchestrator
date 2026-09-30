@@ -50,6 +50,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
 
 const MODEL_ORDER = [
   "gpt-6-astra",
+  "gpt-6.1-sol",
   "gpt-6-sol",
   "gpt-6-luna",
   "gpt-5.6-sol",
@@ -77,6 +78,10 @@ function modelFamilyIconName(model: string): ModelFamilyIconName | undefined {
 
 function reasoningEffortLabel(value: string) {
   return REASONING_EFFORT_LABELS[value] || value;
+}
+
+function modelDisplayLabel(model: Model) {
+  return model.connection_label ? `${model.label} · ${model.connection_label}` : model.label;
 }
 
 function orderedModels(models: Model[]): Model[] {
@@ -505,7 +510,7 @@ function SettingsPanel({
             const nextModel = nextProvider?.models[0]?.id;
             if (nextModel) void onChange({ title_provider: event.target.value, title_model: nextModel });
           }}>{config?.providers.map((item) => <option key={item.id} value={item.id} disabled={!item.enabled}>{item.label}{!item.enabled ? " (unavailable)" : ""}</option>)}</select></label>
-          <label>Model<select aria-label="Title model" value={settings.title_model} onChange={(event) => void onChange({ title_provider: settings.title_provider, title_model: event.target.value })}>{orderedModels(provider?.models || []).map((item) => <option key={item.id} value={item.id}>{item.label}{item.id !== item.model ? ` · ${item.id}` : ""}</option>)}</select></label>
+          <label>Model<select aria-label="Title model" value={settings.title_model} onChange={(event) => void onChange({ title_provider: settings.title_provider, title_model: event.target.value })}>{orderedModels(provider?.models || []).map((item) => <option key={item.id} value={item.id}>{modelDisplayLabel(item)}{item.id !== item.model ? ` · ${item.deployment || item.id}` : ""}</option>)}</select></label>
         </div>
       </div>
       <div className="settings-links">
@@ -860,7 +865,9 @@ export function App() {
   const active = Boolean(activeRun);
   const selectedProvider = config?.providers.find((p) => p.id === provider);
   const configReady = Boolean(config);
-  const models = selectedProvider?.models || [];
+  const providerModels = selectedProvider?.models || [];
+  const models = providerModels.filter((item) => provider !== "azure_openai" || !current?.azure_connection_id || item.connection_id === current.azure_connection_id);
+  const hasOtherConnections = provider === "azure_openai" && models.length < providerModels.length;
   const selectedModel = models.find((m) => m.id === model);
   const selectedTools = [
     ...(web ? [{ key: "web", label: "Web Search", icon: "globe" as const, remove: () => setWeb(false) }] : []),
@@ -1098,6 +1105,7 @@ export function App() {
       .then((c) => {
         if (abort.signal.aborted) return;
         setRuns(c.runs);
+        setConversations((old) => old.map((item) => item.id === c.id ? { ...item, azure_connection_id: c.azure_connection_id } : item));
         setLoadedCid(cid);
         if (c.runs.length) {
           const last = c.runs[c.runs.length - 1].request;
@@ -1297,6 +1305,9 @@ export function App() {
       if (selectedConversation.current !== submittingCid || runSubscription.current !== subscription) return;
       follow.current = true;
       setRuns((old) => old.some((run) => run.id === createdRun.id) ? old : [...old, createdRun]);
+      if (provider === "azure_openai" && selectedModel?.connection_id) {
+        setConversations((old) => old.map((item) => item.id === submittingCid ? { ...item, azure_connection_id: selectedModel.connection_id } : item));
+      }
       subscription?.start(createdRun);
       setInput("");
       setSkillMention(null);
@@ -1962,7 +1973,7 @@ export function App() {
                     value={model}
                     disabled={active}
                     className="model-select"
-                    options={orderedModels(models).map((m) => ({ value: m.id, label: m.label, icon: modelFamilyIconName(m.model) }))}
+                    options={orderedModels(models).map((m) => ({ value: m.id, label: modelDisplayLabel(m), icon: modelFamilyIconName(m.model) }))}
                     onChange={(value) => {
                       setModel(value);
                       setEffort("medium");
@@ -1998,6 +2009,7 @@ export function App() {
                 )}
               </div>
             </div>
+            {hasOtherConnections && <p className="composer-note">別接続先のモデルは新規チャットで選択してください。</p>}
             <p className="composer-note">Sandboxed: network access is disabled; only files in the mounted workspace can be modified.</p>
           </form>
         )}
