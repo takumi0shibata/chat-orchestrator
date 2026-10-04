@@ -1,5 +1,7 @@
 import asyncio
 import copy
+import json
+import shlex
 from types import SimpleNamespace as NS
 
 import pytest
@@ -138,6 +140,169 @@ def setup(tmp_path, outputs, provider="openai", sandbox=FakeSandbox, **settings)
         model="azure-astra" if provider == "azure_openai" else "gpt-5.6-sol",
     )
     return manager, store, client, request
+
+
+def run_environment(instructions):
+    return json.loads(instructions.split("Current run environment (metadata only): ", 1)[1])
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure_openai"])
+@pytest.mark.parametrize("host_system, host_os", [("Darwin", "macOS"), ("Linux", "Linux")])
+def test_fixed_sandbox_instructions_survive_rounds_and_compaction(
+    tmp_path, monkeypatch, provider, host_system, host_os
+):
+    monkeypatch.setattr("app.agent_runner.platform.system", lambda: host_system)
+
+    async def scenario():
+        manager, store, client, request = setup(
+            tmp_path, [[shell("ls")], [message()]], provider,
+            compact_token_threshold=1000,
+        )
+        workspace = tmp_path / "work space's 資料"
+        workspace.mkdir()
+        manager.config.workspaces[0].path = workspace.resolve()
+        client.tokens = 1100
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+
+        assert store.run(run["id"])["status"] == "completed"
+        assert len(client.calls) == 2
+        assert len(client.compacts) == 1
+        instructions = client.calls[0]["instructions"]
+        assert all(call["instructions"] == instructions for call in client.calls)
+        assert client.compacts[0]["instructions"] == instructions
+        for requirement in (
+            "even if the user requests changes",
+            "pip install", "brew install", "curl installers",
+            "online or offline",
+            "Host installs do not change the sandbox runtime",
+            "Never delegate environment changes, image rebuilds or unsupported computation",
+            "Use existing alternatives; if none suffice",
+            "Shell cannot access the internet, DNS or host network services",
+            "Do not download, probe, retry connectivity failures or repair networking",
+            "separate provider-side network path",
+            "you cannot control it or read its output",
+            "Request only inputs usable with installed tools",
+            "end with an explicit pending request",
+            "verify the actual files in /workspace",
+        ):
+            assert requirement in instructions
+        environment = run_environment(instructions)
+        assert environment["host_os"] == host_os
+        assert environment["host_workspace_path"] == str(workspace.resolve())
+        assert environment["sandbox_workspace_path"] == "/workspace"
+        assert shlex.split(environment["host_workspace_cd"]) == ["cd", str(workspace.resolve())]
+        assert environment["web_search_enabled"] is False
+        assert environment["remote_mcp_servers"] == []
+        assert environment["resource_directories"] == []
+        await manager.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure_openai"])
+def test_run_instructions_refresh_selected_external_tools_and_resources(
+    tmp_path, monkeypatch, provider
+):
+    token = "private-mcp-test-token"
+    monkeypatch.setenv("TEST_MCP_TOKEN", token)
+    selections = [
+        (False, False, False),
+        (True, False, True),
+        (False, True, False),
+        (True, True, True),
+        (False, False, False),
+    ]
+
+    async def scenario():
+        manager, _, client, request = setup(
+            tmp_path, [[message()] for _ in selections], provider,
+        )
+        manager.config.mcp_servers = [
+            MCPServer(
+                id="chosen", label="Chosen", url="https://chosen.example/mcp",
+                allowed_tools=["search", "fetch"], authorization_env="TEST_MCP_TOKEN",
+            ),
+            MCPServer(
+                id="unused", label="Unused", url="https://unused.example/mcp",
+                allowed_tools=["other"],
+            ),
+        ]
+        resources = tmp_path / "models"
+        resources.mkdir()
+        manager.config.resources = [Folder(id="models", label="Models", path=resources)]
+
+        for web_search, use_mcp, use_resources in selections:
+            request.web_search = web_search
+            request.mcp_ids = ["chosen"] if use_mcp else []
+            request.resource_ids = ["models"] if use_resources else []
+            run = manager.start(request)
+            await manager.tasks[run["id"]]
+            call = client.calls[-1]
+            environment = run_environment(call["instructions"])
+            assert environment["web_search_enabled"] is web_search
+            assert environment["remote_mcp_servers"] == (
+                [{"id": "chosen", "allowed_tools": ["search", "fetch"]}] if use_mcp else []
+            )
+            assert environment["resource_directories"] == (
+                ["/resources/models"] if use_resources else []
+            )
+            assert any(tool["type"] == "web_search" for tool in call["tools"]) is web_search
+            assert [tool["server_label"] for tool in call["tools"] if tool["type"] == "mcp"] == (
+                ["chosen"] if use_mcp else []
+            )
+            assert token not in call["instructions"]
+            assert "TEST_MCP_TOKEN" not in call["instructions"]
+            assert "https://chosen.example/mcp" not in call["instructions"]
+            assert "unused" not in call["instructions"]
+        await manager.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure_openai"])
+def test_input_handoff_ends_turn_and_next_run_can_read_shared_file(tmp_path, provider):
+    class InputSandbox(FakeSandbox):
+        def __init__(self, settings, workspace, *args):
+            super().__init__(settings, workspace, *args)
+            self.workspace = workspace.path
+
+        async def execute(self, command, emit, timeout):
+            assert command == "cat /workspace/data.csv"
+            self.commands.append(command)
+            output = (self.workspace / "data.csv").read_text()
+            await emit("stdout", output)
+            return dict(stdout=output, stderr="", outcome=dict(type="exit", exit_code=0))
+
+    async def scenario():
+        handoff = message()
+        handoff["content"][0]["text"] = "ホスト端末で共有フォルダに data.csv を取得し、完了を返信してください。入力待ちです。"
+        manager, store, client, request = setup(
+            tmp_path, [[handoff], [shell("cat /workspace/data.csv")], [message()]],
+            provider, sandbox=InputSandbox,
+        )
+        request.input = "外部のCSVを取得して分析してください"
+        first = manager.start(request)
+        await manager.tasks[first["id"]]
+        assert store.run(first["id"])["status"] == "completed"
+        assert FakeSandbox.instances[-1].closed
+        assert FakeSandbox.instances[-1].commands == []
+        assert store.conversation(request.conversation_id)["context"][-1] == handoff
+
+        # The user's host download appears in the shared directory between runs.
+        contents = "value\n42\n"
+        (manager.config.workspaces[0].path / "data.csv").write_text(contents)
+        request.input = "取得しました。続けてください"
+        second = manager.start(request)
+        await manager.tasks[second["id"]]
+        assert store.run(second["id"])["status"] == "completed"
+        assert handoff in client.calls[1]["input"]
+        assert client.calls[1]["input"][-1]["content"][0]["text"] == request.input
+        assert client.calls[2]["input"][-1]["output"][0]["stdout"] == contents
+        assert FakeSandbox.instances[-1].closed
+        await manager.shutdown()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure_openai"])
