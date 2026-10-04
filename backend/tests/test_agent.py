@@ -186,6 +186,137 @@ def test_compaction(tmp_path):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("provider", ["openai", "azure_openai"])
+@pytest.mark.parametrize("restart", [False, True])
+def test_compaction_between_completed_turns(tmp_path, provider, restart):
+    async def scenario():
+        manager, store, client, request = setup(
+            tmp_path, [[message()], [message()], [message()]], provider,
+            compact_token_threshold=1000,
+        )
+        client.tokens = 1100
+        first = manager.start(request)
+        await manager.tasks[first["id"]]
+        await asyncio.gather(*manager.title_tasks)
+        assert client.compacts == []
+        assert store.context_tokens(request.conversation_id) == 1100
+
+        if restart:
+            await manager.shutdown()
+            store = Store(manager.settings.data_dir)
+            manager = RunManager(
+                manager.settings, manager.config, store,
+                client_factory=lambda *_: client, sandbox_factory=FakeSandbox,
+            )
+        client.tokens = 10
+        request.input = "追加の質問"
+        second = manager.start(request)
+        await manager.tasks[second["id"]]
+        assert store.run(second["id"])["status"] == "completed"
+        assert len(client.compacts) == 1
+        assert client.compacts[0]["model"] == request.model
+        assert message() in client.compacts[0]["input"]
+        assert client.compacts[0]["input"][-1]["content"][0]["text"] == request.input
+        assert client.calls[1]["input"][0]["type"] == "compaction"
+
+        third = manager.start(request)
+        await manager.tasks[third["id"]]
+        assert len(client.compacts) == 1
+        assert len(client.title_calls) == 1
+    asyncio.run(scenario())
+
+
+def test_compacted_context_is_not_compacted_again_after_api_failure(tmp_path):
+    async def scenario():
+        manager, store, client, request = setup(
+            tmp_path, [[message()], [message()]], compact_token_threshold=1000
+        )
+        client.tokens = 1100
+        first = manager.start(request)
+        await manager.tasks[first["id"]]
+        await asyncio.gather(*manager.title_tasks)
+
+        original_create = client.create
+        async def fail(**kwargs):
+            raise RuntimeError("Model unavailable after compaction")
+        client.create = fail
+        second = manager.start(request)
+        await manager.tasks[second["id"]]
+        assert store.run(second["id"])["status"] == "failed"
+        assert len(client.compacts) == 1
+        assert store.context_tokens(request.conversation_id) == 20
+
+        await manager.shutdown()
+        client.create, client.tokens = original_create, 10
+        manager = RunManager(
+            manager.settings, manager.config, Store(manager.settings.data_dir),
+            client_factory=lambda *_: client, sandbox_factory=FakeSandbox,
+        )
+        third = manager.start(request)
+        await manager.tasks[third["id"]]
+        assert manager.store.run(third["id"])["status"] == "completed"
+        assert len(client.compacts) == 1
+        assert client.calls[-1]["input"][0]["type"] == "compaction"
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure_openai"])
+def test_configured_output_token_limits(tmp_path, provider):
+    async def scenario():
+        manager, store, client, request = setup(
+            tmp_path, [[message()]], provider,
+            max_model_output_tokens=8192, max_title_output_tokens=512,
+        )
+        store.update_settings(title_provider=provider, title_model=request.model)
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        await asyncio.gather(*manager.title_tasks)
+        assert client.calls[0]["max_output_tokens"] == 8192
+        assert client.title_calls[0]["max_output_tokens"] == 512
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("event_type", ["response.incomplete", "response.failed"])
+def test_interrupted_response_records_usage_and_preserves_partial_output(tmp_path, event_type):
+    class InterruptedStream(Stream):
+        async def __aiter__(self):
+            yield NS(type="response.output_text.delta", delta="途中の回答", item_id="partial")
+            yield NS(
+                type=event_type,
+                response=NS(
+                    id="interrupted_response", output=[],
+                    usage={"input_tokens": 100, "output_tokens": 64},
+                    incomplete_details={"reason": "max_output_tokens"},
+                ),
+            )
+
+    async def scenario():
+        manager, store, client, request = setup(
+            tmp_path, [], max_model_output_tokens=64
+        )
+        original_create = client.create
+        stream = InterruptedStream([])
+        async def create(**kwargs):
+            if not kwargs.get("stream"):
+                return await original_create(**kwargs)
+            client.calls.append(copy.deepcopy(kwargs))
+            return stream
+        client.create = create
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        await asyncio.gather(*manager.title_tasks)
+        assert store.run(run["id"])["status"] == "failed"
+        assert len(client.calls) == 1
+        assert stream.closed
+        assert "途中の回答" in str(store.conversation(request.conversation_id)["context"])
+        with store.connect() as connection:
+            usage = connection.execute(
+                "SELECT input_tokens,output_tokens FROM llm_costs WHERE response_id='interrupted_response'"
+            ).fetchone()
+        assert tuple(usage) == (100, 64)
+    asyncio.run(scenario())
+
+
 def test_project_instructions_are_reloaded_without_persisting(tmp_path):
     async def scenario():
         m, store, c, req = setup(

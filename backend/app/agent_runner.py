@@ -278,6 +278,7 @@ class RunManager:
                         "Aim for at most 30 Japanese characters or 8 words."
                     ),
                     reasoning={"effort": "low"},
+                    max_output_tokens=self.settings.max_title_output_tokens,
                     store=False,
                 )
             raw = getattr(response, "output_text", "") or ""
@@ -567,7 +568,10 @@ class RunManager:
         ]
         if request.web_search:
             tools.append(dict(type="web_search"))
-        needs_compact = False
+        needs_compact = (
+            self.store.context_tokens(request.conversation_id)
+            >= self.settings.compact_token_threshold
+        )
         for round_index in range(self.settings.max_model_rounds):
             if needs_compact:
                 self.store.status(
@@ -577,15 +581,17 @@ class RunManager:
                     model=deployment, input=context, instructions=instructions
                 )
                 context = [jsonable(i) for i in compacted.output]
+                compact_usage = jsonable(getattr(compacted, "usage", None)) or {}
                 self.record_usage(
                     getattr(compacted, "id", ""), request.provider, request.model,
-                    "compaction", getattr(compacted, "usage", None),
+                    "compaction", compact_usage,
+                )
+                self.store.event(
+                    rid, "compaction",
+                    dict(label="Conversation context compacted", usage=compact_usage),
                 )
                 self.store.save_context(
                     request.conversation_id, context, request.provider, request.model, rid=rid
-                )
-                self.store.event(
-                    rid, "compaction", dict(label="Conversation context compacted")
                 )
             self.store.status(rid, "model_wait", "Deciding the next action")
             self.store.event(rid, "round", dict(number=round_index + 1))
@@ -601,6 +607,7 @@ class RunManager:
                 store=False,
                 include=["reasoning.encrypted_content"],
                 reasoning={"effort": request.reasoning_effort},
+                max_output_tokens=self.settings.max_model_output_tokens,
                 stream=True,
             )
             response = None
@@ -692,6 +699,13 @@ class RunManager:
                     elif kind == "response.completed":
                         response = event.response
                     elif kind in ("response.failed", "response.incomplete", "error"):
+                        interrupted = getattr(event, "response", None)
+                        if interrupted is not None:
+                            self.record_usage(
+                                getattr(interrupted, "id", ""),
+                                request.provider, request.model, "response",
+                                getattr(interrupted, "usage", None),
+                            )
                         raise RuntimeError(
                             "Responses API did not complete: "
                             + self.redact(str(jsonable(event)))[:2000]

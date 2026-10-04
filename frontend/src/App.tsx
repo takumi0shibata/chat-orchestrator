@@ -558,10 +558,11 @@ function Choices({
   );
 }
 
-function WorkGroup({ actions, timeline, status }: {
+function WorkGroup({ actions, timeline, status, active }: {
   actions: AgentEvent[];
   timeline: AgentEvent[];
   status: string;
+  active: boolean;
 }) {
   const category = (action: AgentEvent) => action.type === "command" ? "command" :
     action.type === "approval" ? "approval" :
@@ -572,21 +573,34 @@ function WorkGroup({ actions, timeline, status }: {
     event.data.index === action.data.index);
   const toolResult = (action: AgentEvent) => timeline.find((event) =>
     event.type === "tool_result" && event.data.id === action.data.id);
+  const runningCommand = !terminal(status) ? [...actions].reverse().find((action) =>
+    action.type === "command" && !commandDone(action)) : undefined;
   const labels = categories.map((kind) => {
     const matching = actions.filter((action) => category(action) === kind);
-    if (kind === "command") return matching.some((action) => !commandDone(action)) && !terminal(status)
-      ? "Running commands" : "Ran commands";
-    if (kind === "web") return matching.some((action) => !toolResult(action)) && !terminal(status)
-      ? "Searching web" : "Searched web";
-    if (kind === "tool") return matching.some((action) => !toolResult(action)) && !terminal(status)
-      ? "Using external tools" : "Used external tools";
-    return "Requested approval";
+    const running = !terminal(status) && matching.some((action) =>
+      kind === "command" ? !commandDone(action) : kind !== "approval" && !toolResult(action));
+    const label = kind === "command" ? (running ? "Running commands" : "Ran commands") :
+      kind === "web" ? (running ? "Searching web" : "Searched web") :
+        kind === "tool" ? (running ? "Using external tools" : "Used external tools") : "Requested approval";
+    return { kind, label, running };
   });
   return (
     <details className="work-group">
       <summary>
         <span className="work-chevron" aria-hidden="true"><Icon name="chevron-right" size={14} /></span>
-        <span>{labels.join(", ")}</span>
+        <span className="work-summary-content">
+          {labels.map(({ kind, label, running }, index) => (
+            <span key={kind}>
+              {index > 0 && ", "}
+              <span className={active && running ? "activity-shimmer" : undefined}>{label}</span>
+            </span>
+          ))}
+          {runningCommand && (
+            <span className="work-command-preview" title={text(runningCommand.data.command)}>
+              {" "}{text(runningCommand.data.command).replace(/\s+/g, " ").trim()}
+            </span>
+          )}
+        </span>
       </summary>
       <div className="work-details">
         {actions.map((action) => {
@@ -674,6 +688,7 @@ export function RunView({
           r.type === "approval_resolved" && r.data.request_id === e.data.id,
       ),
   );
+  const active = !terminal(run.status) && run.status !== "approval_wait" && approvals.length === 0;
   const seconds = Math.max(
     0,
     Math.round(
@@ -724,7 +739,7 @@ export function RunView({
                 <MarkdownContent conversationId={run.conversation_id} content={entry.block.content} />
               </div>
             ) : (
-              <WorkGroup key={entry.seq} actions={entry.actions} timeline={timeline} status={run.status} />
+              <WorkGroup key={entry.seq} actions={entry.actions} timeline={timeline} status={run.status} active={active} />
             ))}
           </div>
         </details>

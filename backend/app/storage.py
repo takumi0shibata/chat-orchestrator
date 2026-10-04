@@ -169,6 +169,26 @@ class Store:
                     (rid, rid),
                 )
 
+    def context_tokens(self, cid):
+        """Last model-reported context size, across runs and process restarts."""
+        with self.connect() as c:
+            row = c.execute(
+                """SELECT e.type,e.data FROM events e
+                   JOIN runs r ON r.id=e.run_id
+                   LEFT JOIN run_context_state s ON s.run_id=r.id
+                   WHERE r.conversation_id=? AND e.type IN ('response','compaction')
+                     AND (s.run_id IS NULL OR e.seq<=s.checkpoint_seq)
+                   ORDER BY r.created_at DESC,e.seq DESC LIMIT 1""",
+                (cid,),
+            ).fetchone()
+        if not row:
+            return 0
+        usage = json.loads(row["data"]).get("usage") or {}
+        # Compact output replaces the old window; its input is no longer replayed.
+        return int(usage.get("output_tokens") or 0) + (
+            int(usage.get("input_tokens") or 0) if row["type"] == "response" else 0
+        )
+
     def preserve_interrupted_context(self, rid):
         """Keep a safe checkpoint plus a journal, never unpaired tool calls.
 

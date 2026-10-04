@@ -1494,6 +1494,42 @@ h2 {
   color: #6e6f75;
 }
 .activity .work-group > summary:hover { color: #35373c; }
+.work-chevron { flex-shrink: 0; }
+.work-summary-content {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.work-command-preview {
+  margin-left: 8px;
+  color: #85878f;
+}
+
+/* A bright, broad sheen crosses active tool labels from left to right. */
+.activity-shimmer { color: #484b54; }
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  .activity-shimmer {
+    background-image: linear-gradient(100deg, currentColor 32%, #bfc2cd 44%, #f4f5f7 50%, #bfc2cd 56%, currentColor 68%);
+    background-size: 250% 100%;
+    background-position: 100% 0;
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: activity-shimmer 1.8s linear infinite;
+  }
+}
+@keyframes activity-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
+}
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+  .activity-shimmer {
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}
 
 /* Code block toolbar: language metadata stays outside the copied code. */
 .code-wrap {

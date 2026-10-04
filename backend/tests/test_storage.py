@@ -38,6 +38,23 @@ def test_connection_rolls_back_and_closes_on_error(tmp_path):
         assert reader.execute("SELECT COUNT(*) FROM test_values").fetchone()[0] == 0
 
 
+def test_context_tokens_use_only_checkpointed_response_or_compaction(tmp_path):
+    store = Store(tmp_path)
+    cid = store.create_conversation("work")["id"]
+    run = store.create_run({"conversation_id": cid, "input": "test"})
+    rid = run["id"]
+    assert store.context_tokens(cid) == 0
+    store.event(rid, "response", {"usage": {"input_tokens": 900, "output_tokens": 150}})
+    store.save_context(cid, [], "openai", "gpt-6-sol", rid=rid)
+    # A response whose tools never completed is not part of the saved context.
+    store.event(rid, "response", {"usage": {"input_tokens": 99999, "output_tokens": 1}})
+    assert Store(tmp_path).context_tokens(cid) == 1050
+
+    store.event(rid, "compaction", {"usage": {"input_tokens": 1050, "output_tokens": 80}})
+    store.save_context(cid, [], "openai", "gpt-6-sol", rid=rid)
+    assert Store(tmp_path).context_tokens(cid) == 80
+
+
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX file descriptor limits")
 def test_repeated_event_polling_does_not_exhaust_file_descriptors(tmp_path):
     # Isolate the descriptor limit and disabled GC from the pytest process.

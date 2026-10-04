@@ -175,6 +175,8 @@ class Settings(BaseSettings):
     command_timeout_min: int = Field(default=60, ge=1)
     run_timeout: int = Field(default=3600, ge=1)
     max_model_rounds: int = Field(default=100, ge=1)
+    max_model_output_tokens: int = Field(default=32768, ge=1)
+    max_title_output_tokens: int = Field(default=1024, ge=1)
     max_output_chars: int = Field(default=64000, ge=1024)
     compact_token_threshold: int = Field(default=100000, ge=1000)
     max_upload_bytes: int = Field(default=50 * 1024 * 1024, ge=1)

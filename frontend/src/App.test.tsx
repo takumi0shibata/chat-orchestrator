@@ -434,6 +434,7 @@ it("closes Activity at final-answer start and streams the answer outside it", as
   const { container, rerender } = render(<RunView run={{ ...run, status: "model_wait" }} timeline={initial} onApproval={vi.fn()} />);
   const details = container.querySelector("details")!;
   expect(details).toHaveAttribute("open");
+  expect(container.querySelector(".activity-label")).not.toHaveClass("activity-shimmer");
   expect(container.querySelector(".activity-message")).toHaveTextContent("Checking files");
   expect(container.querySelector(".answer-block")).toBeNull();
   fireEvent.click(details.querySelector("summary")!);
@@ -446,6 +447,9 @@ it("closes Activity at final-answer start and streams the answer outside it", as
   const work = container.querySelector("details.work-group")!;
   expect(work).not.toHaveAttribute("open");
   expect(work).toHaveTextContent("Running commands");
+  expect(work.querySelector("summary .work-command-preview")).toHaveTextContent("npm test");
+  expect(screen.getByText("Running commands")).toHaveClass("activity-shimmer");
+  expect(container.querySelector(".activity-label")).not.toHaveClass("activity-shimmer");
   fireEvent.click(details.querySelector("summary")!);
   expect(details).toHaveAttribute("open");
 
@@ -453,6 +457,9 @@ it("closes Activity at final-answer start and streams the answer outside it", as
     event(6, "round", { number: 2 }), event(7, "message_phase", { item_id: "b", round: 2, phase: "final_answer" })];
   rerender(<RunView run={{ ...run, status: "model_wait" }} timeline={beforeAnswer} onApproval={vi.fn()} />);
   await waitFor(() => expect(details).not.toHaveAttribute("open"));
+  expect(container.querySelector(".activity-label")).not.toHaveClass("activity-shimmer");
+  expect(screen.getByText("Ran commands")).not.toHaveClass("activity-shimmer");
+  expect(work.querySelector(".work-command-preview")).toBeNull();
   expect(container.querySelector(".answer-block")).toBeNull();
   const streaming = [...beforeAnswer, event(8, "text_delta", { item_id: "b", round: 2, text: "**Final" })];
   rerender(<RunView run={{ ...run, status: "model_wait" }} timeline={streaming} onApproval={vi.fn()} />);
@@ -466,6 +473,83 @@ it("closes Activity at final-answer start and streams the answer outside it", as
   rerender(<RunView run={run} timeline={finished} onApproval={vi.fn()} />);
   expect(details).toHaveAttribute("open");
   expect(container.querySelector(".answer-block strong")).toHaveTextContent("Final result");
+  expect(container.querySelectorAll(".activity-shimmer")).toHaveLength(0);
+});
+
+it("highlights only pending categories in a mixed work group", () => {
+  const timeline = [
+    event(1, "command", { call_id: "done", index: 0, command: "pwd" }),
+    event(2, "command_done", { call_id: "done", index: 0 }),
+    event(3, "tool", { id: "web", type: "web_search_call" }),
+    event(4, "tool", { id: "mcp", type: "mcp_call", name: "lookup" }),
+  ];
+  const { container, rerender } = render(<RunView run={{ ...run, status: "model_wait" }} timeline={timeline} onApproval={vi.fn()} />);
+  expect(screen.getByText("Ran commands")).not.toHaveClass("activity-shimmer");
+  expect(screen.getByText("Searching web")).toHaveClass("activity-shimmer");
+  expect(screen.getByText("Using external tools")).toHaveClass("activity-shimmer");
+  expect(container.querySelector(".activity-body")).toHaveTextContent("Ran commands, Searching web, Using external tools");
+
+  rerender(<RunView run={{ ...run, status: "model_wait" }} timeline={[...timeline,
+    event(5, "tool_result", { id: "web", status: "completed" }),
+    event(6, "tool_result", { id: "mcp", output: "record" }),
+    event(7, "round", { number: 2 }),
+  ]} onApproval={vi.fn()} />);
+  expect(screen.getByText("Searched web")).not.toHaveClass("activity-shimmer");
+  expect(screen.getByText("Used external tools")).not.toHaveClass("activity-shimmer");
+  expect(container.querySelector(".activity-label")).not.toHaveClass("activity-shimmer");
+});
+
+it("pauses highlights for approval events or approval status and resumes after resolution", () => {
+  const timeline = [event(1, "command", { call_id: "call", index: 0, command: "npm test" })];
+  const { container, rerender } = render(<RunView run={{ ...run, status: "preparing" }} timeline={[]} onApproval={vi.fn()} />);
+  expect(container.querySelector(".activity-label")).not.toHaveClass("activity-shimmer");
+  rerender(<RunView run={{ ...run, status: "approval_wait" }} timeline={timeline} onApproval={vi.fn()} />);
+  expect(container.querySelectorAll(".activity-shimmer")).toHaveLength(0);
+  const waiting = [...timeline, event(2, "approval", { id: "approval", name: "lookup" })];
+  rerender(<RunView run={{ ...run, status: "model_wait" }} timeline={waiting} onApproval={vi.fn()} />);
+  expect(container.querySelectorAll(".activity-shimmer")).toHaveLength(0);
+  rerender(<RunView run={{ ...run, status: "command_running" }} timeline={[...waiting,
+    event(3, "approval_resolved", { request_id: "approval" }),
+  ]} onApproval={vi.fn()} />);
+  expect(container.querySelector(".activity-label")).not.toHaveClass("activity-shimmer");
+  expect(screen.getByText("Running commands")).toHaveClass("activity-shimmer");
+  expect(screen.getByText("Requested approval")).not.toHaveClass("activity-shimmer");
+});
+
+it.each(["completed", "failed", "stopped"])("removes all highlights on %s even with unmatched operations", (status) => {
+  const timeline = [event(1, "command", { call_id: "call", index: 0, command: "npm test" }),
+    event(2, "tool", { id: "web", type: "web_search_call" })];
+  const { container, rerender } = render(<RunView run={{ ...run, status: "command_running" }} timeline={timeline} onApproval={vi.fn()} />);
+  expect(container.querySelectorAll(".activity-shimmer")).toHaveLength(2);
+  rerender(<RunView run={{ ...run, status }} timeline={timeline} onApproval={vi.fn()} />);
+  expect(container.querySelectorAll(".activity-shimmer")).toHaveLength(0);
+  expect(container.querySelector(".work-command-preview")).toBeNull();
+});
+
+it("previews the latest unfinished command on one line and retains the full command in its tooltip", () => {
+  const command = "python -m pytest\n  --verbose\tbackend/tests/test_api.py";
+  const timeline = [
+    event(1, "command", { call_id: "batch", index: 0, command: "pwd" }),
+    event(2, "command", { call_id: "batch", index: 1, command }),
+    event(3, "command", { call_id: "other", index: 0, command: "ls" }),
+    event(4, "command_done", { call_id: "other", index: 0 }),
+  ];
+  const { container, rerender } = render(<RunView run={{ ...run, status: "command_running" }} timeline={timeline} onApproval={vi.fn()} />);
+  const group = container.querySelector(".work-group")!;
+  expect(group).not.toHaveAttribute("open");
+  expect(group.querySelector("summary .work-command-preview")).toHaveTextContent("python -m pytest --verbose backend/tests/test_api.py");
+  expect(group.querySelector(".work-command-preview")).toHaveAttribute("title", command);
+  // Completing a different index must not hide another command from the same call.
+  rerender(<RunView run={{ ...run, status: "command_running" }} timeline={[...timeline,
+    event(5, "command_done", { call_id: "batch", index: 1 }),
+  ]} onApproval={vi.fn()} />);
+  expect(group.querySelector(".work-command-preview")).toHaveTextContent("pwd");
+  rerender(<RunView run={{ ...run, status: "model_wait" }} timeline={[...timeline,
+    event(5, "command_done", { call_id: "batch", index: 1 }),
+    event(6, "command_done", { call_id: "batch", index: 0 }),
+  ]} onApproval={vi.fn()} />);
+  expect(group.querySelector(".work-command-preview")).toBeNull();
+  expect(container.querySelectorAll(".activity-shimmer")).toHaveLength(0);
 });
 
 it("shows one expandable work line per report interval without process noise", () => {
