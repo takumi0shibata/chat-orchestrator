@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 from app.config import Folder, Settings, Skill
-from app.sandbox import Sandbox, docker
+from app.sandbox import CommandTimeoutError, Sandbox, docker
 
 pytestmark = [
     pytest.mark.docker,
@@ -127,8 +127,9 @@ def test_timeout_removes_container_and_descendants(tmp_path):
             tmp_path / "input",
         )
         await sandbox.start()
-        with pytest.raises(TimeoutError):
+        with pytest.raises(CommandTimeoutError) as error:
             await sandbox.execute("sleep 100 & wait", emit)
+        assert error.value.timeout_seconds == 1
         with pytest.raises(RuntimeError):
             await docker("inspect", sandbox.name)
         await sandbox.close()
@@ -136,7 +137,45 @@ def test_timeout_removes_container_and_descendants(tmp_path):
     asyncio.run(scenario())
 
 
-def test_cancel_removes_container(tmp_path):
+def test_recursive_search_skips_generated_directories_and_symlinks(tmp_path):
+    async def scenario():
+        generated = [".venv", "venv", "node_modules", ".git", "__pycache__", ".pytest_cache", ".ruff_cache"]
+        for name in generated:
+            directory = tmp_path / name
+            directory.mkdir()
+            (directory / "dependency.py").write_text("target_summary = 'dependency'\n")
+        # grep -R follows host environment links and can block on special files.
+        (tmp_path / ".venv" / "python").symlink_to("/missing-host-python")
+        os.mkfifo(tmp_path / ".venv" / "blocked")
+        source = tmp_path / "src"
+        source.mkdir()
+        (source / "analysis.py").write_text("target_summary = 'source'\n")
+        sandbox = Sandbox(
+            Settings(_env_file=None, command_timeout=5),
+            Folder(id="w", label="w", path=tmp_path),
+            uuid4().hex, [], [], tmp_path / "input",
+        )
+        await sandbox.start()
+        try:
+            excludes = ",".join(generated)
+            commands = [
+                f"rg --hidden --no-ignore -n -g '*.py' -g '!{{{excludes}}}/**' target_summary .",
+                f"grep -rI --devices=skip --exclude-dir={{{excludes}}} -n target_summary .",
+            ]
+            for command in commands:
+                result = await sandbox.execute(command, emit)
+                assert result["outcome"]["exit_code"] == 0, result
+                assert "src/analysis.py:1:target_summary = 'source'" in result["stdout"]
+                assert "dependency" not in result["stdout"]
+                assert result["stderr"] == ""
+        finally:
+            await sandbox.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mode", ["stop", "run_timeout"])
+def test_cancel_removes_container(tmp_path, mode):
     async def scenario():
         sandbox = Sandbox(
             Settings(_env_file=None),
@@ -147,11 +186,17 @@ def test_cancel_removes_container(tmp_path):
             tmp_path / "input",
         )
         await sandbox.start()
-        task = asyncio.create_task(sandbox.execute("sleep 100 & wait", emit))
-        await asyncio.sleep(0.5)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        if mode == "stop":
+            task = asyncio.create_task(sandbox.execute("sleep 100 & wait", emit))
+            await asyncio.sleep(0.5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            with pytest.raises(TimeoutError) as error:
+                async with asyncio.timeout(0.5):
+                    await sandbox.execute("sleep 100 & wait", emit)
+            assert not isinstance(error.value, CommandTimeoutError)
         with pytest.raises(RuntimeError):
             await docker("inspect", sandbox.name)
 

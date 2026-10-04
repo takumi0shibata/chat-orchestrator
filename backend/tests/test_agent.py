@@ -6,6 +6,7 @@ import pytest
 from app.agent_runner import RunManager
 from app.config import Deployment, Folder, MCPServer, RuntimeConfig, Settings
 from app.schemas import Approval, RunCreate
+from app.sandbox import CommandTimeoutError
 from app.storage import Store
 
 
@@ -634,7 +635,7 @@ def test_failed_run_preserves_instruction_and_partial_history(tmp_path, failure)
         async def execute(self, command, emit, timeout):
             if command == "slow":
                 await emit("stdout", "partial write")
-                raise TimeoutError()
+                raise CommandTimeoutError(timeout)
             return await super().execute(command, emit, timeout)
 
     async def scenario():
@@ -702,7 +703,7 @@ def test_short_model_timeout_is_clamped_and_logged(tmp_path):
     class CaptureTimeout(FakeSandbox):
         async def execute(self, command, emit, timeout):
             assert timeout == 60
-            raise TimeoutError()
+            raise CommandTimeoutError(timeout)
     async def scenario():
         call = shell("find .")
         call["action"]["timeout_ms"] = 10000
@@ -714,6 +715,66 @@ def test_short_model_timeout_is_clamped_and_logged(tmp_path):
         assert command["timeout_seconds"] == 60
         assert command["requested_timeout_ms"] == 10000
         assert done["outcome"]["timeout_seconds"] == 60
+        error = next(e["data"] for e in store.events(run["id"]) if e["type"] == "error")
+        assert error["scope"] == "command"
+        assert error["timeout_seconds"] == 60
+        assert "60s" in error["message"]
+        assert "3600" not in error["message"]
+        assert "Command time limit reached" in str(store.conversation(req.conversation_id)["context"])
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stage", ["startup", "model"])
+def test_operation_timeout_is_not_reported_as_run_timeout(tmp_path, stage):
+    class StartupTimeout(FakeSandbox):
+        async def start(self):
+            raise TimeoutError("Docker startup timed out after 60s")
+
+    async def scenario():
+        manager, store, client, request = setup(
+            tmp_path, [[message()]],
+            sandbox=StartupTimeout if stage == "startup" else FakeSandbox,
+        )
+        if stage == "model":
+            async def create(**kwargs):
+                raise TimeoutError("Model request timed out")
+            client.create = create
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        assert store.run(run["id"])["status"] == "failed"
+        error = next(e["data"] for e in store.events(run["id"]) if e["type"] == "error")
+        assert error["scope"] == "operation"
+        assert "3600" not in error["message"]
+        assert ("Docker startup" if stage == "startup" else "Model request") in error["message"]
+        assert FakeSandbox.instances[-1].closed
+        assert not manager.locks[str(manager.config.workspaces[0].path)].locked()
+
+    asyncio.run(scenario())
+
+
+def test_run_timeout_during_command_reports_only_run_limit(tmp_path):
+    class SlowSandbox(FakeSandbox):
+        async def execute(self, command, emit, timeout):
+            await emit("stdout", "search started")
+            await asyncio.Event().wait()
+
+    async def scenario():
+        manager, store, _, request = setup(
+            tmp_path, [[shell("rg pattern .")]], sandbox=SlowSandbox, run_timeout=1,
+        )
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        assert store.run(run["id"])["status"] == "failed"
+        events = store.events(run["id"])
+        error = next(e["data"] for e in events if e["type"] == "error")
+        assert error["scope"] == "run"
+        assert error["timeout_seconds"] == 1
+        assert "Run time limit reached (1s)" in error["message"]
+        assert not any(e["type"] == "command_done" and e["data"]["outcome"]["type"] == "timeout" for e in events)
+        assert "search started" in str(store.conversation(request.conversation_id)["context"])
+        assert FakeSandbox.instances[-1].closed
+        assert not manager.locks[str(manager.config.workspaces[0].path)].locked()
+
     asyncio.run(scenario())
 
 

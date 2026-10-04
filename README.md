@@ -128,6 +128,8 @@ Doclingによる自動抽出はありません。通常の添付はShellで必�
 
 `.env`で `COMMAND_TIMEOUT=600`、`RUN_TIMEOUT=3600`、`MAX_MODEL_ROUNDS=100`、`MAX_OUTPUT_CHARS=64000` 等を変更できます。出力はstdout/stderrごとに上限を設け、切り詰めを明示します。モデルの `timeout_ms` は秒に換算し、`min(COMMAND_TIMEOUT, max(COMMAND_TIMEOUT_MIN, モデル指定秒数))` を適用します。`COMMAND_TIMEOUT_MIN` は既定60秒、指定省略時は `COMMAND_TIMEOUT` を使います。上限を60秒未満に設定した場合も上限を優先します。短いモデル指定をそのまま使いたい場合は `COMMAND_TIMEOUT_MIN=1` としてください。実行履歴には適用上限を表示し、タイムアウトイベントにも値を保存します。実行全体の `RUN_TIMEOUT` は別途適用されます。コマンドのタイムアウトはプロセスを残さずコンテナごと停止し、その実行を失敗として終了します。
 
+タイムアウト時はコマンドの上限（`Command time limit reached`）と実行全体の上限（`Run time limit reached`）を区別し、実際に適用した秒数を表示します。Docker起動などの個別処理のタイムアウトも全体上限の到達として扱いません。モデルにはテキスト検索で `rg` と対象パス・拡張子の絞り込みを使い、通常は `.venv`、`node_modules` などの生成ディレクトリを除外するよう指示します。`grep -R` はシンボリックリンクや仮想環境内も探索するため避け、必要な場合は `grep -rI --devices=skip` と `--exclude-dir` を使います。
+
 新しい保存先は `backend/data/agent/agent.db`。会話、実行、連番付きイベント、Responsesの完全な入出力（暗号化reasoningを含む）を保存します。旧 `backend/data/chat.db` は読み込み・移行・削除しません。
 
 モデルの出力上限は `MAX_MODEL_OUTPUT_TOKENS=32768`、タイトル生成は `MAX_TITLE_OUTPUT_TOKENS=1024` が既定値です。どちらも推論と本文を合計した1応答あたりのトークン上限で、`.env` で変更できます。チャット応答が上限に達した場合は実行を失敗として終了し、途中の回答を復旧履歴に保存します。中断応答でもAPIから使用量が返された場合は費用に計上します。`MAX_OUTPUT_CHARS` はShellのstdout/stderrの文字数上限で、モデルの出力トークン上限とは別です。

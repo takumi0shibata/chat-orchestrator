@@ -10,13 +10,15 @@ from app.model_catalog import pricing_for, validate_model
 from app.openai_client import build_openai_client
 from app.provider_routes import ProviderRoutes
 from app.project_instructions import load_project_instructions
-from app.sandbox import Sandbox, command_time_limit, docker
+from app.sandbox import CommandTimeoutError, Sandbox, command_time_limit, docker
 from app.storage import TERMINAL, now
 
 log = logging.getLogger(__name__)
 INSTRUCTIONS = """You are a local workspace assistant. Complete the user's task autonomously using Responses shell tools.
 All commands execute in an isolated Linux container. /workspace is the user's ORIGINAL directory: edits are immediately reflected on their computer.
 Only make changes needed for the user's request. Explore filenames first and read relevant portions; never dump every file into context.
+For text searches, prefer `rg --files` and `rg -n` with explicit paths or file globs. Unless the task needs their contents, exclude .venv, venv, node_modules, .git, __pycache__, .pytest_cache and .ruff_cache, including when using --hidden or --no-ignore.
+Avoid unrestricted `grep -R PATTERN .`: it follows symlinks and scans host virtual environments and large binary dependencies. If grep is needed, use `grep -rI --devices=skip` with explicit paths and --exclude-dir for generated directories. Piping to head only limits displayed lines; it does not bound the search.
 Run Python with `python` using the preinstalled /opt/runtime/.venv environment. Do not activate or synchronize the host's .venv, install dependencies, or update lockfiles unless explicitly requested. Ordinary uv run uses the preinstalled environment with synchronization disabled.
 Use /workspace (not /workplace); chain dependent commands with && so a failed cd stops execution.
 Use installed tools to read Office/PDF files and perform analysis. /input contains read-only attachments; write results to /workspace.
@@ -398,6 +400,7 @@ class RunManager:
         lock = None
         workspace = None
         before_files = None
+        run_timer = None
         final_status, final_label = "completed", "Work completed"
         try:
             conversation = self.store.conversation(request.conversation_id)
@@ -413,7 +416,7 @@ class RunManager:
                     "Workspace is blocked after a container cleanup failure"
                 )
             before_files = file_snapshot(workspace.path)
-            async with asyncio.timeout(self.settings.run_timeout):
+            async with asyncio.timeout(self.settings.run_timeout) as run_timer:
                 skills = self.select(self.config.skills, request.skill_ids)
                 resources = self.select(self.config.resources, request.resource_ids)
                 project_instructions = load_project_instructions(
@@ -459,12 +462,41 @@ class RunManager:
                 "stopped",
                 "Stopped. Applied changes remain.",
             )
-        except TimeoutError:
-            self.store.event(rid, "error", dict(message=f"Time limit reached (run limit: {self.settings.run_timeout}s); see command history for the applied command limit."))
+        except CommandTimeoutError as error:
+            self.store.event(
+                rid, "error",
+                dict(
+                    message=str(error), scope="command",
+                    timeout_seconds=error.timeout_seconds,
+                ),
+            )
             final_status, final_label = (
                 "failed",
-                "Time limit reached. Modified files remain.",
+                "Command time limit reached. Modified files remain.",
             )
+        except TimeoutError as error:
+            if run_timer is not None and run_timer.expired():
+                self.store.event(
+                    rid, "error",
+                    dict(
+                        message=f"Run time limit reached ({self.settings.run_timeout}s).",
+                        scope="run", timeout_seconds=self.settings.run_timeout,
+                    ),
+                )
+                final_status, final_label = (
+                    "failed", "Run time limit reached. Modified files remain.",
+                )
+            else:
+                self.store.event(
+                    rid, "error",
+                    dict(
+                        message=self.redact(str(error) or "An operation timed out.")[:4000],
+                        scope="operation",
+                    ),
+                )
+                final_status, final_label = (
+                    "failed", "An operation timed out. Modified files remain.",
+                )
         except Exception as error:
             self.store.event(rid, "error", dict(message=self.redact(str(error))[:4000]))
             final_status, final_label = (
@@ -815,7 +847,7 @@ class RunManager:
                             emit,
                             timeout,
                         )
-                    except TimeoutError:
+                    except CommandTimeoutError as error:
                         self.store.event(
                             rid,
                             "command_done",
@@ -823,7 +855,7 @@ class RunManager:
                                 call_id=item["call_id"],
                                 index=index,
                                 elapsed=monotonic() - started,
-                                outcome={"type": "timeout", "timeout_seconds": timeout},
+                                outcome={"type": "timeout", "timeout_seconds": error.timeout_seconds},
                             ),
                         )
                         raise

@@ -609,7 +609,9 @@ function WorkGroup({ actions, timeline, status, active }: {
               event.data.call_id === action.data.call_id && event.data.index === action.data.index);
             const done = commandDone(action);
             const outcome = done?.data.outcome as Record<string, unknown> | undefined;
+            const timeoutSeconds = outcome?.timeout_seconds ?? action.data.timeout_seconds;
             const result = outcome?.type === "exit" ? `Exit code ${text(outcome.exit_code)}` :
+              outcome?.type === "timeout" ? `Command timed out${timeoutSeconds != null ? ` (limit: ${text(timeoutSeconds)}s)` : ""}` :
               outcome?.type ? text(outcome.type) : done ? "Completed" : terminal(status) ? "Interrupted" : "Running…";
             return (
               <div className="work-detail" key={action.seq}>

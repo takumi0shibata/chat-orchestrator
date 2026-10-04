@@ -3,16 +3,24 @@ import codecs
 import os
 
 
+class CommandTimeoutError(TimeoutError):
+    def __init__(self, timeout_seconds):
+        self.timeout_seconds = timeout_seconds
+        super().__init__(f"Command time limit reached ({timeout_seconds:g}s).")
+
+
 async def docker(*args, timeout=30):
     process = await asyncio.create_subprocess_exec(
         "docker", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
-    except BaseException:
+    except BaseException as error:
         if process.returncode is None:
             process.kill()
         await process.wait()
+        if isinstance(error, TimeoutError):
+            raise TimeoutError(f"Docker {args[0]} timed out after {timeout:g}s") from error
         raise
     if process.returncode:
         raise RuntimeError(
@@ -146,17 +154,19 @@ class Sandbox:
             asyncio.create_task(read(process.stderr, "stderr")),
         ]
         try:
-            async with asyncio.timeout(limit):
+            async with asyncio.timeout(limit) as command_timer:
                 await process.wait()
                 await asyncio.gather(*readers)
             outcome = dict(type="exit", exit_code=process.returncode)
-        except (TimeoutError, asyncio.CancelledError):
+        except (TimeoutError, asyncio.CancelledError) as error:
             # Killing only docker exec leaves descendants running; remove the container.
             await asyncio.shield(self.close())
             if process.returncode is None:
                 process.kill()
             await process.wait()
             await asyncio.gather(*readers, return_exceptions=True)
+            if isinstance(error, TimeoutError) and command_timer.expired():
+                raise CommandTimeoutError(limit) from error
             raise
         finally:
             for reader in readers:

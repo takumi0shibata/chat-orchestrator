@@ -86,6 +86,18 @@ it.each([false, true])("shows Azure connection labels and filters a bound chat: 
 });
 
 describe("Run timeline", () => {
+  it.each([
+    [{ type: "timeout", timeout_seconds: 60 }, 600, "Command timed out (limit: 60s)"],
+    [{ type: "timeout" }, 60, "Command timed out (limit: 60s)"],
+    [{ type: "timeout" }, undefined, "Command timed out"],
+  ])("shows the applied command timeout, including older events: %j", (outcome, timeoutSeconds, label) => {
+    render(<RunView run={{ ...run, status: "failed" }} timeline={[
+      event(1, "command", { call_id: "call", index: 0, command: "grep -R pattern .", timeout_seconds: timeoutSeconds }),
+      event(2, "command_done", { call_id: "call", index: 0, outcome }),
+    ]} onApproval={vi.fn()} />);
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
   it("copies the user message and the combined assistant Markdown", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(window.navigator, "clipboard", {
