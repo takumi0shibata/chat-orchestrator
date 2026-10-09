@@ -1,4 +1,4 @@
-# Local Responses Workspace
+# Orchestrator
 
 OpenAI / Azure OpenAI **Responses API** とローカルDockerサンドボックスで動く、個人向けのファイル作業チャットです。React + FastAPI + SQLite。
 
@@ -155,6 +155,8 @@ cd backend && RUN_LIVE_TESTS=1 uv run pytest -q tests/test_live.py -k full_tools
 
 ## ファイル編集とチェックポイント
 
+Filesでファイルをクリックすると編集画面を開けます。`.md`、`.txt`、`.toml`、`.yaml`、`.yml`、`.json`、`.csv`、ソースコードなどのUTF-8テキスト（最大1 MiB）に対応します。Saveまたは⌘/Ctrl+Sで元ファイルへ保存し、UTF-8 BOMと改行形式（LF / CRLF / CR）を維持します。未保存で閉じる・再読み込みする場合は確認します。開いた後にファイルの内容が変わっていた場合は保存を拒否し、編集内容を残します。必要な編集をコピーしてからReloadで最新版を読み直してください。同じProjectでAIが作業している間は保存できません。Office・PDF・画像などは編集せず、Downloadで取得できます。
+
 UTF-8テキストの編集にはResponses APIの `apply_patch` ツールを使います。パッチはサンドボックス内で適用するため、パスは `/workspace` 内に限られ、シンボリックリンク経由の書き込みや読み取り専用領域への書き込みは失敗としてモデルに返します。Office・PDF・画像などのバイナリ、生成物、一括置換はShellで扱います。Activityには編集ごとの差分を表示します。
 
 各実行の開始前と終了時（停止・失敗を含む）に作業フォルダのチェックポイントを取り、`backend/data/agent/checkpoints/` のアプリ専用Gitリポジトリへ保存します。作業フォルダ自身の `.git`、`.gitignore`、`.gitattributes`（Git LFSなどのフィルタ）やホストのGit設定は使わず、ネストしたリポジトリや無視対象のファイルも記録します。成果物の変更一覧と同じ生成ディレクトリ（`.venv`、`node_modules`、`.git` など）、シンボリックリンク、`CHECKPOINT_MAX_FILE_BYTES`（既定50 MiB）を超えるファイルは対象外で、対象外ファイルの件数を変更パネルに表示します。ホストに `git` が必要です。`CHECKPOINTS=false` で無効にできます。
@@ -200,6 +202,7 @@ Responsesは `store=false` で完全な入出力を再送し、保存済みの�
 - `POST /api/attachments`: `conversation_id` と複数 `files` のmultipart。
 - `GET /api/conversations/{id}/files?path=...`: フォルダ内のファイル一覧。
 - `GET /api/conversations/{id}/download?path=...`: 許可領域の通常ファイルを取得。
+- `GET/PUT /api/conversations/{id}/file?path=...`: UTF-8テキストを読み込み・保存。保存には `content` と読込時の `revision` を渡し、競合時は409を返す。
 - `POST /api/runs`、`GET /api/runs/{id}`
 - `GET /api/runs/{id}/events?after=<seq>`: NDJSONイベント購読・再取得。
 - `POST /api/runs/{id}/stop`

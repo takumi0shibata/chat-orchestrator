@@ -25,9 +25,11 @@ from app.schemas import (
     ConversationUpdate,
     Revert,
     RunCreate,
+    TextFileUpdate,
 )
 from app.storage import TERMINAL, Store
 from app.terminal import HostTerminal, terminal_size, wait_process_exit
+from app.text_files import FileChanged, read_text_file, save_text_file
 
 
 TERMINAL_ORIGINS = {
@@ -277,6 +279,28 @@ def create_app(settings=None, manager_factory=RunManager):
             return list_files(workspace(cid).path, path)
         except (OSError, ValueError):
             raise HTTPException(400, "Invalid or unavailable directory") from None
+
+    @app.get("/api/conversations/{cid}/file")
+    async def text_file(cid: str, path: str):
+        root = workspace(cid).path
+        try:
+            return await asyncio.to_thread(read_text_file, root, path)
+        except OSError:
+            raise HTTPException(400, "Invalid or unavailable file") from None
+
+    @app.put("/api/conversations/{cid}/file")
+    async def update_text_file(cid: str, path: str, body: TextFileUpdate):
+        root = workspace(cid).path
+        lock = app.state.manager.locks.setdefault(str(root), asyncio.Lock())
+        if lock.locked():
+            raise HTTPException(409, "The workspace is busy. Wait for the current run to finish, then save again.")
+        async with lock:
+            try:
+                return await asyncio.to_thread(save_text_file, root, path, body.content, body.revision)
+            except FileChanged as error:
+                raise HTTPException(409, str(error)) from None
+            except OSError:
+                raise HTTPException(400, "File could not be saved. Check its location and write permissions.") from None
 
     @app.get("/api/conversations/{cid}/attachments/{aid}")
     async def attachment_file(cid: str, aid: str):
