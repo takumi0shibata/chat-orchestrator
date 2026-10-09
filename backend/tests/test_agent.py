@@ -2,6 +2,7 @@ import asyncio
 import copy
 import json
 import shlex
+import threading
 from types import SimpleNamespace as NS
 
 import pytest
@@ -1280,6 +1281,107 @@ def test_checkpoints_can_be_disabled(tmp_path):
         await manager.tasks[run["id"]]
         assert not [e for e in store.events(run["id"]) if e["type"] == "checkpoint"]
         assert (await manager.changes(run["id"])) == {"available": False, "files": []}
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("checkpoints", [True, False])
+def test_run_scans_once_per_boundary_off_event_loop(tmp_path, monkeypatch, checkpoints):
+    class Editing(FakeSandbox):
+        async def start(self):
+            (self.workspace / "a.txt").write_text("changed\n")
+            (self.workspace / "large.bin").write_bytes(b"x" * 2048)
+
+    async def scenario():
+        manager, store, _, request = setup(
+            tmp_path, [[message()]], sandbox=Editing,
+            checkpoints=checkpoints, checkpoint_max_file_bytes=1024,
+        )
+        (tmp_path / "work/a.txt").write_text("old\n")
+        loop_thread = threading.get_ident()
+        scan_threads = []
+        scan = manager.checkpoints.scan
+
+        def record(path):
+            scan_threads.append(threading.get_ident())
+            return scan(path)
+
+        monkeypatch.setattr(manager.checkpoints, "scan", record)
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        assert store.run(run["id"])["status"] == "completed"
+        assert len(scan_threads) == 2
+        assert all(thread != loop_thread for thread in scan_threads)
+        artifacts = next(e["data"]["files"] for e in store.events(run["id"]) if e["type"] == "artifacts")
+        assert {f["path"]: f["change"] for f in artifacts} == {
+            "a.txt": "modified", "large.bin": "created",
+        }
+        if checkpoints:
+            changes = await manager.changes(run["id"])
+            assert changes["skipped_count"] == 1
+            assert [f["path"] for f in changes["files"]] == ["a.txt"]
+            await manager.revert(run["id"])
+            assert (tmp_path / "work/a.txt").read_text() == "old\n"
+            assert (tmp_path / "work/large.bin").exists()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("phase", ["before", "after", "after_scan"])
+def test_stop_waits_for_snapshot_and_preserves_workspace_lock(tmp_path, monkeypatch, phase):
+    async def scenario():
+        manager, store, _, request = setup(tmp_path, [[message()], [message()]])
+        loop = asyncio.get_running_loop()
+        entered = asyncio.Event()
+        release = threading.Event()
+        snapshot = manager.checkpoints.snapshot
+        scan = manager.checkpoints.scan
+        active, max_active, blocked, scans = 0, 0, False, 0
+
+        def wait():
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5), "event loop did not release the worker"
+
+        def slow_snapshot(workspace, label, **kwargs):
+            nonlocal active, max_active, blocked
+            active += 1
+            max_active = max(max_active, active)
+            try:
+                if not blocked and label.endswith(" " + phase):
+                    blocked = True
+                    wait()
+                return snapshot(workspace, label, **kwargs)
+            finally:
+                active -= 1
+
+        def slow_scan(workspace):
+            nonlocal scans
+            scans += 1
+            if phase == "after_scan" and scans == 2:
+                wait()
+            return scan(workspace)
+
+        monkeypatch.setattr(manager.checkpoints, "snapshot", slow_snapshot)
+        monkeypatch.setattr(manager.checkpoints, "scan", slow_scan)
+        run = manager.start(request)
+        stopping = None
+        try:
+            await asyncio.wait_for(entered.wait(), 3)
+            stopping = asyncio.create_task(manager.stop(run["id"]))
+            await asyncio.sleep(0.02)
+            assert not stopping.done()
+            assert manager.locks[str(tmp_path / "work")].locked()
+        finally:
+            release.set()
+            if stopping:
+                await stopping
+        assert max_active == 1
+        assert store.run(run["id"])["status"] == "stopped"
+        assert not manager.locks[str(tmp_path / "work")].locked()
+        assert (await manager.changes(run["id"]))["available"]
+        next_run = manager.start(request)
+        await manager.tasks[next_run["id"]]
+        assert store.run(next_run["id"])["status"] == "completed"
 
     asyncio.run(scenario())
 

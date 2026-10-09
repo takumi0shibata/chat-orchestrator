@@ -1,3 +1,5 @@
+import json
+import os
 import subprocess
 
 import pytest
@@ -100,3 +102,143 @@ def test_restore_refuses_symlinked_parent(setup, tmp_path):
     with pytest.raises((ValueError, CheckpointConflict)):
         cp.restore(work, before, after, force=True)
     assert not (outside / "a.txt").exists()
+
+
+def test_unchanged_snapshot_reuses_blobs_and_tree(setup, monkeypatch):
+    cp, work = setup
+    (work / "a.txt").write_text("unchanged\n")
+    os.utime(work / "a.txt", (1, 1))
+    before = cp.snapshot(work, "before")
+    cache = cp.repo(work) / "snapshot-cache.json"
+    cache_mtime = cache.stat().st_mtime_ns
+    calls = []
+    git = cp.git
+
+    def record(repo, *args, **kwargs):
+        calls.append(args)
+        return git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(cp, "git", record)
+    after = cp.snapshot(work, "after")
+    assert after["hashed_files"] == 0
+    assert [args[0] for args in calls] == ["commit-tree"]
+    assert cache.stat().st_mtime_ns == cache_mtime
+    assert cp.changes(work, before["commit"], after["commit"]) == []
+
+
+def test_incremental_tree_matches_fresh_snapshot_and_undo(setup, tmp_path):
+    cp, work = setup
+    for path, content in {"a.txt": "old\n", "remove": "bye", "keep": "same"}.items():
+        (work / path).write_text(content)
+        os.utime(work / path, (1, 1))
+    before = cp.snapshot(work, "before")
+    (work / "a.txt").write_text("new\n")
+    (work / "a.txt").chmod(0o755)
+    (work / "remove").unlink()
+    (work / "remove").mkdir()
+    (work / "remove/new.bin").write_bytes(b"\0new")
+    after = cp.snapshot(work, "after")
+    assert after["hashed_files"] == 2
+    fresh = Checkpoints(tmp_path / "fresh", 1024)
+    fresh_commit = fresh.snapshot(work, "fresh")["commit"]
+    assert cp.tree(cp.repo(work), after["commit"]) == fresh.tree(fresh.repo(work), fresh_commit)
+    assert {f["path"] for f in cp.changes(work, before["commit"], after["commit"])} == {
+        "a.txt", "remove", "remove/new.bin",
+    }
+    # Undo a normal content/mode change without the pre-existing directory/file
+    # restore restriction.
+    stable = cp.snapshot(work, "stable")["commit"]
+    (work / "a.txt").write_text("last\n")
+    latest = cp.snapshot(work, "latest")["commit"]
+    cp.restore(work, stable, latest)
+    assert (work / "a.txt").read_text() == "new\n"
+    assert (work / "a.txt").stat().st_mode & 0o111
+
+
+def test_cache_detects_same_size_edit_with_preserved_mtime(setup):
+    cp, work = setup
+    path = work / "a.txt"
+    path.write_text("one")
+    os.utime(path, (1, 1))
+    before = cp.snapshot(work, "before")["commit"]
+    path.write_text("two")
+    os.utime(path, (1, 1))
+    after = cp.snapshot(work, "after")
+    assert after["hashed_files"] == 1
+    assert [f["path"] for f in cp.changes(work, before, after["commit"])] == ["a.txt"]
+
+
+@pytest.mark.parametrize("cache_text", ["{broken", '{"a.txt":[3,1,"old-format"]}'])
+def test_old_or_invalid_cache_rebuilds_without_losing_checkpoints(setup, cache_text):
+    cp, work = setup
+    (work / "a.txt").write_text("one")
+    before = cp.snapshot(work, "before")["commit"]
+    cp.set_ref(work, "old-run", "before", before)
+    (cp.repo(work) / "snapshot-cache.json").write_text(cache_text)
+    after = cp.snapshot(work, "after")
+    assert after["hashed_files"] == 1
+    assert cp.get_ref(work, "old-run", "before") == before
+    assert cp.changes(work, before, after["commit"]) == []
+
+
+def test_failed_tree_update_keeps_previous_cache(setup, monkeypatch):
+    cp, work = setup
+    (work / "a.txt").write_text("old")
+    cp.snapshot(work, "before")
+    cache = cp.repo(work) / "snapshot-cache.json"
+    old = cache.read_bytes()
+    (work / "a.txt").write_text("new")
+    git = cp.git
+
+    def fail(repo, *args, **kwargs):
+        if args[0] == "write-tree":
+            raise RuntimeError("simulated interruption")
+        return git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(cp, "git", fail)
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        cp.snapshot(work, "failed")
+    assert cache.read_bytes() == old
+    monkeypatch.setattr(cp, "git", git)
+    result = cp.snapshot(work, "retry")
+    sha = cp.tree(cp.repo(work), result["commit"])["a.txt"][1]
+    assert cp.git(cp.repo(work), "cat-file", "blob", sha) == b"new"
+
+
+def test_prune_invalidates_cached_objects(setup):
+    cp, work = setup
+    (work / "a.txt").write_text("old")
+    first = cp.snapshot(work, "first")["commit"]
+    cp.set_ref(work, "keep", "before", first)
+    (work / "a.txt").write_text("new")
+    os.utime(work / "a.txt", (1, 1))
+    second = cp.snapshot(work, "second")["commit"]
+    cp.set_ref(work, "delete", "before", second)
+    assert cp.delete_runs(cp.repo(work), {"delete"}) == 1
+    result = cp.snapshot(work, "after-prune")
+    sha = cp.tree(cp.repo(work), result["commit"])["a.txt"][1]
+    assert cp.git(cp.repo(work), "cat-file", "blob", sha) == b"new"
+    assert cp.get_ref(work, "keep", "before") == first
+
+
+def test_checkpoint_storage_inside_workspace_is_never_snapshotted(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "a.txt").write_text("content")
+    cp = Checkpoints(work / "app-data/checkpoints", 1024 * 1024)
+    for label in ("first", "second"):
+        result = cp.snapshot(work, label)
+        assert set(cp.tree(cp.repo(work), result["commit"])) == {"a.txt"}
+
+
+def test_recent_files_remain_rechecked_and_special_paths_round_trip(setup):
+    cp, work = setup
+    name = '日本語 "quoted"\tfile\\.txt'
+    (work / name).write_text("one")
+    before = cp.snapshot(work, "before")["commit"]
+    assert cp.snapshot(work, "recent")["hashed_files"] == 1
+    (work / name).write_text("two")
+    after = cp.snapshot(work, "after")["commit"]
+    cp.restore(work, before, after)
+    assert (work / name).read_text() == "one"
+    assert json.loads((cp.repo(work) / "snapshot-cache.json").read_text())["version"] == 2
