@@ -18,6 +18,14 @@ class Stream:
 
     async def __aiter__(self):
         for i in self.output:
+            if i["type"] == "reasoning":
+                for index, part in enumerate(i.get("summary", [])):
+                    yield NS(
+                        type="response.reasoning_summary_text.delta",
+                        delta=part["text"],
+                        item_id=i["id"],
+                        summary_index=index,
+                    )
             if i["type"] == "message":
                 yield NS(type="response.output_item.added", item=i)
                 yield NS(
@@ -828,6 +836,60 @@ def test_response_events_identify_final_messages(tmp_path):
             (1, True, []), (2, False, ["msg_1"])
         ]
         assert [e["data"]["round"] for e in events if e["type"] == "text_delta"] == [1, 2]
+    asyncio.run(scenario())
+
+
+def test_reasoning_summary_streams_and_conversation_shares_cache_key(tmp_path):
+    async def scenario():
+        reasoning = {
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [
+                {"type": "summary_text", "text": "**Plan**"},
+                {"type": "summary_text", "text": "Check files"},
+            ],
+            "encrypted_content": "private-encrypted",
+        }
+        manager, store, client, request = setup(
+            tmp_path, [[reasoning, shell("ls")], [message()]]
+        )
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        events = store.events(run["id"])
+        assert [
+            (e["data"]["item_id"], e["data"]["summary_index"], e["data"]["round"], e["data"]["text"])
+            for e in events if e["type"] == "reasoning_delta"
+        ] == [("rs_1", 0, 1, "**Plan**"), ("rs_1", 1, 1, "Check files")]
+        assert [call["reasoning"] for call in client.calls] == [
+            {"effort": "medium", "summary": "auto"}
+        ] * 2
+        assert {call["prompt_cache_key"] for call in client.calls} == {
+            request.conversation_id
+        }
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "summary, effort, expected",
+    [
+        ("off", "medium", {"effort": "medium"}),
+        ("detailed", "high", {"effort": "high", "summary": "detailed"}),
+        ("auto", "none", {"effort": "none"}),
+    ],
+)
+def test_reasoning_summary_setting(tmp_path, summary, effort, expected):
+    async def scenario():
+        manager, _, client, request = setup(
+            tmp_path, [[message()]], reasoning_summary=summary
+        )
+        request = request.model_copy(
+            update={"model": "gpt-6-sol", "reasoning_effort": effort}
+        )
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        assert client.calls[0]["reasoning"] == expected
+
     asyncio.run(scenario())
 
 

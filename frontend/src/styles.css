@@ -1505,6 +1505,16 @@ h2 {
   margin-left: 8px;
   color: #85878f;
 }
+/* Reasoning summaries read as quiet prose, unlike the dark command transcript. */
+.reasoning-details {
+  margin: 2px 0 10px 22px;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid #e3e4e8;
+  color: #6e6f75;
+  font-size: 13px;
+}
+.reasoning-details .markdown p:last-child { margin-bottom: 0; }
+.reasoning-details .markdown + .markdown { margin-top: 8px; }
 
 /* A bright, broad sheen crosses active tool labels from left to right. */
 .activity-shimmer { color: #484b54; }

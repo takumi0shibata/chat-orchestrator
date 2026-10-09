@@ -2,6 +2,7 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 import tomllib
 import yaml
@@ -179,6 +180,7 @@ class Settings(BaseSettings):
     max_title_output_tokens: int = Field(default=1024, ge=1)
     max_output_chars: int = Field(default=64000, ge=1024)
     compact_token_threshold: int = Field(default=100000, ge=1000)
+    reasoning_summary: Literal["auto", "concise", "detailed", "off"] = "auto"
     max_upload_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
 
     def __init__(self, **values):

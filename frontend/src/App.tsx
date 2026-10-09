@@ -10,7 +10,10 @@ import {
   skillMentionName,
 } from "./lib/skillMention";
 import type { SkillMention } from "./lib/skillMention";
-import { activityEntries, finalAnswerStart, messageBlocks } from "./lib/timeline";
+import {
+  activityEntries, finalAnswerStart, messageBlocks, reasoningActive, reasoningBlocks, reasoningTitle,
+  type ReasoningBlock,
+} from "./lib/timeline";
 import { terminal } from "./types";
 import type {
   AgentEvent,
@@ -647,6 +650,26 @@ function WorkGroup({ actions, timeline, status, active }: {
   );
 }
 
+function ReasoningGroup({ block, active }: { block: ReasoningBlock; active: boolean }) {
+  const latest = reasoningTitle(block.parts[block.parts.length - 1]);
+  return (
+    <details className="work-group reasoning-group">
+      <summary>
+        <span className="work-chevron" aria-hidden="true"><Icon name="chevron-right" size={14} /></span>
+        <span className="work-summary-content">
+          <span className={active ? "activity-shimmer" : undefined}>{active ? "Thinking" : "Thought"}</span>
+          {latest && <span className="work-command-preview" title={latest}>{latest}</span>}
+        </span>
+      </summary>
+      <div className="reasoning-details">
+        {block.parts.map((part, index) => (
+          <MarkdownContent key={index} content={part} />
+        ))}
+      </div>
+    </details>
+  );
+}
+
 export function RunView({
   run,
   timeline,
@@ -678,7 +701,7 @@ export function RunView({
     else if (["failed", "stopped"].includes(run.status)) setActivityOpen(true);
   }, [run.status, finalStart]);
   const blocks = messageBlocks(timeline, run.status);
-  const activity = activityEntries(timeline, blocks, run.status);
+  const activity = activityEntries(timeline, blocks, run.status, reasoningBlocks(timeline));
   const answerBlocks = blocks.filter((block) => block.final || (run.status === "completed" && !block.progress));
   const userMessage = run.request.input || "Work with attached files";
   const assistantMessage = answerBlocks.map((block) => block.content).join("\n\n");
@@ -740,6 +763,9 @@ export function RunView({
               <div className="activity-message" key={entry.block.key}>
                 <MarkdownContent conversationId={run.conversation_id} content={entry.block.content} />
               </div>
+            ) : entry.kind === "reasoning" ? (
+              <ReasoningGroup key={`reasoning-${entry.block.key}`} block={entry.block}
+                active={active && reasoningActive(entry.block, timeline, run.status)} />
             ) : (
               <WorkGroup key={entry.seq} actions={entry.actions} timeline={timeline} status={run.status} active={active} />
             ))}

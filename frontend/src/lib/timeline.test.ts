@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { activityEntries, activityLabel, finalAnswerStart, messageBlocks } from "./timeline";
+import {
+  activityEntries, activityLabel, finalAnswerStart, messageBlocks, reasoningActive, reasoningBlocks, reasoningTitle,
+} from "./timeline";
 import type { AgentEvent } from "../types";
 const e = (seq: number, type: string, data: Record<string, unknown> = {}): AgentEvent =>
   ({ run_id: "r", seq, type, data, created_at: "2026-09-18T00:00:00Z" });
@@ -62,8 +64,36 @@ it("groups adjacent work by progress reports while omitting system events", () =
     e(8, "text_delta", { item_id: "b", text: "Second report" }),
     e(9, "tool", { id: "mcp", type: "mcp_call" })];
   const entries = activityEntries(events, messageBlocks(events, "model_wait"), "model_wait");
-  expect(entries.map((entry) => entry.kind === "message" ? entry.block.content : entry.actions.map((action) => action.seq)))
+  expect(entries.map((entry) => entry.kind === "message" ? entry.block.content :
+    entry.kind === "work" ? entry.actions.map((action) => action.seq) : []))
     .toEqual(["First report", [3, 6, 7], "Second report", [9]]);
+});
+
+describe("reasoning summaries", () => {
+  const events = [e(1, "round", { number: 1 }),
+    e(2, "reasoning_delta", { item_id: "rs", round: 1, summary_index: 0, text: "**Inspect" }),
+    e(3, "reasoning_delta", { item_id: "rs", round: 1, summary_index: 0, text: " files**\n\nLook first." }),
+    e(4, "reasoning_delta", { item_id: "rs", round: 1, summary_index: 1, text: "**Run tests**" }),
+    e(5, "command", { call_id: "c1", index: 0, command: "pytest" }),
+    e(6, "response", { round: 1, continues: true, final_item_ids: [] }),
+    e(7, "round", { number: 2 }),
+    e(8, "reasoning_delta", { item_id: "rs", round: 2, summary_index: 0, text: "**Summarize**" })];
+  it("joins deltas per part and separates rounds that reuse an item ID", () => {
+    expect(reasoningBlocks(events).map((block) => block.parts)).toEqual([
+      ["**Inspect files**\n\nLook first.", "**Run tests**"], ["**Summarize**"],
+    ]);
+    expect(reasoningTitle("**Inspect files**\n\nLook first.")).toBe("Inspect files");
+    expect(reasoningTitle("No heading here")).toBe("No heading here");
+  });
+  it("places summaries before the work they precede and tracks streaming", () => {
+    const blocks = reasoningBlocks(events);
+    const entries = activityEntries(events, messageBlocks(events, "model_wait"), "model_wait", blocks);
+    expect(entries.map((entry) => entry.kind)).toEqual(["reasoning", "work", "reasoning"]);
+    expect(blocks.map((block) => reasoningActive(block, events, "model_wait"))).toEqual([false, true]);
+    expect(reasoningActive(blocks[1], events, "completed")).toBe(false);
+    const finished = [...events, e(9, "command_done", { call_id: "c1", index: 0 })];
+    expect(activityLabel(finished, "model_wait", [])).toBe("Thinking · Summarize");
+  });
 });
 
 describe("current activity", () => {

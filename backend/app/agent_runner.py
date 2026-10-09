@@ -625,6 +625,9 @@ class RunManager:
             self.store.context_tokens(request.conversation_id)
             >= self.settings.compact_token_threshold
         )
+        reasoning = {"effort": request.reasoning_effort}
+        if self.settings.reasoning_summary != "off" and request.reasoning_effort != "none":
+            reasoning["summary"] = self.settings.reasoning_summary
         for round_index in range(self.settings.max_model_rounds):
             if needs_compact:
                 self.store.status(
@@ -659,7 +662,8 @@ class RunManager:
                 tools=tools,
                 store=False,
                 include=["reasoning.encrypted_content"],
-                reasoning={"effort": request.reasoning_effort},
+                reasoning=reasoning,
+                prompt_cache_key=request.conversation_id,
                 max_output_tokens=self.settings.max_model_output_tokens,
                 stream=True,
             )
@@ -675,6 +679,17 @@ class RunManager:
                             dict(
                                 text=event.delta,
                                 item_id=getattr(event, "item_id", ""),
+                                round=round_index + 1,
+                            ),
+                        )
+                    elif kind == "response.reasoning_summary_text.delta":
+                        self.store.event(
+                            rid,
+                            "reasoning_delta",
+                            dict(
+                                text=event.delta,
+                                item_id=getattr(event, "item_id", ""),
+                                summary_index=getattr(event, "summary_index", 0),
                                 round=round_index + 1,
                             ),
                         )
