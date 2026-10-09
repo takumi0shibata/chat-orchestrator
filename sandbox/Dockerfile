@@ -1,7 +1,7 @@
 FROM python:3.12-slim-bookworm
 ENV DEBIAN_FRONTEND=noninteractive UV_LINK_MODE=copy
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash ripgrep findutils coreutils file unzip zip libreoffice \
+    bash git ripgrep findutils coreutils file unzip zip libreoffice \
     fonts-noto-cjk fontconfig poppler-utils libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir uv==0.10.12

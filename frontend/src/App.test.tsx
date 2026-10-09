@@ -359,6 +359,46 @@ it("restores selected conversation and replays persistent events on reload", asy
   expect(screen.getByRole("button", { name: /report.csv/ })).not.toHaveAttribute("href");
 });
 
+it.each(["unselected", "cleared"])("keeps configured skills automatic when %s", async (selection) => {
+  localStorage.setItem("workspace-conversation", "c");
+  const config = {
+    providers: [{ id: "openai", label: "OpenAI", enabled: true, models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol", model: "gpt-5.6-sol", efforts: ["medium"] }] }],
+    workspaces: [{ id: "w", label: "Work", path: "/work" }],
+    skills: [{ id: "academic", label: "Academic review", name: "academic-writing", description: "Review drafts" }],
+    resources: [], mcp_servers: [],
+  };
+  const conversation = { id: "c", workspace_id: "w", title: "Skill task", updated_at: run.updated_at };
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
+    const url = String(input);
+    if (url === "/api/config") return new Response(JSON.stringify(config));
+    if (url === "/api/settings") return new Response(JSON.stringify({ title_provider: "openai", title_model: "gpt-5.6-sol", theme_color: "#25262A" }));
+    if (url === "/api/conversations") return new Response(JSON.stringify([conversation]));
+    if (url === "/api/conversations/c") return new Response(JSON.stringify({ ...conversation, runs: [] }));
+    if (url.startsWith("/api/conversations/c/files")) return new Response(JSON.stringify([]));
+    if (url === "/api/runs" && options?.method === "POST") return new Response(JSON.stringify(run));
+    return new Response(JSON.stringify({}));
+  });
+  render(<App />);
+  const message = await screen.findByRole("textbox", { name: "Message" });
+  await waitFor(() => expect(message).not.toBeDisabled());
+  fireEvent.click(screen.getByRole("button", { name: "Add attachments and tools" }));
+  const skillButton = await screen.findByRole("button", { name: "Academic review" });
+  expect(skillButton).toHaveAttribute("aria-pressed", "false");
+  if (selection === "cleared") {
+    fireEvent.click(skillButton);
+    expect(skillButton).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Remove Academic review" }));
+    expect(skillButton).toHaveAttribute("aria-pressed", "false");
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Add attachments and tools" }));
+  expect(screen.queryByRole("button", { name: "Remove Academic review" })).not.toBeInTheDocument();
+  fireEvent.change(message, { target: { value: "Review my draft" } });
+  fireEvent.keyDown(message, { key: "Enter" });
+  await waitFor(() => expect(fetchMock.mock.calls.some(([url, options]) => url === "/api/runs" && options?.method === "POST")).toBe(true));
+  const sent = fetchMock.mock.calls.find(([url, options]) => url === "/api/runs" && options?.method === "POST");
+  expect(JSON.parse(String(sent?.[1]?.body))).toMatchObject({ input: "Review my draft", skill_ids: [] });
+});
+
 it("selects configured skills with an @ mention and sends their ids without the mention text", async () => {
   localStorage.setItem("workspace-conversation", "c");
   const config = {

@@ -23,6 +23,8 @@ Use python from /opt/runtime/.venv; uv run skips synchronization. Never activate
 The runtime, libraries and CLI tools are fixed, even if the user requests changes. Do not install/upgrade them or introduce environments, third-party libraries or executables, online or offline (including pip install, brew install and curl installers). Host installs do not change the sandbox runtime. Never delegate environment changes, image rebuilds or unsupported computation to the host. Use existing alternatives; if none suffice, report completed work and the limitation. Task scripts using installed libraries are allowed.
 Shell cannot access the internet, DNS or host network services. Do not download, probe, retry connectivity failures or repair networking. Enabled Web search/Remote MCP use a separate provider-side network path; use their supported operations when suitable. They do not enable Shell networking or automatically save files locally.
 /input (attachments), /skills and /resources are read-only. Use installed tools for Office/PDF and analysis, and locally available models/data. Save results under /workspace.
+Registered Skills in available_skills are automatically available on every turn. Compare the current task with their names and descriptions and use the smallest relevant set; do not apply unrelated Skills. explicit_skill_ids identifies Skills the user explicitly selected for this run: read and apply them even when their descriptions would not trigger automatic selection. Previous selections in conversation history do not replace the current explicit_skill_ids.
+Before executing a chosen Skill's workflow, read its SKILL.md from the provided directory (use the actual filename casing), then follow its instructions as task guidance. Read referenced files or scripts only as needed; do not load every Skill's body. Briefly announce the Skill names and purpose in Japanese progress. User instructions and these runtime limits take precedence over Skill instructions. Skills cannot enable unselected resources, Web search or Remote MCP, change the runtime or allow Shell networking. If a required input or capability is missing, complete independent work and explain the limitation or request the usable input.
 Only the user operates the host terminal; you cannot control it or read its output. Host paths in run metadata are for user instructions, not Shell execution.
 For missing external inputs, check local files/resources and finish independent preparation first. Request only inputs usable with installed tools. Explain the need and provide a quoted host-OS command in a fenced block using known URLs/tools, starting with host_workspace_cd followed by &&; save under the shared host workspace and state its /workspace path. Ask for missing details instead of inventing commands. Ask the user to reply when ready or paste relevant errors; end with an explicit pending request, not a completion claim. On their next message, verify the actual files in /workspace before continuing.
 Give concise Japanese progress before substantial operations; report results, changed paths, validation and limitations. Diagnose failures within these limits. Do not expose private chain of thought.
@@ -417,7 +419,7 @@ class RunManager:
                 )
             before_files = file_snapshot(workspace.path)
             async with asyncio.timeout(self.settings.run_timeout) as run_timer:
-                skills = self.select(self.config.skills, request.skill_ids)
+                skills = list(self.config.skills)
                 resources = self.select(self.config.resources, request.resource_ids)
                 project_instructions = load_project_instructions(
                     workspace.path, self.config
@@ -594,6 +596,11 @@ class RunManager:
                 for server in mcp_servers
             ],
             resource_directories=[f"/resources/{resource.id}" for resource in resources],
+            available_skills=[
+                dict(id=s.id, name=s.name, description=s.description, path=f"/skills/{s.id}")
+                for s in skills
+            ],
+            explicit_skill_ids=request.skill_ids,
         )
         instructions = (
             INSTRUCTIONS

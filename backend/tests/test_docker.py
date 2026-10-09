@@ -18,6 +18,50 @@ async def emit(*args):
     pass
 
 
+def test_git_local_operations_in_sandbox(tmp_path):
+    async def scenario():
+        work = tmp_path / "work"
+        work.mkdir()
+        sandbox = Sandbox(
+            Settings(_env_file=None), Folder(id="w", label="Work", path=work),
+            uuid4().hex, [], [], tmp_path / "input",
+        )
+        await sandbox.start()
+        try:
+            result = await sandbox.execute(
+                """set -eu
+git --version
+git init -q
+printf 'original\\n' > tracked.txt
+test "$(git status --porcelain)" = '?? tracked.txt'
+git add tracked.txt
+test "$(git diff --cached --name-only)" = tracked.txt
+git -c user.name='Sandbox Test' -c user.email=sandbox@example.invalid commit -q -m initial
+test "$(git log -1 --format=%s)" = initial
+printf 'updated\\n' > tracked.txt
+git diff -- tracked.txt
+test "$(git status --porcelain)" = ' M tracked.txt'
+git add tracked.txt
+git -c user.name='Sandbox Test' -c user.email=sandbox@example.invalid commit -q -m updated
+test "$(git log --format=%s)" = "$(printf 'updated\\ninitial')"
+test -z "$(git status --porcelain)"
+printf 'Git local operations OK\\n'
+""",
+                emit,
+            )
+            assert result["outcome"]["exit_code"] == 0, result
+            assert "git version" in result["stdout"]
+            assert "-original" in result["stdout"]
+            assert "+updated" in result["stdout"]
+            assert "Git local operations OK" in result["stdout"]
+            assert (work / ".git").is_dir()
+            assert (work / "tracked.txt").read_text() == "updated\n"
+        finally:
+            await sandbox.close()
+
+    asyncio.run(scenario())
+
+
 def test_200_files_office_pdf_research_and_isolation(tmp_path):
     async def scenario():
         work = tmp_path / "workspace"

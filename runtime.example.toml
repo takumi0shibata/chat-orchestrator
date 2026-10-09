@@ -10,6 +10,9 @@ id = "research"
 label = "研究フォルダ"
 path = "/absolute/path/to/research"
 
+# Registered Skills are available automatically on every turn, based on name/description.
+# @skill-name or the + menu explicitly requests a Skill; clearing it returns to automatic selection.
+# All Skill folders are mounted read-only; bodies are read only when needed.
 # [[skills]]
 # id = "review"
 # label = "論文レビュー"

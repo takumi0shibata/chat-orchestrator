@@ -33,7 +33,7 @@ Docker Composeはイメージのビルド専用です (`docker compose --profile
 ## 使い方
 
 1. サイドバーから登録済み作業フォルダを選び「新しい作業」。
-2. モデル・推論の深さを選び、必要なら `@skill-name` の入力候補または＋メニューから標準Skillsを選択し、モデル／データ、Remote MCP、Web検索を有効化。
+2. モデル・推論の深さを選び、モデル／データ、Remote MCP、Web検索を必要に応じて有効化。登録済みSkillsは依頼に応じて自動利用されます。明示的に適用する場合は `@skill-name` の入力候補または＋メニューから選択します。
 3. ファイル名や完成形を自然言語で指示。添付ボタンのほか、中央のチャット領域へのドラッグ＆ドロップで複数ファイルを添付できます。
 4. 現在工程と実行履歴で、実行コマンド・出力・所要時間・終了コードを確認。
 5. ファイルパネルを更新して成果物を確認。Files のファイルやフォルダをチャット入力欄へドラッグすると、作業フォルダからの相対パスをカーソル位置へ挿入できます。回答内の `[Word版](sandbox:/workspace/reviews/結果.docx)` のような成果物リンクからも取得できます。リンクは会話のファイルAPIへ変換し、領域外参照やシンボリックリンクは同APIで拒否します。
@@ -53,7 +53,7 @@ Docker Composeはイメージのビルド専用です (`docker compose --profile
 `runtime.toml` はGit管理外です。[設定例](runtime.example.toml)を参照してください。
 
 - `workspaces`: ID・表示名・絶対パス。相互に重なるディレクトリは禁止。APIキーやアプリ設定・状態を含むフォルダは登録しないでください。
-- `skills`: 外部で用意した標準 `SKILL.md` を含むフォルダ。front matterの `name` / `description` を読み、Responsesのlocal shellへ渡します。読み取り専用の `/skills/<id>` に配置します。
+- `skills`: 外部で用意した標準 `SKILL.md` を含むフォルダ。全登録Skillsのfront matterの `name` / `description` を毎回Responsesのlocal shellへ渡し、読み取り専用の `/skills/<id>` に配置します。モデルは依頼に関連するSkillsを判断し、必要な本文・参照ファイルだけを読んで適用します。
 - `resources`: 事前ダウンロードしたNLPモデルやデータ等。実行ごとに選択し、読み取り専用の `/resources/<id>` に配置します。
 - `azure_connections`: 接続先ID・表示名・Endpoint/APIキーの環境変数名を登録。実値は `.env` またはプロセス環境変数に保存します。
 - `azure_models`: `model` にモデルID、`deployment` にAzureのデプロイ名、`connection_id` に接続先IDを記載。任意の `id` はアプリの選択用IDで、省略時はデプロイ名を使います。選択用IDは全Azureモデルで一意にしてください。
@@ -66,6 +66,8 @@ Docker Composeはイメージのビルド専用です (`docker compose --profile
 Remote MCPはプロバイダ側から接続されるため、ローカルの `localhost` URLは利用できません。このリポジトリにMCPサーバーや業務API本体は含みません。モデルAPI・MCP・Web検索の通信と、ネットワーク無効のローカルサンドボックスは別経路です。
 
 ローカルShellではホスト型Skillsの `skill_reference` IDは使いません。標準Skills本体はユーザーが別途用意します。旧skill.yaml / skill.py のローダーや互換機能はありません。
+
+Skillsの自動利用は標準動作で、ON/OFF設定はありません。`@skill-name` または＋メニューの選択は明示的な適用指定です。チップや選択を解除すると明示指定を外し、自動判断に戻ります。自動候補からの除外ではありません。モデルには、適用するSkill名と目的を日本語の進捗で短く伝え、本文を読んでから実行するよう指示します。明示指定と自動利用の方針は各実行・履歴圧縮に渡します。ユーザーの依頼とsandboxの制約がSkillの指示に優先し、Skillから未選択のモデル／データ、Web検索、Remote MCPが有効になることはありません。
 
 OpenAIの新規会話の標準モデルは `gpt-6-sol`、新規データベースでのタイトル生成の標準モデルは `gpt-6-luna` です。`gpt-6.1-sol`、`gpt-6-astra` と GPT-5.6 系も選べます。推論の標準は `medium`。GPT-6 Sol/LunaとGPT-5.6 Sol/Terraは `none/low/medium/high/xhigh/max`、GPT-6.1 Sol・GPT-6 Astra・GPT-5.6 Lunaは `low/medium/high/xhigh/max` に対応します。既存会話のモデル履歴と保存済みタイトル生成設定は変更しません。
 
@@ -109,11 +111,14 @@ GPT-6.1 Solも、`model = "gpt-6.1-sol"` と実際のデプロイ名を `azure_m
 
 ## 実行環境と添付
 
-[sandbox/](sandbox/)にアプリとは独立したPython依存ロックがあります。LibreOffice、Poppler、日本語フォント、Office/PDFライブラリ、NumPy、Pandas、Polars、SciPy、CPU版PyTorch、scikit-learn、Matplotlib、Seaborn、Transformers、Datasets、pytestを含みます。初回ビルドは大きなダウンロードが発生します。
+[sandbox/](sandbox/)にアプリとは独立したPython依存ロックがあります。Git、LibreOffice、Poppler、日本語フォント、Office/PDFライブラリ、NumPy、Pandas、Polars、SciPy、CPU版PyTorch、scikit-learn、Matplotlib、Seaborn、Transformers、Datasets、pytestを含みます。初回ビルドは大きなダウンロードが発生します。sandboxイメージの変更後は `make sandbox-build` で再ビルドし、バックエンドも再起動してください。
+
+Gitは `/workspace` 内のローカルリポジトリで `status`、`diff`、`log`、`add`、`commit` などを利用できます。Shellはネットワーク無効のため、リモートへの `clone`、`fetch`、`pull`、`push` は利用できません。ホストのGit認証情報やグローバル設定は引き継ぎません。コミットにはリポジトリ内の作者設定、または `git -c user.name=... -c user.email=... commit ...` が必要です。
 
 - `/workspace`: 元ファイルを直接読み書きする領域。
 - `/input/<attachment-id>/<filename>`: アプリに添付した原本。読み取り専用。加工結果は `/workspace` に保存。
-- `/skills/<id>`、`/resources/<id>`: 選択したSkills／モデル・データ。読み取り専用。
+- `/skills/<id>`: 登録済みの全Skills。読み取り専用。
+- `/resources/<id>`: 選択したモデル・データ。読み取り専用。
 - `/tmp`: 実行終了で破棄される一時領域。
 
 コンテナは非root・ネットワーク無効・root filesystem読み取り専用・追加capabilityなしで起動します。APIキーやホストの環境変数は渡しません。コマンドは非対話実行です。Pythonは `python ...` でコンテナに用意済みの `/opt/runtime/.venv` を使います。作業フォルダのPythonテストは `pytest -q` または `python -m pytest -q` で実行できます。通常の `uv run` も `UV_PROJECT_ENVIRONMENT=/opt/runtime/.venv`、`UV_NO_SYNC=1`、`UV_FROZEN=1` によりこの環境を使い、ホストの `.venv` とロックファイルを同期しません（[uvの仕様](https://docs.astral.sh/uv/concepts/projects/sync/)）。この設定は意図的な上書きや直接のファイル削除を禁止するものではありません。モデルにはホストの環境をactivate・同期しないよう指示します。作業先は `/workspace` であり、`cd` に続くコマンドは `&&` でつないでください。成果物の変更一覧では `.venv`、`venv`、`node_modules`、`.git`、`__pycache__`、`.pytest_cache`、`.ruff_cache` を探索から除外します。NLPモデルは事前配置し、Transformers等はofflineモードで動かします。macOS DockerからMetal/MPSは利用しません。
@@ -172,4 +177,4 @@ make test-docker
 cd backend && RUN_LIVE_TESTS=1 uv run pytest -m live -rs
 ```
 
-Dockerテストは200ファイル・元ファイル編集・Office/PDF・CPU分析・日本語グラフ・隔離・タイムアウト／停止を検証します。実APIテストは一時フォルダ内だけを編集します。指定モデルが利用できないアカウントでは理由付きでskipします。Azureの実APIテストは実デプロイを設定した環境で別途行ってください。
+DockerテストはGitのローカル操作・200ファイル・元ファイル編集・Office/PDF・CPU分析・日本語グラフ・隔離・タイムアウト／停止を検証します。実APIテストは一時フォルダ内だけを編集し、Skill名を含まない依頼での自動利用、明示指定、無関係なSkillを実行しないことを検証します。指定モデルが利用できないアカウントでは理由付きでskipします。Azureの実APIテストは実デプロイを設定した環境で別途行ってください。

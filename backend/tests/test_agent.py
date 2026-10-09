@@ -6,7 +6,7 @@ from types import SimpleNamespace as NS
 
 import pytest
 from app.agent_runner import RunManager
-from app.config import Deployment, Folder, MCPServer, RuntimeConfig, Settings
+from app.config import Deployment, Folder, MCPServer, RuntimeConfig, Settings, Skill
 from app.schemas import Approval, RunCreate
 from app.sandbox import CommandTimeoutError
 from app.storage import Store
@@ -83,6 +83,7 @@ class FakeSandbox:
     def __init__(self, *args):
         self.closed = False
         self.commands = []
+        self.skills = args[3]
         self.instances.append(self)
 
     async def start(self):
@@ -195,6 +196,8 @@ def test_fixed_sandbox_instructions_survive_rounds_and_compaction(
         assert environment["web_search_enabled"] is False
         assert environment["remote_mcp_servers"] == []
         assert environment["resource_directories"] == []
+        assert environment["available_skills"] == []
+        assert environment["explicit_skill_ids"] == []
         await manager.shutdown()
 
     asyncio.run(scenario())
@@ -258,6 +261,76 @@ def test_run_instructions_refresh_selected_external_tools_and_resources(
         await manager.shutdown()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure_openai"])
+def test_all_skills_available_and_explicit_selection_refreshes_after_compaction(tmp_path, provider):
+    async def scenario():
+        manager, store, client, request = setup(
+            tmp_path,
+            [[shell("ls")], [message()], [message()], [message()], [message()]],
+            provider,
+            compact_token_threshold=1000,
+        )
+        for sid, name, description in (
+            ("review", "academic-writing", "Review paper drafts"),
+            ("brief", "morning-brief", "Prepare a morning briefing"),
+        ):
+            folder = tmp_path / sid
+            folder.mkdir()
+            (folder / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: {description}\n---\n"
+                "BODY_ONLY_READ_WHEN_NEEDED\n"
+            )
+            manager.config.skills.append(Skill(id=sid, label=name, path=folder))
+        catalog = [
+            {"id": "review", "name": "academic-writing", "description": "Review paper drafts", "path": "/skills/review"},
+            {"id": "brief", "name": "morning-brief", "description": "Prepare a morning briefing", "path": "/skills/brief"},
+        ]
+        client.tokens = 1100
+        for ids in ([], ["brief", "review"], ["review"], []):
+            request.skill_ids = ids
+            calls_before = len(client.calls)
+            compacts_before = len(client.compacts)
+            run = manager.start(request)
+            await manager.tasks[run["id"]]
+            assert store.run(run["id"])["status"] == "completed"
+            assert store.run(run["id"])["request"]["skill_ids"] == ids
+            assert [skill.id for skill in FakeSandbox.instances[-1].skills] == ["review", "brief"]
+            calls = client.calls[calls_before:]
+            compacts = client.compacts[compacts_before:]
+            assert compacts
+            for call in [*calls, *compacts]:
+                environment = run_environment(call["instructions"])
+                assert environment["available_skills"] == catalog
+                assert environment["explicit_skill_ids"] == ids
+                assert "smallest relevant set" in call["instructions"]
+                assert "read and apply them even when their descriptions" in call["instructions"]
+                assert "BODY_ONLY_READ_WHEN_NEEDED" not in str(call)
+                assert call["instructions"] == calls[0]["instructions"]
+            for call in calls:
+                assert call["tools"][0]["environment"]["skills"] == [
+                    {key: skill[key] for key in ("name", "description", "path")}
+                    for skill in catalog
+                ]
+        await manager.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("ids", [["unknown"], ["review", "review"]])
+def test_explicit_skills_reject_unknown_and_duplicate_ids(tmp_path, ids):
+    manager, _, client, request = setup(tmp_path, [[message()]])
+    folder = tmp_path / "skill"
+    folder.mkdir()
+    (folder / "SKILL.md").write_text("---\nname: review\ndescription: Review drafts\n---\nReview.")
+    manager.config.skills = [Skill(id="review", label="Review", path=folder)]
+    request.skill_ids = ids
+    before = len(FakeSandbox.instances)
+    with pytest.raises(ValueError, match="Unknown or duplicate configured ID"):
+        manager.start(request)
+    assert len(FakeSandbox.instances) == before
+    assert client.calls == []
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure_openai"])
