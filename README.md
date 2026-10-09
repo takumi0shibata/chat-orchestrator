@@ -69,7 +69,7 @@ Remote MCPはプロバイダ側から接続されるため、ローカルの `lo
 
 Skillsの自動利用は標準動作で、ON/OFF設定はありません。`@skill-name` または＋メニューの選択は明示的な適用指定です。チップや選択を解除すると明示指定を外し、自動判断に戻ります。自動候補からの除外ではありません。モデルには、適用するSkill名と目的を日本語の進捗で短く伝え、本文を読んでから実行するよう指示します。明示指定と自動利用の方針は各実行・履歴圧縮に渡します。ユーザーの依頼とsandboxの制約がSkillの指示に優先し、Skillから未選択のモデル／データ、Web検索、Remote MCPが有効になることはありません。
 
-OpenAIの新規会話の標準モデルは `gpt-6-sol`、新規データベースでのタイトル生成の標準モデルは `gpt-6-luna` です。`gpt-6.1-sol`、`gpt-6-astra` と GPT-5.6 系も選べます。推論の標準は `medium`。GPT-6 Sol/LunaとGPT-5.6 Sol/Terraは `none/low/medium/high/xhigh/max`、GPT-6.1 Sol・GPT-6 Astra・GPT-5.6 Lunaは `low/medium/high/xhigh/max` に対応します。既存会話のモデル履歴と保存済みタイトル生成設定は変更しません。
+新規会話の標準モデルは `gpt-6.1-sol` です（Azureでは同モデルのデプロイがあればそれを選び、なければ一覧の先頭）。新規データベースでのタイトル生成の標準モデルは `gpt-6-luna` です。`gpt-6-sol`、`gpt-6-astra` と GPT-5.6 系も選べます。モデル選択ではAstra・Sol・Terra・Lunaの各ファミリーの最新モデルだけを表示し、それ以外は「More models」にまとめます。推論の深さはスライダーで選びます。推論の標準は `medium`。GPT-6 Sol/LunaとGPT-5.6 Sol/Terraは `none/low/medium/high/xhigh/max`、GPT-6.1 Sol・GPT-6 Astra・GPT-5.6 Lunaは `low/medium/high/xhigh/max` に対応します。既存会話のモデル履歴と保存済みタイトル生成設定は変更しません。
 
 Azure OpenAIでは `runtime.toml` の `azure_models` に登録し、接続先のEndpointとAPIキーが設定されたデプロイだけが会話・タイトル生成の選択肢に表示されます。GPT-6 Astra・Sol・Lunaは対応済みです。新しいAzureリソースを使う場合は、以下のように接続先を登録して各デプロイに紐づけます。
 

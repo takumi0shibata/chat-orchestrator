@@ -72,9 +72,10 @@ it.each([false, true])("shows Azure connection labels and filters a bound chat: 
   await waitFor(() => expect(model).toHaveTextContent("GPT-5.6 Luna · 既存Azure"));
   fireEvent.click(model);
   const options = screen.getAllByRole("option").map((option) => option.textContent);
+  // The selected GPT-5.6 Luna is an older Luna, so "More models" opens with it shown.
   expect(options).toEqual(bound
     ? ["GPT-6 Astra · 既存Azure", "GPT-5.6 Luna · 既存Azure"]
-    : ["GPT-6 Astra · 既存Azure", "GPT-6 Sol · 新リージョン", "GPT-6 Luna · 新リージョン", "GPT-5.6 Luna · 既存Azure"]);
+    : ["GPT-6 Astra · 既存Azure", "GPT-6 Sol · 新リージョン", "GPT-6 Luna · 新リージョン", "More models1", "GPT-5.6 Luna · 既存Azure"]);
   if (bound) expect(screen.getByText("別接続先のモデルは新規チャットで選択してください。")).toBeInTheDocument();
   else expect(screen.queryByText("別接続先のモデルは新規チャットで選択してください。")).not.toBeInTheDocument();
   fireEvent.keyDown(screen.getByRole("listbox", { name: "Model" }), { key: "Escape" });
@@ -335,8 +336,10 @@ it("restores selected conversation and replays persistent events on reload", asy
   expect(modelSelector).toHaveTextContent("GPT-5.6 Luna");
   const effortSelector = screen.getByRole("button", { name: "Reasoning effort" });
   fireEvent.click(effortSelector);
-  fireEvent.click(screen.getByRole("option", { name: "High" }));
+  fireEvent.change(screen.getByRole("slider", { name: "Reasoning effort" }), { target: { value: "2" } });
   expect(effortSelector).toHaveTextContent("High");
+  fireEvent.keyDown(screen.getByRole("slider", { name: "Reasoning effort" }), { key: "Escape" });
+  expect(screen.queryByRole("dialog", { name: "Reasoning effort" })).not.toBeInTheDocument();
   fireEvent.click(modelSelector);
   fireEvent.pointerDown(document.body);
   expect(screen.queryByRole("listbox", { name: "Model" })).not.toBeInTheDocument();
@@ -346,7 +349,7 @@ it("restores selected conversation and replays persistent events on reload", asy
   fireEvent.click(modelSelector);
   fireEvent.click(screen.getByRole("option", { name: "GPT-5.6 Luna" }));
   fireEvent.click(effortSelector);
-  fireEvent.click(screen.getByRole("option", { name: "High" }));
+  fireEvent.click(screen.getByRole("button", { name: "High" }));
   const message = screen.getByRole("textbox", { name: "Message" });
   fireEvent.change(message, { target: { value: "Analyze the report" } });
   fireEvent.keyDown(message, { key: "Enter", shiftKey: true });
@@ -1104,7 +1107,7 @@ it("navigates settings, saves the title model and theme, and shows monthly cost"
   expect(screen.getByText("Tool fees excluded")).toBeInTheDocument();
 });
 
-it("starts new conversations with GPT-6 Sol and offers registered Azure GPT-6 for titles", async () => {
+it("starts new conversations with GPT-6.1 Sol and offers registered Azure GPT-6 for titles", async () => {
   localStorage.setItem("workspace-conversation", "c");
   const config = {
     providers: [
@@ -1147,34 +1150,71 @@ it("starts new conversations with GPT-6 Sol and offers registered Azure GPT-6 fo
 
   render(<App />);
   const modelSelect = await screen.findByRole("button", { name: "Model" });
-  await waitFor(() => expect(modelSelect).toHaveTextContent("GPT-6 Sol"));
+  await waitFor(() => expect(modelSelect).toHaveTextContent("GPT-6.1 Sol"));
   const expectedOrder = [
     "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna",
     "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
   ];
   fireEvent.click(modelSelect);
+  const menu = () => screen.getByRole("listbox", { name: "Model" });
+  // The default GPT-6.1 Sol is the newest Sol, so only each family's newest model is listed.
+  const more = () => screen.getByRole("option", { name: /More models/ });
+  expect(more()).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByRole("option", { name: "GPT-6.1 Sol" })).toHaveAttribute("aria-selected", "true");
   expect(Array.from(screen.getAllByRole("option"), (option) => option.textContent)).toEqual([
-    "GPT-6 Astra", "GPT-6.1 Sol", "GPT-6 Sol", "GPT-6 Luna", "GPT-5.6 Sol", "GPT-5.6 Terra", "GPT-5.6 Luna",
+    "GPT-6 Astra", "GPT-6.1 Sol", "GPT-6 Luna", "GPT-5.6 Terra", "More models3",
   ]);
-  expect(Array.from(screen.getByRole("listbox", { name: "Model" }).querySelectorAll("[data-model-icon]"), (icon) => icon.getAttribute("data-model-icon"))).toEqual([
-    "astra", "sol", "sol", "luna", "sol", "terra", "luna",
+  expect(Array.from(menu().querySelectorAll("[data-model-icon]"), (icon) => icon.getAttribute("data-model-icon"))).toEqual([
+    "astra", "sol", "luna", "terra",
   ]);
-  fireEvent.keyDown(screen.getByRole("listbox", { name: "Model" }), { key: "Escape" });
+  // Expanding keeps the menu open; End and Enter reach the disclosure from the keyboard.
+  fireEvent.click(more());
+  expect(menu()).toBeInTheDocument();
+  expect(Array.from(screen.getAllByRole("option"), (option) => option.textContent).slice(5)).toEqual([
+    "GPT-6 Sol", "GPT-5.6 Sol", "GPT-5.6 Luna",
+  ]);
+  fireEvent.keyDown(menu(), { key: "Home" });
+  fireEvent.keyDown(menu(), { key: "ArrowDown" });
+  fireEvent.keyDown(menu(), { key: "ArrowDown" });
+  fireEvent.keyDown(menu(), { key: "ArrowDown" });
+  fireEvent.keyDown(menu(), { key: "ArrowDown" });
+  fireEvent.keyDown(menu(), { key: "Enter" });
+  expect(more()).toHaveAttribute("aria-expanded", "false");
+  fireEvent.keyDown(menu(), { key: "Enter" });
+  expect(more()).toHaveAttribute("aria-expanded", "true");
+  fireEvent.click(screen.getByRole("option", { name: "GPT-6 Sol" }));
+  expect(modelSelect).toHaveTextContent("GPT-6 Sol");
+  // A model from "More models" reopens the menu already expanded around it.
+  fireEvent.click(modelSelect);
+  expect(more()).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("option", { name: "GPT-6 Sol" })).toHaveAttribute("aria-selected", "true");
+  fireEvent.keyDown(menu(), { key: "Escape" });
   expect(screen.queryByRole("listbox", { name: "Model" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Reasoning effort" })).toHaveTextContent("Medium");
-  fireEvent.click(screen.getByRole("button", { name: "Reasoning effort" }));
-  expect(Array.from(screen.getByRole("listbox", { name: "Reasoning effort" }).querySelectorAll('[role="option"]'), (option) => option.textContent)).toEqual([
+
+  const effortButton = screen.getByRole("button", { name: "Reasoning effort" });
+  expect(effortButton).toHaveTextContent("Medium");
+  fireEvent.click(effortButton);
+  const slider = screen.getByRole("slider", { name: "Reasoning effort" });
+  expect(slider).toHaveAttribute("max", "1");
+  expect(slider).toHaveAttribute("aria-valuetext", "Medium");
+  expect(Array.from(screen.getByRole("dialog", { name: "Reasoning effort" }).querySelectorAll(".effort-ticks button"), (tick) => tick.textContent)).toEqual([
     "Instant", "Medium",
   ]);
-  fireEvent.keyDown(screen.getByRole("listbox", { name: "Reasoning effort" }), { key: "Escape" });
+  fireEvent.change(slider, { target: { value: "0" } });
+  expect(effortButton).toHaveTextContent("Instant");
+  fireEvent.keyDown(slider, { key: "Escape" });
 
   fireEvent.click(modelSelect);
   fireEvent.click(screen.getByRole("option", { name: "GPT-6.1 Sol" }));
-  fireEvent.click(screen.getByRole("button", { name: "Reasoning effort" }));
-  expect(Array.from(screen.getByRole("listbox", { name: "Reasoning effort" }).querySelectorAll('[role="option"]'), (option) => option.textContent)).toEqual([
-    "Light", "Medium", "High", "Extra High", "Max",
+  expect(effortButton).toHaveTextContent("Medium");
+  fireEvent.click(effortButton);
+  expect(Array.from(screen.getByRole("dialog", { name: "Reasoning effort" }).querySelectorAll(".effort-ticks button"), (tick) => tick.textContent)).toEqual([
+    "Light", "Medium", "High", "X-High", "Max",
   ]);
-  fireEvent.keyDown(screen.getByRole("listbox", { name: "Reasoning effort" }), { key: "Escape" });
+  fireEvent.click(screen.getByRole("button", { name: "X-High" }));
+  expect(effortButton).toHaveTextContent("Extra High");
+  fireEvent.pointerDown(document.body);
+  expect(screen.queryByRole("dialog", { name: "Reasoning effort" })).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
   const titleModelSelect = screen.getByRole("combobox", { name: "Title model" });

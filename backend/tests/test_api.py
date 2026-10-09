@@ -59,7 +59,7 @@ def test_run_events_replay_delete_preserves_original(app_client):
     original.write_text("original")
     cid = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]
     r = http.post("/api/runs", json={"conversation_id": cid, "input": "hello"}).json()
-    assert r["request"]["model"] == "gpt-6-sol"
+    assert r["request"]["model"] == "gpt-6.1-sol"
     first = http.get(f"/api/runs/{r['id']}/events").text.strip().splitlines()
     import json
 

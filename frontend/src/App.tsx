@@ -67,6 +67,13 @@ const MODEL_ORDER = [
   "gpt-5.6-luna",
 ];
 
+/** Model preselected for new chats when the provider offers it (Azure: any deployment of it). */
+const DEFAULT_MODEL = "gpt-6.1-sol";
+
+function defaultModelId(models: Model[]) {
+  return (models.find((item) => item.model === DEFAULT_MODEL) ?? models[0])?.id ?? "";
+}
+
 const HISTORY_INITIAL_COUNT = 5;
 const HISTORY_PAGE_SIZE = 10;
 const REASONING_EFFORT_LABELS: Record<string, string> = {
@@ -99,6 +106,19 @@ function orderedModels(models: Model[]): Model[] {
     return index < 0 ? MODEL_ORDER.length : index;
   };
   return [...models].sort((a, b) => rank(a) - rank(b));
+}
+
+/** The first model of each family (in display order) is shown; the rest go under "More models". */
+function splitModelsByFamily(models: Model[]): { primary: Model[]; more: Model[] } {
+  const seen = new Set<string>();
+  const primary: Model[] = [];
+  const more: Model[] = [];
+  for (const model of orderedModels(models)) {
+    const family = modelFamilyIconName(model.model) ?? model.model;
+    (seen.has(family) ? more : primary).push(model);
+    seen.add(family);
+  }
+  return { primary, more };
 }
 
 function themeVariables(color: string): CSSProperties {
@@ -216,22 +236,37 @@ function ModelFamilyIcon({ name, size = "sm" }: { name: ModelFamilyIconName; siz
   );
 }
 
-function PopoverSelect({ label, value, options, onChange, disabled = false, className = "" }: {
+type PopoverRow = { kind: "option"; option: PopoverSelectOption } | { kind: "more" };
+
+/**
+ * Listbox popover. `moreOptions` sit behind a "More …" row that expands in place; it
+ * starts expanded when the current value is one of them.
+ */
+function PopoverSelect({ label, value, options, moreOptions = [], moreLabel = "More", onChange, disabled = false, className = "" }: {
   label: string;
   value: string;
   options: PopoverSelectOption[];
+  moreOptions?: PopoverSelectOption[];
+  moreLabel?: string;
   onChange: (value: string) => void;
   disabled?: boolean;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const menuId = `popover-select-${useId().replace(/:/g, "")}`;
-  const selectedIndex = options.findIndex((option) => option.value === value);
-  const selectedOption = options[selectedIndex];
+  const selectedInMore = moreOptions.some((option) => option.value === value);
+  const rows: PopoverRow[] = [
+    ...options.map((option) => ({ kind: "option" as const, option })),
+    ...(moreOptions.length ? [{ kind: "more" as const }] : []),
+    ...(expanded ? moreOptions.map((option) => ({ kind: "option" as const, option })) : []),
+  ];
+  const selectedIndex = rows.findIndex((row) => row.kind === "option" && row.option.value === value);
+  const selectedOption = [...options, ...moreOptions].find((option) => option.value === value);
   const selectedLabel = selectedOption?.label || value;
 
   useEffect(() => {
@@ -244,26 +279,44 @@ function PopoverSelect({ label, value, options, onChange, disabled = false, clas
   }, [open]);
 
   useEffect(() => {
-    if (!open) return;
-    setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0);
-    listRef.current?.focus();
-  }, [open, selectedIndex]);
+    if (open) listRef.current?.focus();
+  }, [open]);
+
+  const revealMore = useRef(false);
+  useEffect(() => {
+    if (!expanded || !revealMore.current) return;
+    revealMore.current = false;
+    // Bring the newly listed models into view inside the height-capped menu.
+    listRef.current?.querySelector<HTMLElement>(".popover-select-more")?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  }, [expanded]);
 
   function close() {
     setOpen(false);
     triggerRef.current?.focus();
   }
 
-  function selectOption(index: number) {
-    const option = options[index];
-    if (!option) return;
-    onChange(option.value);
+  function activate(index: number) {
+    const row = rows[index];
+    if (!row) return;
+    if (row.kind === "more") {
+      revealMore.current = !expanded;
+      setExpanded((value) => !value);
+      setActiveIndex(index);
+      return;
+    }
+    onChange(row.option.value);
     close();
   }
 
-  function openMenu(index = selectedIndex >= 0 ? selectedIndex : 0) {
-    if (disabled || options.length === 0) return;
-    setActiveIndex(index);
+  function openMenu(toEnd = false) {
+    if (disabled || rows.length === 0) return;
+    const showMore = selectedInMore;
+    setExpanded(showMore);
+    const visible = options.length + (moreOptions.length ? 1 : 0) + (showMore ? moreOptions.length : 0);
+    const current = showMore && selectedInMore
+      ? options.length + 1 + moreOptions.findIndex((option) => option.value === value)
+      : options.findIndex((option) => option.value === value);
+    setActiveIndex(toEnd ? visible - 1 : Math.max(0, current));
     setOpen(true);
   }
 
@@ -275,7 +328,7 @@ function PopoverSelect({ label, value, options, onChange, disabled = false, clas
     }
     if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(event.key)) {
       event.preventDefault();
-      openMenu(event.key === "ArrowUp" ? options.length - 1 : undefined);
+      openMenu(event.key === "ArrowUp");
     }
   }
 
@@ -291,19 +344,39 @@ function PopoverSelect({ label, value, options, onChange, disabled = false, clas
     }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      setActiveIndex((index) => Math.max(0, Math.min(options.length - 1, index + (event.key === "ArrowDown" ? 1 : -1))));
+      setActiveIndex((index) => Math.max(0, Math.min(rows.length - 1, index + (event.key === "ArrowDown" ? 1 : -1))));
       return;
     }
     if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
-      setActiveIndex(event.key === "Home" ? 0 : options.length - 1);
+      setActiveIndex(event.key === "Home" ? 0 : rows.length - 1);
       return;
     }
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      selectOption(activeIndex);
+      activate(activeIndex);
     }
   }
+
+  const renderOption = (option: PopoverSelectOption, index: number) => (
+    <button
+      className={`popover-select-option ${index === activeIndex ? "is-active" : ""}`}
+      id={`${menuId}-option-${index}`}
+      key={option.value}
+      type="button"
+      role="option"
+      tabIndex={-1}
+      aria-selected={option.value === value}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => activate(index)}
+    >
+      <span className="popover-select-option-label">
+        {option.icon && <ModelFamilyIcon name={option.icon} size="md" />}
+        <span>{option.label}</span>
+      </span>
+      {option.value === value && <Icon name="check" size={15} />}
+    </button>
+  );
 
   return (
     <div className={`popover-select ${className}`.trim()} ref={rootRef}>
@@ -333,28 +406,123 @@ function PopoverSelect({ label, value, options, onChange, disabled = false, clas
           role="listbox"
           tabIndex={-1}
           aria-label={label}
-          aria-activedescendant={options[activeIndex] ? `${menuId}-option-${activeIndex}` : undefined}
+          aria-activedescendant={rows[activeIndex] ? `${menuId}-option-${activeIndex}` : undefined}
           onKeyDown={handleListKeyDown}
         >
-          {options.map((option, index) => (
+          {rows.map((row, index) => row.kind === "option" ? renderOption(row.option, index) : (
             <button
-              className={`popover-select-option ${index === activeIndex ? "is-active" : ""}`}
+              className={`popover-select-option popover-select-more ${index === activeIndex ? "is-active" : ""}`}
               id={`${menuId}-option-${index}`}
-              key={option.value}
+              key="more"
               type="button"
               role="option"
               tabIndex={-1}
-              aria-selected={option.value === value}
+              aria-selected={false}
+              aria-expanded={expanded}
               onMouseDown={(event) => event.preventDefault()}
-              onClick={() => selectOption(index)}
+              onClick={() => activate(index)}
             >
               <span className="popover-select-option-label">
-                {option.icon && <ModelFamilyIcon name={option.icon} size="md" />}
-                <span>{option.label}</span>
+                <span>{moreLabel}</span>
+                <small>{moreOptions.length}</small>
               </span>
-              {option.value === value && <Icon name="check" size={15} />}
+              <span className={`popover-select-more-chevron ${expanded ? "is-expanded" : ""}`}><Icon name="chevron-right" size={14} /></span>
             </button>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Ordered levels as a stepped slider, like the effort control in Codex and Claude. */
+export function EffortSlider({ value, levels, onChange, disabled = false }: {
+  value: string;
+  levels: string[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const sliderRef = useRef<HTMLInputElement>(null);
+  const panelId = `effort-${useId().replace(/:/g, "")}`;
+  const index = Math.max(0, levels.indexOf(value));
+  const level = levels.length > 1 ? index / (levels.length - 1) : 1;
+
+  useEffect(() => {
+    if (!open) return;
+    sliderRef.current?.focus();
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [open]);
+
+  function close() {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  return (
+    <div className="effort-slider" ref={rootRef}>
+      <button
+        ref={triggerRef}
+        className="popover-select-trigger effort-trigger"
+        type="button"
+        aria-label="Reasoning effort"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={panelId}
+        disabled={disabled || levels.length === 0}
+        onClick={() => (open ? close() : setOpen(true))}
+      >
+        <span className="effort-meter" aria-hidden="true">
+          {[0, 1, 2, 3].map((bar) => (
+            <span key={bar} className={bar / 3 <= level + 1e-9 ? "is-on" : undefined} />
+          ))}
+        </span>
+        <span>{reasoningEffortLabel(value)}</span>
+        <Icon name="chevron-down" size={14} />
+      </button>
+      {open && (
+        <div className="effort-panel" id={panelId} role="dialog" aria-label="Reasoning effort"
+          onKeyDown={(event) => {
+            if (event.key === "Escape" || event.key === "Enter") {
+              event.preventDefault();
+              close();
+            }
+          }}>
+          <div className="effort-panel-header">
+            <span>Reasoning effort</span>
+            <strong>{reasoningEffortLabel(value)}</strong>
+          </div>
+          <input
+            ref={sliderRef}
+            type="range"
+            min={0}
+            max={Math.max(0, levels.length - 1)}
+            step={1}
+            value={index}
+            aria-label="Reasoning effort"
+            aria-valuetext={reasoningEffortLabel(value)}
+            style={{ "--effort-fill": `${level * 100}%` } as CSSProperties}
+            onChange={(event) => onChange(levels[Number(event.target.value)])}
+          />
+          <div className="effort-ticks">
+            {levels.map((item, position) => {
+              const ratio = levels.length > 1 ? position / (levels.length - 1) : 0;
+              const edge = position === 0 ? "is-first" : position === levels.length - 1 ? "is-last" : "";
+              return (
+                <button key={item} type="button" className={`${edge} ${position === index ? "is-current" : ""}`.trim() || undefined}
+                  style={{ "--tick": ratio } as CSSProperties} tabIndex={-1} onClick={() => onChange(item)}>
+                  {item === "xhigh" ? "X-High" : reasoningEffortLabel(item)}
+                </button>
+              );
+            })}
+          </div>
+          <div className="effort-hint" aria-hidden="true"><span>Faster</span><span>Smarter</span></div>
         </div>
       )}
     </div>
@@ -1104,7 +1272,7 @@ export function App() {
     localStorage.getItem(LAST_PROJECT_KEY) || "",
   );
   const [provider, setProvider] = useState("openai");
-  const [model, setModel] = useState("gpt-6-sol");
+  const [model, setModel] = useState(DEFAULT_MODEL);
   const [effort, setEffort] = useState("medium");
   const [skills, setSkills] = useState<string[]>([]);
   const [resources, setResources] = useState<string[]>([]);
@@ -1307,7 +1475,7 @@ export function App() {
         const enabled = c.providers.find((p) => p.enabled && p.models.length);
         if (enabled) {
           setProvider(enabled.id);
-          setModel(enabled.models[0].id);
+          setModel(defaultModelId(enabled.models));
         }
         setCid(restoredConversation?.id || "");
       })
@@ -2232,10 +2400,9 @@ export function App() {
                           disabled={active || runs.length > 0}
                           onChange={(e) => {
                             setProvider(e.target.value);
-                            setModel(
-                              config?.providers.find((p) => p.id === e.target.value)
-                                ?.models[0]?.id || "",
-                            );
+                            setModel(defaultModelId(
+                              config?.providers.find((p) => p.id === e.target.value)?.models ?? [],
+                            ));
                             setEffort("medium");
                           }}
                         >
@@ -2276,23 +2443,29 @@ export function App() {
                   }}
                 />
                 <div className="composer-selection">
-                  <PopoverSelect
-                    label="Model"
-                    value={model}
-                    disabled={active}
-                    className="model-select"
-                    options={orderedModels(models).map((m) => ({ value: m.id, label: modelDisplayLabel(m), icon: modelFamilyIconName(m.model) }))}
-                    onChange={(value) => {
-                      setModel(value);
-                      setEffort("medium");
-                    }}
-                  />
-                  <PopoverSelect
-                    label="Reasoning effort"
+                  {(() => {
+                    const { primary, more } = splitModelsByFamily(models);
+                    const toOption = (m: Model) => ({ value: m.id, label: modelDisplayLabel(m), icon: modelFamilyIconName(m.model) });
+                    return (
+                      <PopoverSelect
+                        label="Model"
+                        value={model}
+                        disabled={active}
+                        className="model-select"
+                        options={primary.map(toOption)}
+                        moreOptions={more.map(toOption)}
+                        moreLabel="More models"
+                        onChange={(value) => {
+                          setModel(value);
+                          setEffort("medium");
+                        }}
+                      />
+                    );
+                  })()}
+                  <EffortSlider
                     value={effort}
+                    levels={selectedModel?.efforts || []}
                     disabled={active}
-                    className="effort-select"
-                    options={(selectedModel?.efforts || []).map((value) => ({ value, label: reasoningEffortLabel(value) }))}
                     onChange={setEffort}
                   />
                 </div>
