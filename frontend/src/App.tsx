@@ -8,6 +8,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { api, events } from "./api";
 import { MarkdownContent } from "./components/MarkdownContent";
+import { TextFileEditor } from "./components/TextFileEditor";
 import {
   exactSkillMatch,
   findSkillMention,
@@ -613,7 +614,7 @@ function FileTypeIcon({ name }: { name: string }) {
 
 const WORKSPACE_FILE_MIME = "application/x-chat-workspace-file";
 
-function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle, onRetry, conversationId, depth = 0 }: {
+function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle, onRetry, onOpen, conversationId, depth = 0 }: {
   entries: WorkspaceFile[];
   childrenByPath: Record<string, WorkspaceFile[]>;
   expanded: string[];
@@ -621,6 +622,7 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
   errors: Record<string, string>;
   onToggle: (entry: WorkspaceFile) => void;
   onRetry: (path: string) => void;
+  onOpen: (path: string) => void;
   conversationId: string;
   depth?: number;
 }) {
@@ -634,7 +636,8 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
         const isExpanded = expanded.includes(entry.path);
         if (!entry.directory) return (
           <li key={entry.path}>
-            <button className="file-tree-row file-tree-file" type="button" draggable title={`${entry.path} — Drag to the message input`}
+            <button className="file-tree-row file-tree-file" type="button" draggable title={`${entry.path} — Click to open; drag to the message input`}
+              onClick={() => onOpen(entry.path)}
               onDragStart={(event) => startDrag(event, entry)}>
               <span className="file-tree-spacer" />
               <FileTypeIcon name={entry.name} />
@@ -658,7 +661,7 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
                 {isLoading && <div className="file-tree-state" role="status"><span className="file-tree-spinner" />Loading…</div>}
                 {!isLoading && error && <div className="file-tree-state file-tree-error" role="alert"><span>Couldn’t load folder.</span><button type="button" aria-label={`Retry loading ${entry.name}`} onClick={() => onRetry(entry.path)}>Retry</button></div>}
                 {!isLoading && !error && children?.length === 0 && <div className="file-tree-state">Empty folder</div>}
-                {!isLoading && !error && children && <FileTree entries={children} childrenByPath={childrenByPath} expanded={expanded} loading={loading} errors={errors} onToggle={onToggle} onRetry={onRetry} conversationId={conversationId} depth={depth + 1} />}
+                {!isLoading && !error && children && <FileTree entries={children} childrenByPath={childrenByPath} expanded={expanded} loading={loading} errors={errors} onToggle={onToggle} onRetry={onRetry} onOpen={onOpen} conversationId={conversationId} depth={depth + 1} />}
               </div>
             )}
           </li>
@@ -1534,6 +1537,7 @@ export function App() {
   const [loadingFolders, setLoadingFolders] = useState<string[]>([]);
   const [fileErrors, setFileErrors] = useState<Record<string, string>>({});
   const [showFiles, setShowFiles] = useState(() => window.innerWidth > 1100);
+  const [editingFile, setEditingFile] = useState<{ conversationId: string; path: string } | null>(null);
   const [terminalMounted, setTerminalMounted] = useState(false);
   const [terminalVisible, setTerminalVisible] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(() => {
@@ -2299,7 +2303,7 @@ export function App() {
         <a className="brand" href="/">
           <img className="brand-icon" src="/app-icon.png" alt="" />
           <span>
-            Workspace<span className="brand-sub">RESPONSES AGENT</span>
+            Orchestrator<span className="brand-sub">RESPONSES AGENT</span>
           </span>
         </a>
         <div className="sidebar-commands">
@@ -2849,12 +2853,14 @@ export function App() {
           {loadingFolders.includes("") && !filesByPath[""] && <div className="file-tree-state file-tree-root-state" role="status"><span className="file-tree-spinner" />Loading files…</div>}
           {!loadingFolders.includes("") && fileErrors[""] && <div className="file-tree-state file-tree-error file-tree-root-state" role="alert"><span>Couldn’t load files.</span><button type="button" onClick={() => void loadFileFolder("")}>Retry</button></div>}
           {!loadingFolders.includes("") && !fileErrors[""] && filesByPath[""]?.length === 0 && <div className="file-tree-state file-tree-root-state">No files yet</div>}
-          {filesByPath[""] && <FileTree entries={filesByPath[""]} childrenByPath={filesByPath} expanded={expandedFolders} loading={loadingFolders} errors={fileErrors} onToggle={toggleFileFolder} onRetry={(path) => void loadFileFolder(path)} conversationId={cid} />}
+          {filesByPath[""] && <FileTree entries={filesByPath[""]} childrenByPath={filesByPath} expanded={expandedFolders} loading={loadingFolders} errors={fileErrors} onToggle={toggleFileFolder} onRetry={(path) => void loadFileFolder(path)} onOpen={(path) => setEditingFile({ conversationId: cid, path })} conversationId={cid} />}
         </div>
         <p className="files-note">
-          Drag a file or folder to the message input to insert its relative path.
+          Click a text file to edit. Drag a file or folder to the message input to insert its relative path.
         </p>
       </aside>}
+      {editingFile && <TextFileEditor key={`${editingFile.conversationId}:${editingFile.path}`} {...editingFile}
+        onClose={() => setEditingFile(null)} onSaved={() => setFileRevision((value) => value + 1)} />}
       {terminalMounted && currentWorkspace && <div id="host-terminal-panel"
         className={`terminal-grid-cell ${terminalVisible ? "" : "is-hidden"}`}
         aria-hidden={!terminalVisible}>

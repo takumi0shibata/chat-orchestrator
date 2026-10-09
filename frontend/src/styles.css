@@ -1776,7 +1776,7 @@ h2 {
   letter-spacing: .02em;
 }
 .history-group .sidebar-heading { margin-top: 6px; }
-.project-group { margin-bottom: 2px; }
+.project-group { margin-bottom: 1px; }
 .project-row { display: flex; align-items: center; border-radius: 9px; }
 .project-row:hover,
 .project-row:focus-within { background: #ececef; }
@@ -1786,7 +1786,7 @@ h2 {
   gap: 7px;
   min-width: 0;
   flex: 1;
-  padding: 9px 7px;
+  padding: 6px 7px;
   border: 0;
   background: transparent;
   text-align: left;
@@ -1844,8 +1844,9 @@ h2 {
 .project-conversations-inner {
   min-height: 0;
   overflow: hidden;
-  padding: 2px 0 4px;
+  padding: 0;
 }
+.project-conversations.is-expanded > .project-conversations-inner { padding: 2px 0 4px; }
 .history-more {
   display: block;
   width: calc(100% - 16px);
@@ -1892,8 +1893,50 @@ h2 {
 .conversation .history-action[aria-pressed="true"] svg { fill: #315c4726; }
 .conversation .history-action:focus-visible { outline: 2px solid #698a76; outline-offset: 1px; }
 .conversation .history-action:disabled { cursor: default; }
-.file-tree-file, .file-tree-directory { cursor: grab; }
+.file-tree-file { cursor: pointer; }
+.file-tree-directory { cursor: grab; }
 .file-tree-file:active, .file-tree-directory:active { cursor: grabbing; }
+
+.text-editor-dialog {
+  width: min(960px, calc(100vw - 40px));
+  height: min(800px, calc(100dvh - 64px));
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  border: 1px solid #dedee3;
+  border-radius: 14px;
+  background: #fff;
+  color: #303238;
+  box-shadow: 0 24px 90px #20212430;
+}
+.text-editor-dialog[open] { display: flex; flex-direction: column; }
+.text-editor-dialog::backdrop { background: #20212466; }
+.text-editor-header { display: flex; align-items: center; gap: 16px; padding: 18px 20px 14px; }
+.text-editor-heading { min-width: 0; flex: 1; }
+.text-editor-heading h2 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.text-editor-heading p { margin: 5px 0 0; color: #777980; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.text-editor-dialog button,
+.text-editor-toolbar a { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; color: #555961; text-decoration: none; font-size: 12px; }
+.text-editor-dialog button:not(.text-editor-save):not(:disabled):hover,
+.text-editor-toolbar a:hover { background: #eaeaef; }
+.text-editor-dialog button:disabled { opacity: .45; cursor: default; }
+.text-editor-dialog .text-editor-close { flex: none; padding: 8px; }
+.text-editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 16px; border-block: 1px solid #e7e7eb; background: #fafafa; }
+.text-editor-toolbar > span { flex: 1; min-width: 100px; color: #787a82; font-size: 12px; }
+.text-editor-dialog .text-editor-save { background: var(--theme-color, #25262a); color: var(--theme-foreground, #fff); }
+.text-editor-dialog .text-editor-save:hover:not(:disabled) { background: var(--theme-hover, #434449); color: var(--theme-foreground, #fff); }
+.text-editor-input { display: block; flex: 1; width: 100%; min-height: 0; margin: 0; padding: 20px; border: 0; border-radius: 0; resize: none; background: #fff; color: #303238; font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 2; overflow: auto; }
+.text-editor-input:focus-visible { outline: 2px solid #8b9d9180; outline-offset: -2px; }
+.text-editor-input:read-only { background: #fafafa; }
+.text-editor-error { margin: 0; padding: 12px 20px; background: #fff1ed; color: #944d3b; font-size: 12px; overflow-wrap: anywhere; }
+.text-editor-empty { flex: 1; display: grid; place-content: center; padding: 32px; text-align: center; color: #777980; font-size: 13px; }
+.text-editor-footer { padding: 10px 20px; border-top: 1px solid #e7e7eb; color: #83858c; font-size: 11px; }
+@media (max-width: 600px) {
+  .text-editor-dialog { width: calc(100vw - 16px); height: calc(100dvh - 24px); }
+  .text-editor-header { padding: 12px; }
+  .text-editor-toolbar { padding: 8px; gap: 3px; }
+  .text-editor-input { padding: 12px; }
+}
 .composer-box.is-path-dragging { border-color: #698a76; box-shadow: 0 0 0 2px #698a7633; }
 .path-drop-hint { position: absolute; top: 8px; right: 12px; pointer-events: none; padding: 4px 8px; border-radius: 5px; background: #e9f2ec; color: #315c47; font-size: 12px; }
 

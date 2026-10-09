@@ -15,6 +15,11 @@ class ConversationUpdate(Request):
     pinned: bool
 
 
+class TextFileUpdate(Request):
+    content: str = Field(max_length=1024 * 1024)
+    revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class AppSettingsUpdate(Request):
     title_provider: Literal["openai", "azure_openai"] | None = None
     title_model: str | None = None

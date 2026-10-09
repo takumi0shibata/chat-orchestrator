@@ -949,12 +949,17 @@ it("renders a lazy file tree with typed icons, caching, refresh, empty and retry
   };
   const calls: Record<string, number> = {};
   let brokenAttempts = 0;
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+  let savedContent = "";
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
     const url = String(input);
     if (url === "/api/config") return new Response(JSON.stringify(config));
     if (url === "/api/settings") return new Response(JSON.stringify({ title_provider: "openai", title_model: "gpt-5.6-luna", theme_color: "#25262A" }));
     if (url === "/api/conversations") return new Response(JSON.stringify([conversation]));
     if (url === "/api/conversations/c") return new Response(JSON.stringify({ ...conversation, runs: [] }));
+    if (url === "/api/conversations/c/file?path=broken%2Ffixed.py") {
+      if (options?.method === "PUT") savedContent = JSON.parse(String(options.body)).content;
+      return new Response(JSON.stringify({ path: "broken/fixed.py", content: savedContent || "print('hello')", revision: "a".repeat(64), size: 12 }));
+    }
     if (url.startsWith("/api/conversations/c/files")) {
       const path = decodeURIComponent(url.split("path=")[1] || "");
       calls[path] = (calls[path] || 0) + 1;
@@ -1010,6 +1015,14 @@ it("renders a lazy file tree with typed icons, caching, refresh, empty and retry
   await waitFor(() => expect(calls.documents).toBe(2));
   expect(container.querySelector('.file-tree-chevron.is-expanded')).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "documents" })).toHaveAttribute("aria-expanded", "true");
+  fireEvent.click(screen.getByRole("button", { name: /fixed.py/ }));
+  const editor = await screen.findByRole("textbox", { name: "File content" });
+  fireEvent.change(editor, { target: { value: "print('updated')" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(calls[""]).toBe(3));
+  expect(savedContent).toBe("print('updated')");
+  fireEvent.click(screen.getByRole("button", { name: "Close file editor" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 
 it("uploads dropped files, reports errors, and keeps nested drag state stable", async () => {
@@ -1349,7 +1362,7 @@ it("inserts workspace paths at the caret and replaces selections without uploadi
   fireEvent.dragStart(file, { dataTransfer: transfer });
   expect(transfer.setData).toHaveBeenCalledWith(fileMime, JSON.stringify({ conversationId: "c", path: "資料/結果 report.csv" }));
   expect(transfer.effectAllowed).toBe("copy");
-  fireEvent.click(file);
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(file).not.toHaveAttribute("href");
   fireEvent.change(message, { target: { value: "この を編集して" } });
   message.setSelectionRange(3, 3);
