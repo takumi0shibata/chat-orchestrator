@@ -15,6 +15,7 @@ from app.agent_runner import RunManager
 from app.attachments import list_files, open_regular, save_upload
 from app.checkpoints import CheckpointConflict
 from app.config import get_settings
+from app.guild import Guild
 from app.model_catalog import models_for
 from app.schemas import (
     AppSettingsUpdate,
@@ -75,6 +76,7 @@ def create_app(settings=None, manager_factory=RunManager):
                 manager,
             )
             app.state.terminals = set()
+            app.state.guild = Guild(config.workspaces, store)
             await manager.recover()
             try:
                 yield
@@ -168,6 +170,14 @@ def create_app(settings=None, manager_factory=RunManager):
     @app.get("/api/settings")
     async def app_settings():
         return app.state.manager.title_selection()
+
+    @app.get("/api/guild")
+    async def guild_snapshot():
+        return await asyncio.to_thread(app.state.guild.snapshot)
+
+    @app.post("/api/guild/sync")
+    async def sync_guild():
+        return await asyncio.to_thread(app.state.guild.sync)
 
     @app.patch("/api/settings")
     async def update_app_settings(body: AppSettingsUpdate):
