@@ -14,6 +14,14 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+# Added after the first release; NULL means "use the app's built-in default".
+SETTINGS_COLUMNS = {
+    "default_provider": "TEXT",
+    "default_model": "TEXT",
+    "default_effort": "TEXT",
+    "default_web_search": "INTEGER NOT NULL DEFAULT 0",
+    "monthly_budget_usd": "REAL",
+}
 SEARCH_TOKEN = re.compile(r'"([^"]+)"|“([^”]+)”|(\S+)')
 # Markdown emphasis and code markers often split Japanese phrases (修正案だけ**、**理由).
 SEARCH_MARKUP = str.maketrans("", "", "*`~")
@@ -97,8 +105,13 @@ class Store:
             # leave completed run streams waiting on an orphaned state.
             c.execute("UPDATE conversations SET title_status='complete' WHERE title_status='generating'")
             c.execute(
-                "INSERT OR IGNORE INTO app_settings VALUES(1,'openai','gpt-6-luna','#25262A')"
+                "INSERT OR IGNORE INTO app_settings(id,title_provider,title_model,theme_color) "
+                "VALUES(1,'openai','gpt-6-luna','#25262A')"
             )
+            settings_columns = {r[1] for r in c.execute("PRAGMA table_info(app_settings)")}
+            for column, definition in SETTINGS_COLUMNS.items():
+                if column not in settings_columns:
+                    c.execute(f"ALTER TABLE app_settings ADD COLUMN {column} {definition}")
 
     @contextmanager
     def connect(self):
@@ -320,10 +333,16 @@ class Store:
     def settings(self):
         with self.connect() as c:
             row = c.execute("SELECT * FROM app_settings WHERE id=1").fetchone()
-        return {k: row[k] for k in ("title_provider", "title_model", "theme_color")}
+        result = {k: row[k] for k in ("title_provider", "title_model", "theme_color", *SETTINGS_COLUMNS)}
+        result["default_web_search"] = bool(result["default_web_search"])
+        return result
 
     def update_settings(self, **changes):
-        allowed = {k: v for k, v in changes.items() if k in {"title_provider", "title_model", "theme_color"} and v is not None}
+        """None leaves a value unchanged; use clear_settings to reset nullable ones."""
+        allowed = {
+            k: v for k, v in changes.items()
+            if k in {"title_provider", "title_model", "theme_color", *SETTINGS_COLUMNS} and v is not None
+        }
         if allowed:
             assignments = ",".join(f"{key}=?" for key in allowed)
             with self.connect() as c:
@@ -332,6 +351,24 @@ class Store:
                     (*allowed.values(),),
                 )
         return self.settings()
+
+    def clear_settings(self, *keys):
+        nullable = [k for k in keys if k in SETTINGS_COLUMNS and k != "default_web_search"]
+        if nullable:
+            with self.connect() as c:
+                c.execute(
+                    "UPDATE app_settings SET " + ",".join(f"{k}=NULL" for k in nullable) + " WHERE id=1"
+                )
+        return self.settings()
+
+    def run_dates(self):
+        """Run id -> created_at, for checkpoint housekeeping."""
+        with self.connect() as c:
+            return {r["id"]: r["created_at"] for r in c.execute("SELECT id,created_at FROM runs")}
+
+    def conversation_ids(self):
+        with self.connect() as c:
+            return {r["id"] for r in c.execute("SELECT id FROM conversations")}
 
     def record_cost(self, entry):
         with self.connect() as c:

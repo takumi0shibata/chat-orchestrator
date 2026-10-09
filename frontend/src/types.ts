@@ -32,6 +32,20 @@ export interface AppSettings {
   title_provider: string;
   title_model: string;
   theme_color: string;
+  /** New-chat defaults; null falls back to the app default (GPT-6.1 Sol, Medium). */
+  default_provider: string | null;
+  default_model: string | null;
+  default_effort: string | null;
+  default_web_search: boolean;
+  monthly_budget_usd: number | null;
+}
+export interface AppSettingsChange extends Partial<AppSettings> {
+  reset_default_model?: boolean;
+}
+export interface StorageUsage {
+  checkpoints: { bytes: number; runs: number; oldest: string | null; orphaned_runs: number };
+  attachments: { bytes: number; orphaned_bytes: number; orphaned_conversations: number };
+  database: { bytes: number };
 }
 export interface MonthlyCost {
   month: string;

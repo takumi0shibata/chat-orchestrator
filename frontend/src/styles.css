@@ -52,11 +52,18 @@ button:disabled {
 a {
   color: #455e4d;
 }
+/* Custom chevron with room on the right instead of the edge-hugging native arrow. */
 select {
+  appearance: none;
+  -webkit-appearance: none;
   border: 1px solid #dedee1;
   border-radius: 7px;
-  background: #fff;
-  padding: 7px;
+  background-color: #fff;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2377787d' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 12px;
+  padding: 7px 32px 7px 10px;
   max-width: 100%;
   color: inherit;
 }
@@ -588,7 +595,7 @@ h2 {
 .composer-actions select {
   font-size: 11px;
   max-width: 185px;
-  background: transparent;
+  background-color: transparent;
   border-color: transparent;
 }
 .attach-button {
@@ -2040,7 +2047,7 @@ h2 {
 .title-model-setting { padding: 20px; border: 1px solid #e3e3e6; border-radius: 15px; background: #fafafb; }
 .title-model-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .title-model-controls label { display: grid; gap: 5px; color: #686a71; font-size: 11px; }
-.title-model-controls select { width: 100%; background: #fff; }
+.title-model-controls select { width: 100%; background-color: #fff; }
 .settings-links { margin-top: 22px; border: 1px solid #e3e3e6; border-radius: 15px; overflow: hidden; }
 .settings-links > button { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 16px 18px; border: 0; border-radius: 0; background: #fff; text-align: left; }
 .settings-links > button + button { border-top: 1px solid #eeeeef; }
@@ -2406,3 +2413,61 @@ h2 {
 .effort-ticks button.is-current { color: #25262a; font-weight: 600; }
 .effort-ticks button:hover { color: #45464c; }
 .effort-hint { display: flex; justify-content: space-between; margin-top: 8px; padding-top: 8px; border-top: 1px solid #eeeff2; color: #9a9ca3; font-size: 11px; }
+
+/* New chat defaults, budget and storage pages share the title-model card look. */
+.settings-form { display: grid; gap: 14px; padding: 20px; border: 1px solid #e3e3e6; border-radius: 15px; background: #fafafb; }
+.settings-form > label { display: grid; gap: 5px; color: #686a71; font-size: 11px; }
+.settings-form select { width: 100%; background-color: #fff; }
+.settings-form > label.settings-checkbox { display: flex; align-items: center; gap: 8px; color: #35373c; font-size: 13px; }
+.settings-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.settings-primary, .settings-secondary {
+  justify-self: start;
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.settings-primary { border: 0; background: var(--theme-color, #25262a); color: var(--theme-foreground, #fff); }
+.settings-secondary { border: 1px solid #d5d6db; background: #fff; color: #35373c; }
+.settings-secondary:hover { background: #f4f4f6; }
+/* Beats the global button:hover, which would put white text on light gray. */
+.settings-primary:hover { background: var(--theme-hover, #3d3e41); color: var(--theme-foreground, #fff); }
+.settings-message { margin: 14px 0 0; color: #3f6b4f; font-size: 13px; }
+.budget-input { display: flex; align-items: center; gap: 6px; max-width: 220px; padding: 0 10px; border: 1px solid #d5d6db; border-radius: 8px; background: #fff; color: #35373c; font-size: 14px; }
+.budget-input input { flex: 1; min-width: 0; padding: 8px 0; border: 0; background: transparent; font-size: 14px; outline: none; }
+.budget-input:focus-within { border-color: #9a9ca3; }
+.budget-summary { display: grid; gap: 8px; margin-top: 22px; }
+.budget-summary small { color: #777980; font-size: 12px; }
+.budget-bar { height: 6px; border-radius: 3px; background: #e9eaed; overflow: hidden; }
+.budget-bar > span { display: block; height: 100%; border-radius: 3px; background: #4b8a5f; }
+.budget-bar.budget-near > span { background: #c58a1b; }
+.budget-bar.budget-over > span { background: #c4302b; }
+.budget-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 8px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+.budget-notice.budget-near { background: #fbf1dc; color: #7a5410; }
+.budget-notice.budget-over { background: #fbe6e5; color: #8f2420; }
+.budget-notice button { margin-left: auto; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
+.storage-list { border: 1px solid #e3e3e6; border-radius: 15px; overflow: hidden; background: #fff; }
+.storage-total { display: flex; justify-content: space-between; padding: 16px 18px; background: #fafafb; border-bottom: 1px solid #eeeeef; }
+.storage-total span { color: #777980; font-size: 13px; }
+.storage-total strong { font-size: 18px; }
+.storage-item { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 16px 18px; }
+.storage-item + .storage-item { border-top: 1px solid #eeeeef; }
+.storage-item > div:first-child { display: grid; }
+.storage-item strong { font-size: 14px; }
+.storage-item small { color: #85878e; font-size: 12px; }
+.storage-item > span { align-self: start; font-variant-numeric: tabular-nums; color: #35373c; }
+.storage-item > p { grid-column: 1 / -1; margin: 4px 0 0; color: #777980; font-size: 12px; }
+.storage-action { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.storage-action select { padding: 5px 30px 5px 10px; border: 1px solid #d5d6db; border-radius: 8px; background-color: #fff; font-size: 12px; }
+.storage-action button { padding: 6px 12px; border: 1px solid #e0b4b1; border-radius: 8px; background: #fff; color: #9b2c27; font-size: 12px; cursor: pointer; }
+.storage-action button:hover:not(:disabled) { background: #fdf3f2; }
+.storage-action button:disabled { border-color: #e3e3e6; color: #a5a7ad; cursor: default; }
+@media (max-width: 700px) { .title-model-controls { grid-template-columns: 1fr; } }

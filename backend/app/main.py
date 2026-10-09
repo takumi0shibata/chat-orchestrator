@@ -19,6 +19,7 @@ from app.model_catalog import models_for
 from app.schemas import (
     AppSettingsUpdate,
     Approval,
+    CheckpointPrune,
     ConversationCreate,
     ConversationUpdate,
     Revert,
@@ -173,10 +174,36 @@ def create_app(settings=None, manager_factory=RunManager):
         provider, model = body.title_selection()
         if provider and model:
             app.state.manager.validate_title_selection(provider, model)
-        changes = body.model_dump(exclude_none=True)
+        default_provider, default_model, default_effort = body.default_selection()
+        if default_model:
+            app.state.manager.validate_default_selection(
+                default_provider, default_model, default_effort
+            )
+        changes = body.model_dump(exclude_none=True, exclude={"reset_default_model"})
         if "theme_color" in changes:
             changes["theme_color"] = changes["theme_color"].upper()
-        return app.state.store.update_settings(**changes)
+        cleared = []
+        if changes.get("monthly_budget_usd") == 0:
+            changes.pop("monthly_budget_usd")
+            cleared.append("monthly_budget_usd")
+        if body.reset_default_model:
+            cleared += ["default_provider", "default_model", "default_effort"]
+        app.state.store.update_settings(**changes)
+        return app.state.store.clear_settings(*cleared)
+
+    @app.get("/api/storage")
+    async def storage_usage():
+        return await asyncio.to_thread(app.state.manager.storage_usage)
+
+    @app.post("/api/storage/checkpoints/prune")
+    async def prune_checkpoints(body: CheckpointPrune):
+        return await asyncio.to_thread(
+            app.state.manager.prune_checkpoints, body.older_than_days
+        )
+
+    @app.post("/api/storage/attachments/prune-orphans")
+    async def prune_orphan_attachments():
+        return await asyncio.to_thread(app.state.manager.prune_orphan_attachments)
 
     @app.get("/api/costs/monthly")
     async def monthly_costs():

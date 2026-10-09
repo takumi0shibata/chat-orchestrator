@@ -5,6 +5,9 @@ import os
 import platform
 import re
 import shlex
+import shutil
+import stat
+from datetime import datetime, timedelta, timezone
 from time import monotonic
 
 from app.attachments import direct_input, file_snapshot
@@ -67,6 +70,20 @@ def jsonable(value):
         if hasattr(value, "model_dump")
         else value
     )
+
+
+def directory_size(path):
+    """Bytes of regular files under path, without following symlinks."""
+    total = 0
+    for folder, dirs, files in os.walk(path, followlinks=False):
+        for name in files:
+            try:
+                info = os.lstat(os.path.join(folder, name))
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(info.st_mode):
+                total += info.st_size
+    return total
 
 
 def environment_text(item):
@@ -226,6 +243,77 @@ class RunManager:
                 title_provider=current[0], title_model=current[1]["id"]
             )
         return configured
+
+    def validate_default_selection(self, provider, model, effort):
+        capability = next(
+            (item for item in self.routes.models(provider) if item["id"] == model), None
+        )
+        if not capability:
+            raise ValueError("Unsupported or unavailable default model")
+        if effort not in capability["efforts"]:
+            raise ValueError("Unsupported reasoning effort for the default model")
+
+    def busy(self):
+        return any(not task.done() for task in self.tasks.values())
+
+    def storage_usage(self):
+        root = self.settings.data_dir
+        conversations = self.store.conversation_ids()
+        attachments = root / "attachments"
+        orphans = [
+            d for d in (attachments.iterdir() if attachments.exists() else [])
+            if d.is_dir() and not d.is_symlink() and d.name not in conversations
+        ]
+        runs = self.store.run_dates()
+        checkpoint_runs = set()
+        for repo in self.checkpoints.repos():
+            checkpoint_runs |= self.checkpoints.run_ids(repo)
+        dates = sorted(runs[r] for r in checkpoint_runs if r in runs)
+        return dict(
+            checkpoints=dict(
+                bytes=directory_size(root / "checkpoints"),
+                runs=len(checkpoint_runs),
+                oldest=dates[0] if dates else None,
+                orphaned_runs=len(checkpoint_runs - runs.keys()),
+            ),
+            attachments=dict(
+                bytes=directory_size(attachments),
+                orphaned_bytes=sum(directory_size(d) for d in orphans),
+                orphaned_conversations=len(orphans),
+            ),
+            database=dict(bytes=sum(
+                (root / name).stat().st_size
+                for name in ("agent.db", "agent.db-wal", "agent.db-shm")
+                if (root / name).exists()
+            )),
+        )
+
+    def prune_checkpoints(self, older_than_days):
+        """Remove checkpoints of runs older than the cutoff or no longer in history."""
+        if self.busy():
+            raise ValueError("Wait for running tasks to finish before cleaning up")
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=older_than_days)
+        ).isoformat()
+        runs = self.store.run_dates()
+        removed = 0
+        for repo in self.checkpoints.repos():
+            stale = {r for r in self.checkpoints.run_ids(repo) if r not in runs or runs[r] < cutoff}
+            removed += self.checkpoints.delete_runs(repo, stale)
+        return dict(removed_runs=removed, usage=self.storage_usage())
+
+    def prune_orphan_attachments(self):
+        """Delete uploads whose conversation was deleted; live conversations are untouched."""
+        if self.busy():
+            raise ValueError("Wait for running tasks to finish before cleaning up")
+        root = self.settings.data_dir / "attachments"
+        conversations = self.store.conversation_ids()
+        freed = 0
+        for directory in (root.iterdir() if root.exists() else []):
+            if directory.is_dir() and not directory.is_symlink() and directory.name not in conversations:
+                freed += directory_size(directory)
+                shutil.rmtree(directory)
+        return dict(freed_bytes=freed, usage=self.storage_usage())
 
     def validate_title_selection(self, provider, model):
         if not any(item["id"] == model for item in self.routes.models(provider)):

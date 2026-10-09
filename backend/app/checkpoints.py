@@ -135,6 +135,27 @@ class Checkpoints:
         cache_path.write_text(json.dumps(next_cache))
         return dict(commit=commit, files=len(files), skipped=skipped)
 
+    def repos(self):
+        return sorted(self.root.glob("*.git")) if self.root.exists() else []
+
+    def run_ids(self, repo):
+        output = self.git(repo, "for-each-ref", "--format=%(refname)", "refs/checkpoints/")
+        return {line.split("/")[2] for line in output.decode().splitlines() if line.count("/") >= 3}
+
+    def delete_runs(self, repo, rids):
+        """Drop every checkpoint ref of these runs, then discard unreachable objects."""
+        refs = [
+            line for line in self.git(
+                repo, "for-each-ref", "--format=%(refname)", "refs/checkpoints/"
+            ).decode().splitlines()
+            if line.count("/") >= 3 and line.split("/")[2] in rids
+        ]
+        if not refs:
+            return 0
+        self.git(repo, "update-ref", "--stdin", input="".join(f"delete {r}\n" for r in refs).encode())
+        self.git(repo, "gc", "--prune=now", "--quiet")
+        return len({r.split("/")[2] for r in refs})
+
     def set_ref(self, workspace, rid, name, commit):
         self.git(self.repo(workspace), "update-ref", f"refs/checkpoints/{rid}/{name}", commit)
 

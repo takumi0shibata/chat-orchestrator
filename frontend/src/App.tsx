@@ -24,6 +24,8 @@ import { terminal } from "./types";
 import type {
   AgentEvent,
   AppSettings,
+  AppSettingsChange,
+  StorageUsage,
   Attachment,
   Config,
   Conversation,
@@ -55,6 +57,11 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   title_provider: "openai",
   title_model: "gpt-6-luna",
   theme_color: "#25262A",
+  default_provider: null,
+  default_model: null,
+  default_effort: null,
+  default_web_search: false,
+  monthly_budget_usd: null,
 };
 
 const MODEL_ORDER = [
@@ -72,6 +79,33 @@ const DEFAULT_MODEL = "gpt-6.1-sol";
 
 function defaultModelId(models: Model[]) {
   return (models.find((item) => item.model === DEFAULT_MODEL) ?? models[0])?.id ?? "";
+}
+
+/** Selection for a chat with no history: saved defaults when still available, else app defaults. */
+export function newChatSelection(config: Config, settings: AppSettings) {
+  const enabled = config.providers.filter((item) => item.enabled && item.models.length);
+  const provider = enabled.find((item) => item.id === settings.default_provider) ?? enabled[0];
+  if (!provider) return null;
+  const saved = provider.id === settings.default_provider
+    ? provider.models.find((item) => item.id === settings.default_model)
+    : undefined;
+  const model = saved ?? provider.models.find((item) => item.id === defaultModelId(provider.models));
+  const effort = saved && settings.default_effort && saved.efforts.includes(settings.default_effort)
+    ? settings.default_effort
+    : model?.efforts.includes("medium") ? "medium" : model?.efforts[0] ?? "medium";
+  return { provider: provider.id, model: model?.id ?? "", effort, web: settings.default_web_search };
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let size = value / 1024;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size >= 10 ? Math.round(size) : size.toFixed(1)} ${units[unit]}`;
 }
 
 const HISTORY_INITIAL_COUNT = 5;
@@ -633,7 +667,201 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
   );
 }
 
-type SettingsPage = "chat" | "settings" | "cost" | "theme";
+type SettingsPage = "chat" | "settings" | "cost" | "theme" | "defaults" | "budget" | "storage";
+
+const CHECKPOINT_AGES = [
+  { days: 7, label: "Older than 7 days" },
+  { days: 30, label: "Older than 30 days" },
+  { days: 90, label: "Older than 90 days" },
+  { days: 0, label: "All checkpoints" },
+];
+
+/** Budget status for the current UTC month; null when no budget is set. */
+export function budgetStatus(costs: CostSummary | null, budget: number | null) {
+  if (!budget || budget <= 0) return null;
+  const month = new Date().toISOString().slice(0, 7);
+  const spent = costs?.months?.find((item) => item.month === month)?.usd ?? 0;
+  const ratio = spent / budget;
+  return { spent, budget, ratio, level: ratio >= 1 ? "over" : ratio >= 0.8 ? "near" : "ok" } as const;
+}
+
+const usdCents = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const usdSmall = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
+/** Cents for normal amounts; sub-dollar amounts keep up to four decimals so they don't read as $0.00. */
+const usd = { format: (value: number) => (Math.abs(value) > 0 && Math.abs(value) < 1 ? usdSmall : usdCents).format(value) };
+
+function DefaultsPage({ config, settings, onNavigate, onChange }: {
+  config: Config | null;
+  settings: AppSettings;
+  onNavigate: (page: SettingsPage) => void;
+  onChange: (changes: AppSettingsChange) => Promise<void>;
+}) {
+  const selection = config ? newChatSelection(config, settings) : null;
+  const providers = config?.providers.filter((item) => item.enabled && item.models.length) ?? [];
+  const provider = providers.find((item) => item.id === selection?.provider);
+  const model = provider?.models.find((item) => item.id === selection?.model);
+  const save = (providerId: string, modelId: string, effort: string) =>
+    onChange({ default_provider: providerId, default_model: modelId, default_effort: effort });
+  return (
+    <section className="settings-page">
+      <button className="settings-back" type="button" onClick={() => onNavigate("settings")}>← Settings</button>
+      <h1>New chat defaults</h1>
+      <p className="settings-description">Used when you start a new chat. Existing chats keep the model and options they last used.</p>
+      {!selection ? <p className="settings-description">No model provider is available.</p> : (
+        <div className="settings-form">
+          <label>Provider<select aria-label="Default provider" value={selection.provider} onChange={(event) => {
+            const next = providers.find((item) => item.id === event.target.value);
+            if (!next) return;
+            const nextModel = next.models.find((item) => item.id === defaultModelId(next.models));
+            void save(next.id, nextModel?.id ?? "", nextModel?.efforts.includes("medium") ? "medium" : nextModel?.efforts[0] ?? "medium");
+          }}>{providers.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+          <label>Model<select aria-label="Default model" value={selection.model} onChange={(event) => {
+            const next = provider?.models.find((item) => item.id === event.target.value);
+            if (!next) return;
+            void save(selection.provider, next.id, next.efforts.includes(selection.effort) ? selection.effort : next.efforts.includes("medium") ? "medium" : next.efforts[0]);
+          }}>{orderedModels(provider?.models ?? []).map((item) => <option key={item.id} value={item.id}>{modelDisplayLabel(item)}</option>)}</select></label>
+          <label>Reasoning effort<select aria-label="Default reasoning effort" value={selection.effort}
+            onChange={(event) => void save(selection.provider, selection.model, event.target.value)}>
+            {(model?.efforts ?? []).map((item) => <option key={item} value={item}>{reasoningEffortLabel(item)}</option>)}
+          </select></label>
+          <label className="settings-checkbox"><input type="checkbox" aria-label="Enable Web Search by default" checked={settings.default_web_search}
+            onChange={(event) => void onChange({ default_web_search: event.target.checked })} />Web Search on by default</label>
+          {settings.default_model && (
+            <button className="settings-secondary" type="button" onClick={() => void onChange({ reset_default_model: true })}>
+              Use the app default model
+            </button>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function BudgetPage({ settings, costs, onNavigate, onChange }: {
+  settings: AppSettings;
+  costs: CostSummary | null;
+  onNavigate: (page: SettingsPage) => void;
+  onChange: (changes: AppSettingsChange) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState(settings.monthly_budget_usd ? String(settings.monthly_budget_usd) : "");
+  const [invalid, setInvalid] = useState(false);
+  const status = budgetStatus(costs, settings.monthly_budget_usd);
+  const month = new Date().toISOString().slice(0, 7);
+  const spent = costs?.months?.find((item) => item.month === month)?.usd ?? 0;
+  function save(event: FormEvent) {
+    event.preventDefault();
+    const value = Math.round(Number(draft) * 100) / 100;
+    // Saved in cents; 0 would clear the budget, so require at least one cent.
+    if (!draft.trim() || !Number.isFinite(value) || value < 0.01) {
+      setInvalid(true);
+      return;
+    }
+    void onChange({ monthly_budget_usd: value });
+  }
+  return (
+    <section className="settings-page">
+      <button className="settings-back" type="button" onClick={() => onNavigate("settings")}>← Settings</button>
+      <h1>Monthly budget</h1>
+      <p className="settings-description">Shows a notice above the message box at 80% and 100% of this amount. Runs are never blocked. Estimated LLM token costs, UTC months.</p>
+      <form className="settings-form budget-form" onSubmit={save}>
+        <label>Budget (USD)<span className="budget-input"><span aria-hidden="true">$</span>
+          <input aria-label="Monthly budget in USD" inputMode="decimal" placeholder="30" value={draft}
+            onChange={(event) => { setDraft(event.target.value); setInvalid(false); }} /></span></label>
+        {invalid && <p className="error" role="alert">Enter an amount of at least $0.01.</p>}
+        <div className="settings-actions">
+          <button className="settings-primary" type="submit">Save budget</button>
+          {settings.monthly_budget_usd && (
+            <button className="settings-secondary" type="button" onClick={() => { setDraft(""); void onChange({ monthly_budget_usd: 0 }); }}>Remove budget</button>
+          )}
+        </div>
+      </form>
+      <div className="budget-summary">
+        <div className="cost-current"><span>This month</span><strong>{usd.format(spent)}</strong></div>
+        {status && (
+          <div className={`budget-bar budget-${status.level}`} role="meter" aria-label="Budget used"
+            aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(status.ratio * 100)}>
+            <span style={{ width: `${Math.min(100, status.ratio * 100)}%` }} />
+          </div>
+        )}
+        {status && <small>{Math.round(status.ratio * 100)}% of {usd.format(status.budget)}</small>}
+      </div>
+    </section>
+  );
+}
+
+function StoragePage({ onNavigate }: { onNavigate: (page: SettingsPage) => void }) {
+  const [usage, setUsage] = useState<StorageUsage | null>(null);
+  const [age, setAge] = useState(30);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api<StorageUsage>("/storage").then(setUsage).catch((e) => setError(String(e)));
+  }, []);
+  async function run(path: string, body: unknown, confirmation: string, describe: (result: { usage: StorageUsage } & Record<string, number>) => string) {
+    if (!window.confirm(confirmation)) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await api<{ usage: StorageUsage } & Record<string, number>>(path, { method: "POST", body: JSON.stringify(body) });
+      setUsage(result.usage);
+      setMessage(describe(result));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const total = usage ? usage.checkpoints.bytes + usage.attachments.bytes + usage.database.bytes : 0;
+  const ageLabel = CHECKPOINT_AGES.find((item) => item.days === age)?.label.toLowerCase() ?? "";
+  return (
+    <section className="settings-page">
+      <button className="settings-back" type="button" onClick={() => onNavigate("settings")}>← Settings</button>
+      <h1>Storage</h1>
+      <p className="settings-description">App data on this computer. Your workspace files are not counted or changed here.</p>
+      {!usage && !error && <p className="settings-description" role="status">Loading…</p>}
+      {usage && (
+        <div className="storage-list">
+          <div className="storage-total"><span>Total</span><strong>{formatBytes(total)}</strong></div>
+          <div className="storage-item">
+            <div><strong>Checkpoints</strong><small>{usage.checkpoints.runs} runs{usage.checkpoints.oldest ? ` · oldest ${usage.checkpoints.oldest.slice(0, 10)}` : ""}</small></div>
+            <span>{formatBytes(usage.checkpoints.bytes)}</span>
+            <p>Used for each run’s file changes and Undo. Deleting them removes Undo and diffs for those runs.</p>
+            <div className="storage-action">
+              <select aria-label="Checkpoints to delete" value={age} onChange={(event) => setAge(Number(event.target.value))}>
+                {CHECKPOINT_AGES.map((item) => <option key={item.days} value={item.days}>{item.label}</option>)}
+              </select>
+              <button type="button" disabled={busy || usage.checkpoints.runs === 0} onClick={() => void run(
+                "/storage/checkpoints/prune", { older_than_days: age },
+                `Delete checkpoints (${ageLabel})? Undo and diffs for those runs will no longer be available.`,
+                (result) => `Deleted checkpoints for ${result.removed_runs} ${result.removed_runs === 1 ? "run" : "runs"}.`,
+              )}>Delete checkpoints</button>
+            </div>
+          </div>
+          <div className="storage-item">
+            <div><strong>Attachments</strong><small>{usage.attachments.orphaned_conversations ? `${formatBytes(usage.attachments.orphaned_bytes)} from deleted chats` : "No files from deleted chats"}</small></div>
+            <span>{formatBytes(usage.attachments.bytes)}</span>
+            <p>Uploaded originals. Only files from chats you already deleted can be removed here.</p>
+            <div className="storage-action">
+              <button type="button" disabled={busy || usage.attachments.orphaned_conversations === 0} onClick={() => void run(
+                "/storage/attachments/prune-orphans", {},
+                `Delete ${formatBytes(usage.attachments.orphaned_bytes)} of attachments from deleted chats?`,
+                (result) => `Freed ${formatBytes(result.freed_bytes)}.`,
+              )}>Delete unused attachments</button>
+            </div>
+          </div>
+          <div className="storage-item">
+            <div><strong>Chat history</strong><small>Conversations, events and costs</small></div>
+            <span>{formatBytes(usage.database.bytes)}</span>
+          </div>
+        </div>
+      )}
+      {message && <p className="settings-message" role="status">{message}</p>}
+      {error && <p className="error" role="alert">{error}</p>}
+    </section>
+  );
+}
 
 function SettingsPanel({
   page,
@@ -648,13 +876,16 @@ function SettingsPanel({
   settings: AppSettings;
   costs: CostSummary | null;
   onNavigate: (page: SettingsPage) => void;
-  onChange: (changes: Partial<AppSettings>) => Promise<void>;
+  onChange: (changes: AppSettingsChange) => Promise<void>;
 }) {
+  if (page === "defaults") return <DefaultsPage config={config} settings={settings} onNavigate={onNavigate} onChange={onChange} />;
+  if (page === "budget") return <BudgetPage settings={settings} costs={costs} onNavigate={onNavigate} onChange={onChange} />;
+  if (page === "storage") return <StoragePage onNavigate={onNavigate} />;
   const provider = config?.providers.find((item) => item.id === settings.title_provider);
   const presets = ["#25262A", "#315C47", "#315B7A", "#5B4B8A", "#8A493D", "#B78A2B"];
   const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 6 });
   const currentMonth = new Date().toISOString().slice(0, 7);
-  const current = costs?.months.find((item) => item.month === currentMonth)?.usd || 0;
+  const current = costs?.months?.find((item) => item.month === currentMonth)?.usd || 0;
   if (page === "cost") return (
     <section className="settings-page">
       <button className="settings-back" type="button" onClick={() => onNavigate("settings")}>← Settings</button>
@@ -696,7 +927,15 @@ function SettingsPanel({
         </div>
       </div>
       <div className="settings-links">
+        {(() => {
+          const selection = config ? newChatSelection(config, settings) : null;
+          const chosen = config?.providers.find((item) => item.id === selection?.provider)?.models.find((item) => item.id === selection?.model);
+          const summary = chosen ? `${modelDisplayLabel(chosen)} · ${reasoningEffortLabel(selection!.effort)}${settings.default_web_search ? " · Web Search" : ""}` : "App default";
+          return <button type="button" onClick={() => onNavigate("defaults")}><span><strong>New chat defaults</strong><small>{summary}</small></span><Icon name="chevron-right" /></button>;
+        })()}
+        <button type="button" onClick={() => onNavigate("budget")}><span><strong>Monthly budget</strong><small>{settings.monthly_budget_usd ? `${usd.format(settings.monthly_budget_usd)} per month` : "Not set"}</small></span><Icon name="chevron-right" /></button>
         <button type="button" onClick={() => onNavigate("cost")}><span><strong>Cost</strong><small>Monthly estimated usage</small></span><Icon name="chevron-right" /></button>
+        <button type="button" onClick={() => onNavigate("storage")}><span><strong>Storage</strong><small>Checkpoints, attachments and history</small></span><Icon name="chevron-right" /></button>
         <button type="button" onClick={() => onNavigate("theme")}><span><strong>Theme color</strong><small>{settings.theme_color}</small></span><Icon name="chevron-right" /></button>
       </div>
     </section>
@@ -1236,7 +1475,11 @@ export function RunView({
 
 export function App() {
   const [config, setConfig] = useState<Config | null>(null);
+  const latestConfig = useRef(config);
+  latestConfig.current = config;
   const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
+  const latestSettings = useRef(appSettings);
+  latestSettings.current = appSettings;
   const [settingsPage, setSettingsPage] = useState<SettingsPage>("chat");
   const [costs, setCosts] = useState<CostSummary | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -1472,10 +1715,12 @@ export function App() {
         setWorkspace(initialProject);
         if (initialProject) localStorage.setItem(LAST_PROJECT_KEY, initialProject);
         setExpandedProjects(restoredConversation ? [restoredConversation.workspace_id] : []);
-        const enabled = c.providers.find((p) => p.enabled && p.models.length);
-        if (enabled) {
-          setProvider(enabled.id);
-          setModel(defaultModelId(enabled.models));
+        const selection = newChatSelection(c, savedSettings);
+        if (selection) {
+          setProvider(selection.provider);
+          setModel(selection.model);
+          setEffort(selection.effort);
+          setWeb(selection.web);
         }
         setCid(restoredConversation?.id || "");
       })
@@ -1573,6 +1818,14 @@ export function App() {
         setRuns(c.runs);
         setConversations((old) => old.map((item) => item.id === c.id ? { ...item, azure_connection_id: c.azure_connection_id } : item));
         setLoadedCid(cid);
+        const fresh = latestConfig.current && newChatSelection(latestConfig.current, latestSettings.current);
+        if (!c.runs.length && fresh) {
+          // A chat without history starts from the saved new-chat defaults.
+          setProvider(fresh.provider);
+          setModel(fresh.model);
+          setEffort(fresh.effort);
+          setWeb(fresh.web);
+        }
         if (c.runs.length) {
           const last = c.runs[c.runs.length - 1].request;
           setProvider(last.provider);
@@ -1693,10 +1946,15 @@ export function App() {
     setDraggingFiles(false);
     setDraggingPath(false);
   }, [canDropFiles]);
+  // Costs back the budget notice, so refresh them on load, on the cost pages and after each run.
+  const finishedRuns = runs.filter((item) => terminal(item.status)).length;
   useEffect(() => {
-    if (settingsPage !== "cost") return;
-    api<CostSummary>("/costs/monthly").then(setCosts).catch((e) => setError(String(e)));
-  }, [settingsPage]);
+    if (settingsPage !== "chat" && settingsPage !== "cost" && settingsPage !== "budget") return;
+    api<CostSummary>("/costs/monthly").then(setCosts).catch((e) => {
+      // The chat page only uses costs for the optional budget notice.
+      if (settingsPage !== "chat") setError(String(e));
+    });
+  }, [settingsPage, finishedRuns]);
   useEffect(() => {
     const preventFileNavigation = (event: globalThis.DragEvent) => {
       if (Array.from(event.dataTransfer?.types || []).includes("Files"))
@@ -1729,9 +1987,15 @@ export function App() {
       setBusy(false);
     }
   }
-  async function saveAppSettings(changes: Partial<AppSettings>) {
+  async function saveAppSettings(changes: AppSettingsChange) {
     const previous = appSettings;
-    const optimistic = { ...appSettings, ...changes };
+    const { reset_default_model: reset, ...values } = changes;
+    const optimistic = {
+      ...appSettings,
+      ...values,
+      ...(reset ? { default_provider: null, default_model: null, default_effort: null } : {}),
+      ...(values.monthly_budget_usd === 0 ? { monthly_budget_usd: null } : {}),
+    };
     setAppSettings(optimistic);
     try {
       const saved = await api<AppSettings>("/settings", {
@@ -2249,6 +2513,18 @@ export function App() {
                 {connection}
               </p>
             )}
+            {(() => {
+              const status = budgetStatus(costs, appSettings.monthly_budget_usd);
+              if (!status || status.level === "ok") return null;
+              return (
+                <p className={`budget-notice budget-${status.level}`} role="status">
+                  {status.level === "over"
+                    ? `Monthly budget exceeded: ${usd.format(status.spent)} of ${usd.format(status.budget)}.`
+                    : `${usd.format(status.spent)} of your ${usd.format(status.budget)} monthly budget used (${Math.round(status.ratio * 100)}%).`}
+                  <button type="button" onClick={() => setSettingsPage("budget")}>Budget settings</button>
+                </p>
+              );
+            })()}
             <div className={`composer-box ${draggingPath ? "is-path-dragging" : ""}`} ref={composerBox}>
               <div className="attachments">
                 {attachments.map((a) => (

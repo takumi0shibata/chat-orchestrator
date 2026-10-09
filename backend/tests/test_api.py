@@ -218,6 +218,11 @@ def test_settings_and_monthly_cost_api(app_client):
         "title_provider": "openai",
         "title_model": "gpt-6-luna",
         "theme_color": "#25262A",
+        "default_provider": None,
+        "default_model": None,
+        "default_effort": None,
+        "default_web_search": False,
+        "monthly_budget_usd": None,
     }
     updated = http.patch("/api/settings", json={"theme_color": "#abcdef"})
     assert updated.status_code == 200
@@ -290,3 +295,63 @@ def test_runs_include_attachment_names_and_files(app_client):
     assert "attachment;" in response.headers["content-disposition"]
     other = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]
     assert http.get(f"/api/conversations/{other}/attachments/{ids[1]}").status_code == 404
+
+
+def test_new_chat_defaults_and_budget_settings(app_client):
+    http, _, _ = app_client
+    saved = http.patch("/api/settings", json={
+        "default_provider": "openai", "default_model": "gpt-6-luna",
+        "default_effort": "high", "default_web_search": True, "monthly_budget_usd": 25.5,
+    }).json()
+    assert (saved["default_model"], saved["default_effort"], saved["default_web_search"]) == ("gpt-6-luna", "high", True)
+    assert saved["monthly_budget_usd"] == 25.5
+    # Unrelated updates keep the saved defaults.
+    assert http.patch("/api/settings", json={"theme_color": "#112233"}).json()["default_model"] == "gpt-6-luna"
+    # Model, provider and effort are validated together.
+    assert http.patch("/api/settings", json={"default_model": "gpt-6-luna"}).status_code == 400
+    assert http.patch("/api/settings", json={
+        "default_provider": "openai", "default_model": "missing", "default_effort": "medium",
+    }).status_code == 400
+    assert http.patch("/api/settings", json={
+        "default_provider": "openai", "default_model": "gpt-6.1-sol", "default_effort": "none",
+    }).status_code == 400
+    assert http.patch("/api/settings", json={"monthly_budget_usd": -1}).status_code == 422
+    cleared = http.patch("/api/settings", json={"monthly_budget_usd": 0, "reset_default_model": True}).json()
+    assert cleared["monthly_budget_usd"] is None and cleared["default_model"] is None
+    assert cleared["default_web_search"] is True
+    restored = http.get("/api/settings").json()
+    assert restored["default_effort"] is None
+
+
+def test_storage_usage_and_cleanup(app_client, tmp_path):
+    http, work, _ = app_client
+    (work / "a.txt").write_text("one\n")
+    cid = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]
+    gone = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]
+    for conversation in (cid, gone):
+        http.post("/api/attachments", data={"conversation_id": conversation},
+                  files={"files": ("note.txt", b"x" * 100, "text/plain")})
+    run = http.post("/api/runs", json={"conversation_id": cid, "input": "x"}).json()
+    "".join(http.get(f"/api/runs/{run['id']}/events").iter_text())
+    assert http.delete(f"/api/conversations/{gone}").status_code == 200
+
+    usage = http.get("/api/storage").json()
+    assert usage["checkpoints"]["runs"] == 1 and usage["checkpoints"]["bytes"] > 0
+    assert usage["checkpoints"]["oldest"] == run["created_at"]
+    assert usage["attachments"]["orphaned_conversations"] == 1
+    assert usage["attachments"]["orphaned_bytes"] == 100
+    assert usage["database"]["bytes"] > 0
+
+    # Recent checkpoints survive a 30-day cleanup; a 0-day cleanup removes them.
+    assert http.post("/api/storage/checkpoints/prune", json={"older_than_days": 30}).json()["removed_runs"] == 0
+    assert http.get(f"/api/runs/{run['id']}/changes").json()["available"] is True
+    pruned = http.post("/api/storage/checkpoints/prune", json={"older_than_days": 0}).json()
+    assert pruned["removed_runs"] == 1 and pruned["usage"]["checkpoints"]["runs"] == 0
+    assert http.get(f"/api/runs/{run['id']}/changes").json()["available"] is False
+    assert http.post("/api/storage/checkpoints/prune", json={"older_than_days": -1}).status_code == 422
+
+    freed = http.post("/api/storage/attachments/prune-orphans").json()
+    assert freed["freed_bytes"] == 100
+    assert freed["usage"]["attachments"]["orphaned_conversations"] == 0
+    # The live conversation's attachment is kept.
+    assert freed["usage"]["attachments"]["bytes"] == 100

@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { App, ContextRing, RunView } from "./App";
+import { App, ContextRing, RunView, budgetStatus, newChatSelection } from "./App";
 import type { AgentEvent, Run } from "./types";
 
 vi.mock("./components/HostTerminalPanel", () => ({
@@ -1662,4 +1662,150 @@ it("waits for IME composition to finish before searching", async () => {
   fireEvent.compositionEnd(search, { target: { value: "売上" } });
   await waitFor(() => expect(searched()).toEqual([`/api/conversations?q=${encodeURIComponent("売上")}`]));
   vi.restoreAllMocks();
+});
+
+
+describe("new chat defaults, budget and storage settings", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const models = [
+    { id: "gpt-6.1-sol", model: "gpt-6.1-sol", label: "GPT-6.1 Sol", efforts: ["low", "medium", "high", "xhigh", "max"] },
+    { id: "gpt-6-luna", model: "gpt-6-luna", label: "GPT-6 Luna", efforts: ["none", "low", "medium", "high"] },
+  ];
+  const config = {
+    providers: [{ id: "openai", label: "OpenAI", enabled: true, models }, { id: "azure_openai", label: "Azure OpenAI", enabled: false, models: [] }],
+    workspaces: [{ id: "w", label: "Work", path: "/w" }], skills: [], resources: [], mcp_servers: [], compact_token_threshold: 258000,
+  };
+  const base = {
+    title_provider: "openai", title_model: "gpt-6-luna", theme_color: "#25262A",
+    default_provider: null, default_model: null, default_effort: null, default_web_search: false, monthly_budget_usd: null,
+  };
+
+  it("resolves saved defaults and falls back when they are unavailable", () => {
+    expect(newChatSelection(config, base)).toEqual({ provider: "openai", model: "gpt-6.1-sol", effort: "medium", web: false });
+    expect(newChatSelection(config, { ...base, default_provider: "openai", default_model: "gpt-6-luna", default_effort: "none", default_web_search: true }))
+      .toEqual({ provider: "openai", model: "gpt-6-luna", effort: "none", web: true });
+    // A removed model or provider falls back to the app default model.
+    expect(newChatSelection(config, { ...base, default_provider: "openai", default_model: "gone", default_effort: "high" })?.model).toBe("gpt-6.1-sol");
+    expect(newChatSelection(config, { ...base, default_provider: "azure_openai", default_model: "x", default_effort: "high" })?.provider).toBe("openai");
+  });
+
+  it("reports budget levels for the current month", () => {
+    const month = new Date().toISOString().slice(0, 7);
+    const costs = (usd: number) => ({ currency: "USD" as const, estimated: true, timezone: "UTC" as const, exclusions: [], months: [{ month, usd }] });
+    expect(budgetStatus(costs(10), null)).toBeNull();
+    expect(budgetStatus(costs(10), 30)?.level).toBe("ok");
+    expect(budgetStatus(costs(24), 30)?.level).toBe("near");
+    expect(budgetStatus(costs(31), 30)?.level).toBe("over");
+  });
+
+  function mockServer(settings: Record<string, unknown>, spent = 0) {
+    const month = new Date().toISOString().slice(0, 7);
+    let saved = { ...base, ...settings };
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    let usage = {
+      checkpoints: { bytes: 5 * 1024 * 1024, runs: 4, oldest: "2026-08-01T00:00:00+00:00", orphaned_runs: 0 },
+      attachments: { bytes: 2048, orphaned_bytes: 1024, orphaned_conversations: 1 },
+      database: { bytes: 4096 },
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
+      const url = String(input);
+      const method = options?.method || "GET";
+      const body = options?.body ? JSON.parse(String(options.body)) : undefined;
+      calls.push({ url, method, body });
+      let response: unknown = {};
+      if (url === "/api/config") response = config;
+      else if (url === "/api/conversations") response = [{ id: "c", title: "Fresh chat", workspace_id: "w", updated_at: run.updated_at, pinned: false }];
+      else if (url === "/api/conversations/c") response = { id: "c", title: "Fresh chat", workspace_id: "w", runs: [] };
+      else if (url === "/api/settings" && method === "PATCH") {
+        const { reset_default_model, ...rest } = body as Record<string, unknown>;
+        saved = { ...saved, ...rest, ...(reset_default_model ? { default_provider: null, default_model: null, default_effort: null } : {}) };
+        if (rest.monthly_budget_usd === 0) saved.monthly_budget_usd = null;
+        response = saved;
+      } else if (url === "/api/settings") response = saved;
+      else if (url === "/api/costs/monthly") response = { currency: "USD", estimated: true, timezone: "UTC", exclusions: [], months: [{ month, usd: spent }] };
+      else if (url === "/api/storage") response = usage;
+      else if (url === "/api/storage/checkpoints/prune") {
+        usage = { ...usage, checkpoints: { ...usage.checkpoints, runs: 1, bytes: 1024 } };
+        response = { removed_runs: 3, usage };
+      } else if (url === "/api/storage/attachments/prune-orphans") {
+        usage = { ...usage, attachments: { bytes: 1024, orphaned_bytes: 0, orphaned_conversations: 0 } };
+        response = { freed_bytes: 1024, usage };
+      } else if (url.includes("/files")) response = [];
+      return new Response(JSON.stringify(response));
+    });
+    return { fetchMock, calls };
+  }
+
+  it("starts chats without history from the saved defaults", async () => {
+    localStorage.setItem("workspace-conversation", "c");
+    mockServer({ default_provider: "openai", default_model: "gpt-6-luna", default_effort: "high", default_web_search: true });
+    render(<App />);
+    const model = await screen.findByRole("button", { name: "Model" });
+    await waitFor(() => expect(model).toHaveTextContent("GPT-6 Luna"));
+    expect(screen.getByRole("button", { name: "Reasoning effort" })).toHaveTextContent("High");
+    expect(screen.getByRole("button", { name: "Remove Web Search" })).toBeInTheDocument();
+  });
+
+  it("edits new chat defaults and the budget, and warns near the budget", async () => {
+    localStorage.setItem("workspace-conversation", "c");
+    const { calls } = mockServer({ monthly_budget_usd: 30 }, 25);
+    render(<App />);
+    const notice = await screen.findByText(/of your \$30\.00 monthly budget used \(83%\)/);
+    expect(notice).toHaveClass("budget-near");
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("button", { name: /New chat defaults GPT-6.1 Sol · Medium/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Monthly budget \$30\.00 per month/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /New chat defaults/ }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Default model" }), { target: { value: "gpt-6-luna" } });
+    await waitFor(() => expect(calls.some((call) => call.method === "PATCH" && (call.body as Record<string, unknown>).default_model === "gpt-6-luna")).toBe(true));
+    expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({ default_provider: "openai", default_model: "gpt-6-luna", default_effort: "medium" });
+    fireEvent.change(screen.getByRole("combobox", { name: "Default reasoning effort" }), { target: { value: "none" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Enable Web Search by default" }));
+    await waitFor(() => expect(calls.filter((call) => call.method === "PATCH")).toHaveLength(3));
+    fireEvent.click(await screen.findByRole("button", { name: "Use the app default model" }));
+    await waitFor(() => expect(calls[calls.length - 1]?.body).toEqual({ reset_default_model: true }));
+
+    fireEvent.click(screen.getByRole("button", { name: "← Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: /Monthly budget/ }));
+    const amount = screen.getByRole("textbox", { name: "Monthly budget in USD" });
+    expect(amount).toHaveValue("30");
+    expect(screen.getByRole("meter", { name: "Budget used" })).toHaveAttribute("aria-valuenow", "83");
+    fireEvent.change(amount, { target: { value: "abc" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter an amount of at least $0.01.");
+    fireEvent.change(amount, { target: { value: "0.004" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    fireEvent.change(amount, { target: { value: "50.555" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
+    await waitFor(() => expect(calls[calls.length - 1]?.body).toEqual({ monthly_budget_usd: 50.56 }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove budget" }));
+    await waitFor(() => expect(calls[calls.length - 1]?.body).toEqual({ monthly_budget_usd: 0 }));
+  });
+
+  it("shows storage usage and cleans up after confirmation", async () => {
+    localStorage.setItem("workspace-conversation", "c");
+    const { calls } = mockServer({});
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValue(true);
+    render(<App />);
+    await screen.findByRole("button", { name: "Model" });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: /Storage/ }));
+    expect(await screen.findByText("4 runs · oldest 2026-08-01")).toBeInTheDocument();
+    // Total and checkpoints both round to 5.0 MB here.
+    expect(screen.getAllByText("5.0 MB")).toHaveLength(2);
+    expect(screen.getByText("1.0 KB from deleted chats")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Checkpoints to delete" }), { target: { value: "90" } });
+    fireEvent.click(screen.getByRole("button", { name: "Delete checkpoints" }));
+    expect(confirm.mock.calls[0][0]).toContain("older than 90 days");
+    expect(calls.some((call) => call.url === "/api/storage/checkpoints/prune")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Delete checkpoints" }));
+    expect(await screen.findByText("Deleted checkpoints for 3 runs.")).toBeInTheDocument();
+    expect(calls.find((call) => call.url === "/api/storage/checkpoints/prune")?.body).toEqual({ older_than_days: 90 });
+    expect(screen.getByText("1 runs · oldest 2026-08-01")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Delete unused attachments" }));
+    expect(await screen.findByText("Freed 1.0 KB.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete unused attachments" })).toBeDisabled();
+  });
 });

@@ -744,11 +744,11 @@ def test_title_model_defaults_and_azure_fallback(tmp_path):
 
     # A missing Azure deployment falls back within Azure's GPT-5.6 family.
     store.update_settings(title_provider="azure_openai", title_model="missing")
-    assert manager.title_selection() == {
+    assert manager.title_selection().items() >= {
         "title_provider": "azure_openai",
         "title_model": "azure-old-luna",
         "theme_color": "#25262A",
-    }
+    }.items()
 
     manager.config.azure_models.append(
         Deployment(model="gpt-6-luna", deployment="azure-new-luna")
@@ -1384,5 +1384,19 @@ def test_environment_is_not_duplicated_when_compaction_echoes_it(tmp_path):
         context = store.conversation(request.conversation_id)["context"]
         environments = [i for i in context if i.get("role") == "developer"]
         assert len(environments) == 1
+
+    asyncio.run(scenario())
+
+
+def test_storage_cleanup_waits_for_running_tasks(tmp_path):
+    async def scenario():
+        manager, _, _, _ = setup(tmp_path, [])
+        manager.tasks["running"] = asyncio.get_running_loop().create_future()
+        with pytest.raises(ValueError, match="Wait for running tasks"):
+            manager.prune_checkpoints(0)
+        with pytest.raises(ValueError, match="Wait for running tasks"):
+            manager.prune_orphan_attachments()
+        manager.tasks["running"].set_result(None)
+        assert manager.prune_checkpoints(0)["removed_runs"] == 0
 
     asyncio.run(scenario())
