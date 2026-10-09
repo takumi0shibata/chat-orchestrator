@@ -190,29 +190,29 @@ function CopyButton({ content, tooltip }: { content: string; tooltip: string }) 
 
 type PopoverSelectOption = { value: string; label: string; icon?: ModelFamilyIconName };
 
-function ModelFamilyIcon({ name, size = 16 }: { name: ModelFamilyIconName; size?: number }) {
-  const paths: Record<ModelFamilyIconName, ReactNode> = {
-    astra: <><path d="m7.5 3.5.9 2.6L11 7l-2.6.9-.9 2.6-.9-2.6L4 7l2.6-.9Z" /><path d="m17 10.5 1.1 3.4 3.4 1.1-3.4 1.1L17 19.5l-1.1-3.4-3.4-1.1 3.4-1.1Z" /><path d="m10.2 8.2 4.4 4.4M5 17.5h.01" /></>,
-    sol: <><circle cx="12" cy="12" r="3.8" /><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" /></>,
-    terra: <><circle cx="12" cy="12" r="8.8" /><path d="M3.5 12h17M12 3.2c2.4 2.3 3.6 5.2 3.6 8.8s-1.2 6.5-3.6 8.8M12 3.2c-2.4 2.3-3.6 5.2-3.6 8.8s1.2 6.5 3.6 8.8M4.8 7.2c2.1.8 4.5 1.2 7.2 1.2s5.1-.4 7.2-1.2M4.8 16.8c2.1-.8 4.5-1.2 7.2-1.2s5.1.4 7.2 1.2" /></>,
-    luna: <><path d="M17.9 4.6A8.5 8.5 0 1 0 19.4 17 7.4 7.4 0 0 1 17.9 4.6Z" /><path d="M14.2 8.1h.01M16.2 13.6h.01M12.5 15.9h.01" /></>,
-  };
+/**
+ * Model family marks: one filled silhouette per family on a tinted tile, drawn on a
+ * 24px grid without hairlines so each stays legible at 18px.
+ */
+const MODEL_FAMILY_MARKS: Record<ModelFamilyIconName, ReactNode> = {
+  astra: <path d="M12 2.5C12.9 8.1 15.9 11.1 21.5 12 15.9 12.9 12.9 15.9 12 21.5 11.1 15.9 8.1 12.9 2.5 12 8.1 11.1 11.1 8.1 12 2.5Z" />,
+  sol: <>
+    <circle cx="12" cy="12" r="5" />
+    <path d="M12 2.5v1.6M12 19.9v1.6M2.5 12h1.6M19.9 12h1.6M5.3 5.3l1.1 1.1M17.6 17.6l1.1 1.1M18.7 5.3l-1.1 1.1M6.4 17.6l-1.1 1.1"
+      fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+  </>,
+  terra: <>
+    <circle cx="12" cy="12" r="5.6" />
+    <ellipse cx="12" cy="12" rx="10.2" ry="3.4" transform="rotate(-22 12 12)" fill="none" stroke="currentColor" strokeWidth="1.9" />
+  </>,
+  luna: <path d="M15.2 3.2a9 9 0 1 0 5.6 14.4A7.4 7.4 0 0 1 15.2 3.2Z" />,
+};
+
+function ModelFamilyIcon({ name, size = "sm" }: { name: ModelFamilyIconName; size?: "sm" | "md" }) {
   return (
-    <svg
-      aria-hidden="true"
-      className={`model-family-icon model-family-icon-${name}`}
-      data-model-icon={name}
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      {paths[name]}
-    </svg>
+    <span aria-hidden="true" className={`model-family-icon model-family-icon-${name} model-family-icon-${size}`} data-model-icon={name}>
+      <svg viewBox="0 0 24 24" fill="currentColor">{MODEL_FAMILY_MARKS[name]}</svg>
+    </span>
   );
 }
 
@@ -349,7 +349,7 @@ function PopoverSelect({ label, value, options, onChange, disabled = false, clas
               onClick={() => selectOption(index)}
             >
               <span className="popover-select-option-label">
-                {option.icon && <ModelFamilyIcon name={option.icon} />}
+                {option.icon && <ModelFamilyIcon name={option.icon} size="md" />}
                 <span>{option.label}</span>
               </span>
               {option.value === value && <Icon name="check" size={15} />}

@@ -1262,11 +1262,31 @@ h2 {
 .popover-select { position: relative; min-width: 0; }
 .popover-select.model-select { width: min(170px, 24vw); }
 .popover-select.effort-select { width: min(95px, 14vw); }
-.model-family-icon { display: block; flex: none; }
-.model-family-icon-astra { color: #765fa8; }
-.model-family-icon-sol { color: #bd7c31; }
-.model-family-icon-terra { color: #4d7e83; }
-.model-family-icon-luna { color: #70738f; }
+/* Model family tiles: mark colors keep >= 5:1 contrast on their tile. */
+:root {
+  --model-astra: #5b45a8; --model-astra-bg: #ece8fb;
+  --model-sol: #9a4d0c; --model-sol-bg: #fcebd9;
+  --model-terra: #0f6660; --model-terra-bg: #dcf1ed;
+  --model-luna: #3a5190; --model-luna-bg: #e4ebf9;
+}
+.model-family-icon {
+  --mark: currentColor;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  color: var(--mark);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mark) 14%, transparent);
+}
+.model-family-icon svg { width: 12px; height: 12px; display: block; }
+.model-family-icon-md { width: 22px; height: 22px; border-radius: 6px; }
+.model-family-icon-md svg { width: 14px; height: 14px; }
+.model-family-icon-astra { --mark: var(--model-astra); background: var(--model-astra-bg); }
+.model-family-icon-sol { --mark: var(--model-sol); background: var(--model-sol-bg); }
+.model-family-icon-terra { --mark: var(--model-terra); background: var(--model-terra-bg); }
+.model-family-icon-luna { --mark: var(--model-luna); background: var(--model-luna-bg); }
 .popover-select-trigger {
   display: flex;
   align-items: center;
