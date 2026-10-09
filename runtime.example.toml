@@ -13,6 +13,8 @@ path = "/absolute/path/to/research"
 # Registered Skills are available automatically on every turn, based on name/description.
 # @skill-name or the + menu explicitly requests a Skill; clearing it returns to automatic selection.
 # All Skill folders are mounted read-only; bodies are read only when needed.
+# The bundled guild-journal Skill is available by default; no registration is needed.
+# A registered Skill with the same id or manifest name replaces the bundled version.
 # [[skills]]
 # id = "review"
 # label = "論文レビュー"
