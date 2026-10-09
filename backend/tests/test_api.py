@@ -247,3 +247,19 @@ def test_japanese_artifact_download(app_client, filename):
     assert response.content == b"artifact"
     assert "attachment" in response.headers["content-disposition"]
     assert quote(filename) in response.headers["content-disposition"]
+
+
+def test_changes_diff_and_revert_conflict_api(app_client):
+    http, work, _ = app_client
+    target = work / "a.txt"
+    target.write_text("before\n")
+    cid = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]
+    run = http.post("/api/runs", json={"conversation_id": cid, "input": "x", "provider": "openai", "model": "gpt-5.6-sol"}).json()
+    events = "".join(http.get(f"/api/runs/{run['id']}/events").iter_text())
+    assert '"checkpoint"' in events
+    assert http.get(f"/api/runs/{run['id']}/changes").json()["files"] == []
+    assert http.get(f"/api/runs/{run['id']}/diff", params={"path": "../x"}).status_code == 400
+    # Edits after the run conflict only when they touch files the run changed.
+    target.write_text("user\n")
+    assert http.post(f"/api/runs/{run['id']}/revert", json={}).json() == {"restored": [], "overwritten": []}
+    assert target.read_text() == "user\n"

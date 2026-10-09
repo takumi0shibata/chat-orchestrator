@@ -5,10 +5,12 @@ import shlex
 from types import SimpleNamespace as NS
 
 import pytest
+
 from app.agent_runner import RunManager
 from app.config import Deployment, Folder, MCPServer, RuntimeConfig, Settings, Skill
-from app.schemas import Approval, RunCreate
+from app.patch_tool import apply_operation
 from app.sandbox import CommandTimeoutError
+from app.schemas import Approval, RunCreate
 from app.storage import Store
 
 
@@ -92,7 +94,13 @@ class FakeSandbox:
         self.closed = False
         self.commands = []
         self.skills = args[3]
+        self.workspace = args[1].path
+        self.patches = []
         self.instances.append(self)
+
+    async def apply_patch(self, operation):
+        self.patches.append(operation)
+        return apply_operation(str(self.workspace), operation)
 
     async def start(self):
         pass
@@ -635,7 +643,7 @@ def test_mcp_approval_is_run_scoped(tmp_path):
         assert c.calls[1]["input"][-1] == dict(
             type="mcp_approval_response", approval_request_id="approval1", approve=False
         )
-        assert c.calls[0]["tools"][1]["require_approval"] == "always"
+        assert c.calls[0]["tools"][2]["require_approval"] == "always"
         assert store.run(run["id"])["status"] == "completed"
 
     asyncio.run(scenario())
@@ -1192,3 +1200,64 @@ def test_gpt_6_cost_rates(tmp_path, model, input_tokens, expected_rates, expecte
         row["cache_write_rate_nano"], row["output_rate_nano"],
     ) == expected_rates
     assert row["cost_nano_usd"] == expected_cost
+
+
+def patch_call(operation, call="patch_1"):
+    return {"type": "apply_patch_call", "id": "apc_" + call, "call_id": call,
+            "status": "completed", "operation": operation}
+
+
+def test_apply_patch_edits_and_run_can_be_reverted(tmp_path):
+    async def scenario():
+        manager, store, client, request = setup(tmp_path, [
+            [patch_call(dict(type="update_file", path="a.txt", diff="@@\n-one\n+two\n")),
+             patch_call(dict(type="update_file", path="a.txt", diff="@@\n-missing\n+x\n"), "patch_2"),
+             patch_call(dict(type="create_file", path="new/b.txt", diff="+hello\n"), "patch_3")],
+            [message()],
+        ])
+        work = tmp_path / "work"
+        (work / "a.txt").write_text("one\n")
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        assert store.run(run["id"])["status"] == "completed"
+        assert {"type": "apply_patch"} in client.calls[0]["tools"]
+        assert "apply_patch" in client.calls[0]["instructions"]
+        outputs = [i for i in client.calls[1]["input"] if i.get("type") == "apply_patch_call_output"]
+        assert [(o["call_id"], o["status"]) for o in outputs] == [
+            ("patch_1", "completed"), ("patch_2", "failed"), ("patch_3", "completed")
+        ]
+        assert "context not found" in outputs[1]["output"]
+        events = store.events(run["id"])
+        done = [e["data"] for e in events if e["type"] == "patch_done"]
+        assert done[0]["added"] == 1 and "+two" in done[0]["diff"]
+        assert [e["data"]["name"] for e in events if e["type"] == "checkpoint"] == ["before", "after"]
+        assert (work / "a.txt").read_text() == "two\n"
+
+        changes = await manager.changes(run["id"])
+        assert changes["available"] and not changes["reverted"]
+        assert {f["path"]: f["status"] for f in changes["files"]} == {
+            "a.txt": "modified", "new/b.txt": "added",
+        }
+        diff = await manager.diff(run["id"], "a.txt")
+        assert "-one\n+two" in diff["diff"]
+        result = await manager.revert(run["id"])
+        assert result["restored"] == ["a.txt", "new/b.txt"]
+        assert (work / "a.txt").read_text() == "one\n"
+        assert not (work / "new/b.txt").exists()
+        assert (await manager.changes(run["id"]))["reverted"]
+        with pytest.raises(ValueError, match="already been reverted"):
+            await manager.revert(run["id"])
+        assert store.events(run["id"])[-1]["type"] == "reverted"
+
+    asyncio.run(scenario())
+
+
+def test_checkpoints_can_be_disabled(tmp_path):
+    async def scenario():
+        manager, store, _, request = setup(tmp_path, [[message()]], checkpoints=False)
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        assert not [e for e in store.events(run["id"]) if e["type"] == "checkpoint"]
+        assert (await manager.changes(run["id"])) == {"available": False, "files": []}
+
+    asyncio.run(scenario())

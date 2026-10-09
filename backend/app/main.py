@@ -13,6 +13,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.agent_runner import RunManager
 from app.attachments import list_files, open_regular, save_upload
+from app.checkpoints import CheckpointConflict
 from app.config import get_settings
 from app.model_catalog import models_for
 from app.schemas import (
@@ -20,6 +21,7 @@ from app.schemas import (
     Approval,
     ConversationCreate,
     ConversationUpdate,
+    Revert,
     RunCreate,
 )
 from app.storage import TERMINAL, Store
@@ -273,6 +275,23 @@ def create_app(settings=None, manager_factory=RunManager):
     async def stop(rid: str):
         await app.state.manager.stop(rid)
         return app.state.store.run(rid)
+
+    @app.get("/api/runs/{rid}/changes")
+    async def run_changes(rid: str):
+        return await app.state.manager.changes(rid)
+
+    @app.get("/api/runs/{rid}/diff")
+    async def run_diff(rid: str, path: str = Query(..., min_length=1)):
+        return await app.state.manager.diff(rid, path)
+
+    @app.post("/api/runs/{rid}/revert")
+    async def revert(rid: str, body: Revert):
+        try:
+            return await app.state.manager.revert(rid, body.force)
+        except CheckpointConflict as error:
+            raise HTTPException(409, dict(
+                message="Some files changed after this run.", conflicts=error.paths,
+            )) from error
 
     @app.post("/api/runs/{rid}/approvals")
     async def approval(rid: str, body: Approval):

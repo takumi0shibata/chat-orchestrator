@@ -2075,3 +2075,86 @@ h2 {
   .sidebar-resizer,
   .files-resizer { display: none; }
 }
+
+/* File diffs: dark inside the command transcript, light in the run summary. */
+.diff-view {
+  margin: 8px 0 0;
+  padding: 8px 0;
+  overflow: auto;
+  max-height: 360px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+  background: #fafafb;
+  color: #35373c;
+  border-radius: 6px;
+}
+.diff-view span { display: block; padding: 0 10px; min-width: max-content; }
+.diff-view .diff-add { background: #e6f4ea; color: #1a6b35; }
+.diff-view .diff-del { background: #fbe9e9; color: #a3262b; }
+.diff-view .diff-hunk { color: #7b7e88; }
+.work-details .diff-view.diff-dark { background: #1f2023; color: #d9dadd; white-space: pre; }
+.diff-dark .diff-add { background: rgba(46, 160, 67, 0.18); color: #9fe0ad; }
+.diff-dark .diff-del { background: rgba(248, 81, 73, 0.18); color: #ffb3ae; }
+.diff-dark .diff-hunk { color: #8b8d94; }
+.diff-count-add { color: #1a7f37; }
+.diff-count-del { color: #c4302b; }
+
+.run-changes {
+  margin: 14px 0 4px;
+  border: 1px solid #e3e4e8;
+  border-radius: 10px;
+  background: #fff;
+  font-size: 13px;
+  overflow: hidden;
+}
+.run-changes > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid #eeeff2;
+}
+.run-changes > header strong { font-weight: 600; color: #35373c; }
+.run-changes-undo {
+  margin-left: auto;
+  padding: 4px 12px;
+  border: 1px solid #d5d6db;
+  border-radius: 6px;
+  background: #fff;
+  color: #35373c;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.run-changes-undo:hover:not(:disabled) { background: #f4f4f6; }
+.run-changes-undo:disabled { opacity: 0.6; cursor: default; }
+.run-changes-reverted { margin-left: auto; font-size: 12px; color: #6e6f75; }
+.run-changes ul { list-style: none; margin: 0; padding: 4px 0; }
+.run-changes li summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.run-changes li summary::-webkit-details-marker { display: none; }
+.run-changes li summary:hover { background: #f7f7f9; }
+.run-changes li small { margin-left: auto; font-size: 11px; color: #85878f; white-space: nowrap; }
+.run-changes li .diff-view { margin: 4px 12px 8px; }
+.change-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 12px;
+}
+.change-status { width: 14px; font-size: 11px; font-weight: 700; text-align: center; flex-shrink: 0; }
+.change-added { color: #1a7f37; }
+.change-deleted { color: #c4302b; }
+.change-modified { color: #9a6700; }
+.change-loading { margin: 4px 12px 8px; color: #85878f; font-size: 12px; }
+.run-changes-note { display: block; padding: 0 12px 8px; color: #85878f; font-size: 11px; }

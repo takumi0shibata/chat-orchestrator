@@ -97,6 +97,12 @@ describe("reasoning summaries", () => {
 });
 
 describe("current activity", () => {
+  it("reports an unfinished file edit", () => {
+    const events = [e(1, "patch", { call_id: "p", path: "src/app.py" })];
+    expect(activityLabel(events, "command_running", [])).toBe("Editing: src/app.py");
+    expect(activityLabel([...events, e(2, "patch_done", { call_id: "p" })], "model_wait", [])).toBe("Waiting for model");
+    expect(activityEntries(events, [], "command_running").map((entry) => entry.kind)).toEqual(["work"]);
+  });
   it("does not report finished commands or tools as running", () => {
     const events = [e(1, "status", { label: "Deciding the next action" }),
       e(2, "command", { call_id: "c", index: 0, command: "python review.py" })];

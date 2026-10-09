@@ -43,3 +43,7 @@ class RunCreate(Request):
 class Approval(Request):
     request_id: str
     approve: bool
+
+
+class Revert(Request):
+    force: bool = False

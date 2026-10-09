@@ -1,5 +1,8 @@
 import type { AgentEvent } from "../types";
 
+/** Events that represent an operation in Activity, as opposed to model text. */
+export const ACTION_TYPES = ["command", "patch", "tool", "approval"];
+
 export interface MessageBlock {
   key: string;
   seq: number;
@@ -56,7 +59,7 @@ export function reasoningTitle(part: string): string {
 export function reasoningActive(block: ReasoningBlock, events: AgentEvent[], status: string): boolean {
   if (["completed", "failed", "stopped"].includes(status)) return false;
   return !events.some((event) => event.seq > block.lastSeq &&
-    ["text_delta", "command", "tool", "approval", "response", "round", "reasoning_delta"].includes(event.type));
+    ["text_delta", ...ACTION_TYPES, "response", "round", "reasoning_delta"].includes(event.type));
 }
 
 /** A phase is available before text deltas; response IDs cover older events. */
@@ -86,7 +89,7 @@ export function messageBlocks(events: AgentEvent[], status: string): MessageBloc
     } else if (event.type === "message_phase") {
       phases.set(`${Number(event.data.round) || round}:${String(event.data.item_id || "")}`,
         String(event.data.phase || ""));
-    } else if (["command", "tool", "approval"].includes(event.type)) {
+    } else if (ACTION_TYPES.includes(event.type)) {
       boundary++;
     } else if (event.type === "text_delta") {
       const itemId = String(event.data.item_id || "");
@@ -120,7 +123,7 @@ export function messageBlocks(events: AgentEvent[], status: string): MessageBloc
     block.progress = Array.isArray(finals) || response?.data.continues === true ||
       ["failed", "stopped"].includes(status) ||
       events.some((event) => event.seq > block.seq &&
-        (["command", "tool", "approval"].includes(event.type) ||
+        (ACTION_TYPES.includes(event.type) ||
           (event.type === "message_phase" && event.data.phase === "final_answer") ||
           (event.type === "round" && Number(event.data.number) > block.round)));
   }
@@ -135,7 +138,7 @@ export function activityEntries(events: AgentEvent[], blocks: MessageBlock[], st
     ...reasoning.map((block) => ({ seq: block.seq, kind: "reasoning" as const, block })),
     ...blocks.filter((block) => block.progress || (provisional && !block.final)).map((block) =>
       ({ seq: block.seq, kind: "message" as const, block })),
-    ...events.filter((event) => ["command", "tool", "approval"].includes(event.type)).map((event) =>
+    ...events.filter((event) => ACTION_TYPES.includes(event.type)).map((event) =>
       ({ seq: event.seq, kind: "action" as const, event })),
   ].sort((a, b) => a.seq - b.seq);
   const entries: ActivityEntry[] = [];
@@ -162,6 +165,9 @@ export function activityLabel(events: AgentEvent[], status: string, blocks: Mess
   const command = [...events].reverse().find((event) => event.type === "command" &&
     !events.some((other) => other.type === "command_done" && other.data.call_id === event.data.call_id && other.data.index === event.data.index));
   if (command) return `Running: ${short(command.data.command)}`;
+  const patch = [...events].reverse().find((event) => event.type === "patch" &&
+    !events.some((other) => other.type === "patch_done" && other.data.call_id === event.data.call_id));
+  if (patch) return `Editing: ${short(patch.data.path)}`;
   const tool = [...events].reverse().find((event) => event.type === "tool" &&
     !events.some((other) => other.type === "tool_result" && other.data.id === event.data.id));
   if (tool) return tool.data.type === "web_search_call" ? "Searching the web" :

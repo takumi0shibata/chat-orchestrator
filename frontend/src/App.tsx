@@ -568,6 +568,7 @@ function WorkGroup({ actions, timeline, status, active }: {
   active: boolean;
 }) {
   const category = (action: AgentEvent) => action.type === "command" ? "command" :
+    action.type === "patch" ? "edit" :
     action.type === "approval" ? "approval" :
       action.data.type === "web_search_call" ? "web" : "tool";
   const categories = [...new Set(actions.map(category))];
@@ -576,13 +577,17 @@ function WorkGroup({ actions, timeline, status, active }: {
     event.data.index === action.data.index);
   const toolResult = (action: AgentEvent) => timeline.find((event) =>
     event.type === "tool_result" && event.data.id === action.data.id);
+  const patchDone = (action: AgentEvent) => timeline.find((event) =>
+    event.type === "patch_done" && event.data.call_id === action.data.call_id);
   const runningCommand = !terminal(status) ? [...actions].reverse().find((action) =>
     action.type === "command" && !commandDone(action)) : undefined;
   const labels = categories.map((kind) => {
     const matching = actions.filter((action) => category(action) === kind);
     const running = !terminal(status) && matching.some((action) =>
-      kind === "command" ? !commandDone(action) : kind !== "approval" && !toolResult(action));
+      kind === "command" ? !commandDone(action) : kind === "edit" ? !patchDone(action) :
+        kind !== "approval" && !toolResult(action));
     const label = kind === "command" ? (running ? "Running commands" : "Ran commands") :
+      kind === "edit" ? (running ? "Editing files" : "Edited files") :
       kind === "web" ? (running ? "Searching web" : "Searched web") :
         kind === "tool" ? (running ? "Using external tools" : "Used external tools") : "Requested approval";
     return { kind, label, running };
@@ -625,6 +630,21 @@ function WorkGroup({ actions, timeline, status, active }: {
               </div>
             );
           }
+          if (action.type === "patch") {
+            const done = patchDone(action);
+            const operation = text(action.data.operation);
+            const verb = operation === "create_file" ? "Create" : operation === "delete_file" ? "Delete" : "Edit";
+            return (
+              <div className="work-detail" key={action.seq}>
+                <div className="work-detail-title">{verb} · {text(done?.data.path || action.data.path)}</div>
+                {Boolean(done?.data.diff) && <DiffView diff={text(done?.data.diff)} dark />}
+                <small>
+                  {done ? (done.data.status === "completed" ? text(done.data.output) : `Failed: ${text(done.data.output)}`) :
+                    terminal(status) ? "Interrupted" : "Applying…"}
+                </small>
+              </div>
+            );
+          }
           if (action.type === "tool") {
             const result = toolResult(action);
             const title = action.data.type === "web_search_call" ? "Web search" :
@@ -647,6 +667,113 @@ function WorkGroup({ actions, timeline, status, active }: {
         })}
       </div>
     </details>
+  );
+}
+
+/** Unified diff with per-line coloring; file headers are omitted. */
+export function DiffView({ diff, dark = false }: { diff: string; dark?: boolean }) {
+  const lines = diff.split("\n").filter((line) =>
+    !/^(diff --git|index |--- |\+\+\+ |new file mode|deleted file mode|old mode|new mode)/.test(line));
+  return (
+    <pre className={`diff-view${dark ? " diff-dark" : ""}`}>
+      {lines.map((line, index) => (
+        <span key={index} className={line.startsWith("@@") ? "diff-hunk" : line.startsWith("+") ? "diff-add" :
+          line.startsWith("-") ? "diff-del" : undefined}>{line || " "}{"\n"}</span>
+      ))}
+    </pre>
+  );
+}
+
+interface ChangedFile { path: string; status: string; added: number | null; removed: number | null; binary: boolean }
+interface RunChangesState { available: boolean; reverted?: boolean; files: ChangedFile[]; skipped_count?: number }
+
+/** Files changed by a finished run, with per-file diffs and checkpoint undo. */
+export function RunChanges({ runId, timeline }: { runId: string; timeline: AgentEvent[] }) {
+  const ready = timeline.some((event) => event.type === "checkpoint" && event.data.name === "after" && !event.data.error);
+  const [state, setState] = useState<RunChangesState | null>(null);
+  const [diffs, setDiffs] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!ready) return;
+    let cancelled = false;
+    api<RunChangesState>(`/runs/${runId}/changes`).then((value) => { if (!cancelled) setState(value); })
+      .catch((e) => { if (!cancelled) setError(String(e)); });
+    return () => { cancelled = true; };
+  }, [ready, runId]);
+  if (!ready || !state?.available || state.files.length === 0) return error ? <p role="alert" className="error">{error}</p> : null;
+  const added = state.files.reduce((sum, file) => sum + (file.added ?? 0), 0);
+  const removed = state.files.reduce((sum, file) => sum + (file.removed ?? 0), 0);
+  async function toggle(path: string, open: boolean) {
+    if (!open || diffs[path] !== undefined) return;
+    try {
+      const result = await api<{ diff: string }>(`/runs/${runId}/diff?path=${encodeURIComponent(path)}`);
+      setDiffs((current) => ({ ...current, [path]: result.diff }));
+    } catch (e) {
+      setDiffs((current) => ({ ...current, [path]: `Could not load diff: ${String(e)}` }));
+    }
+  }
+  async function revert() {
+    if (!window.confirm(`Undo this run's changes to ${state!.files.length} files?`)) return;
+    setBusy(true);
+    setError("");
+    try {
+      let response = await fetch(`/api/runs/${runId}/revert`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+      });
+      if (response.status === 409) {
+        const body = await response.json();
+        const conflicts: string[] = body.detail?.conflicts ?? [];
+        if (!window.confirm(`These files changed after the run:\n${conflicts.slice(0, 10).join("\n")}\n\nOverwrite them with the state before the run?`)) return;
+        response = await fetch(`/api/runs/${runId}/revert`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: true }),
+        });
+      }
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(typeof body.detail === "string" ? body.detail : `Request failed (${response.status})`);
+      }
+      setState(await api<RunChangesState>(`/runs/${runId}/changes`));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="run-changes" aria-label="Changed files">
+      <header>
+        <strong>{state.files.length} {state.files.length === 1 ? "file" : "files"} changed</strong>
+        <span className="diff-count-add">+{added}</span>
+        <span className="diff-count-del">−{removed}</span>
+        {state.reverted ? <span className="run-changes-reverted">Reverted</span> : (
+          <button type="button" className="run-changes-undo" disabled={busy} onClick={() => void revert()}>
+            {busy ? "Undoing…" : "Undo"}
+          </button>
+        )}
+      </header>
+      <ul>
+        {state.files.map((file) => (
+          <li key={file.path}>
+            <details onToggle={(event) => void toggle(file.path, event.currentTarget.open)}>
+              <summary>
+                <span className={`change-status change-${file.status}`}>{file.status === "added" ? "A" : file.status === "deleted" ? "D" : "M"}</span>
+                <span className="change-path" title={file.path}>{file.path}</span>
+                {file.binary ? <small>binary</small> : (
+                  <small><span className="diff-count-add">+{file.added}</span> <span className="diff-count-del">−{file.removed}</span></small>
+                )}
+              </summary>
+              {diffs[file.path] === undefined ? <p className="change-loading">Loading…</p> :
+                file.binary ? <p className="change-loading">Binary file</p> : <DiffView diff={diffs[file.path]} />}
+            </details>
+          </li>
+        ))}
+      </ul>
+      {Boolean(state.skipped_count) && (
+        <small className="run-changes-note">{state.skipped_count} large files are not covered by checkpoints.</small>
+      )}
+      {error && <p role="alert" className="error">{error}</p>}
+    </section>
   );
 }
 
@@ -775,6 +902,7 @@ export function RunView({
           <div className="answer-block" key={block.key}><MarkdownContent conversationId={run.conversation_id} content={block.content} /></div>
         ))}
         {assistantMessage && <CopyButton content={assistantMessage} tooltip="Copy response" />}
+        {terminal(run.status) && <RunChanges runId={run.id} timeline={timeline} />}
         {!terminal(run.status) &&
           approvals.map((e) => (
             <div className="approval" key={e.seq}>

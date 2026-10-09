@@ -314,3 +314,43 @@ def test_find_longer_than_model_ten_second_hint(tmp_path):
         finally:
             await sandbox.close()
     asyncio.run(scenario())
+
+
+def test_apply_patch_runs_inside_sandbox(tmp_path):
+    async def scenario():
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "a.txt").write_text("one\n")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (work / "link").symlink_to(outside)
+        sandbox = Sandbox(
+            Settings(_env_file=None), Folder(id="w", label="Work", path=work),
+            uuid4().hex, [], [], tmp_path / "input",
+        )
+        await sandbox.start()
+        try:
+            updated = await sandbox.apply_patch(
+                dict(type="update_file", path="/workspace/a.txt", diff="@@\n-one\n+two\n")
+            )
+            assert updated["status"] == "completed", updated
+            created = await sandbox.apply_patch(
+                dict(type="create_file", path="新規/b.txt", diff="+日本語\n")
+            )
+            assert created["status"] == "completed", created
+            escaped = await sandbox.apply_patch(
+                dict(type="create_file", path="link/x.txt", diff="+x\n")
+            )
+            assert escaped["status"] == "failed"
+            readonly = await sandbox.apply_patch(
+                dict(type="create_file", path="/input/x.txt", diff="+x\n")
+            )
+            assert readonly["status"] == "failed"
+        finally:
+            await sandbox.close()
+        assert (work / "a.txt").read_text() == "two\n"
+        assert (work / "新規/b.txt").read_text() == "日本語\n"
+        assert (work / "新規/b.txt").stat().st_uid == os.getuid()
+        assert not (outside / "x.txt").exists()
+
+    asyncio.run(scenario())

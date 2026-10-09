@@ -1468,3 +1468,63 @@ it("inserts collapsed, expanded and nested folder paths while keeping click-to-t
   expect(screen.queryByRole("button", { name: "下書き folder" })).not.toBeInTheDocument();
   expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/download") || url === "/api/attachments")).toBe(false);
 });
+
+describe("file edits and checkpoints", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+  it("shows apply_patch edits with their diff in Activity", () => {
+    const { container } = render(<RunView run={run} timeline={[
+      event(1, "patch", { call_id: "p1", operation: "update_file", path: "src/a.py" }),
+      event(2, "patch_done", { call_id: "p1", status: "completed", path: "src/a.py", output: "Updated src/a.py (+1 -1)",
+        diff: "--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-x = 1\n+x = 2" }),
+      event(3, "patch", { call_id: "p2", operation: "update_file", path: "b.py" }),
+      event(4, "patch_done", { call_id: "p2", status: "failed", path: "b.py", output: "Hunk 1: context not found" }),
+    ]} onApproval={vi.fn()} />);
+    expect(screen.getByText("Edited files")).toBeInTheDocument();
+    expect(screen.getByText("Edit · src/a.py")).toBeInTheDocument();
+    expect(container.querySelector(".diff-add")?.textContent).toContain("+x = 2");
+    expect(container.querySelector(".diff-del")?.textContent).toContain("-x = 1");
+    expect(container.textContent).not.toContain("+++ b/src/a.py");
+    expect(screen.getByText("Failed: Hunk 1: context not found")).toBeInTheDocument();
+  });
+
+  it("lists run changes, loads a diff and undoes after confirming conflicts", async () => {
+    let reverted = false;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
+      const url = String(input);
+      if (url === "/api/runs/r/changes") return json({ available: true, reverted, skipped_count: 1, files: [
+        { path: "a.txt", status: "modified", added: 2, removed: 1, binary: false },
+        { path: "img.png", status: "added", added: null, removed: null, binary: true },
+      ] });
+      if (url.startsWith("/api/runs/r/diff")) return json({ diff: "@@ -1 +1 @@\n-old\n+new" });
+      if (url === "/api/runs/r/revert") {
+        const force = JSON.parse(String(options?.body)).force;
+        if (!force) return json({ detail: { message: "changed", conflicts: ["a.txt"] } }, 409);
+        reverted = true;
+        return json({ restored: ["a.txt", "img.png"], overwritten: ["a.txt"] });
+      }
+      throw new Error(url);
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { container } = render(<RunView run={run} timeline={[event(1, "checkpoint", { name: "after", files: 2 })]} onApproval={vi.fn()} />);
+    expect(await screen.findByText("2 files changed")).toBeInTheDocument();
+    expect(screen.getByText("1 large files are not covered by checkpoints.")).toBeInTheDocument();
+    const details = container.querySelector(".run-changes li details") as HTMLDetailsElement;
+    details.open = true;
+    fireEvent(details, new Event("toggle"));
+    await waitFor(() => expect(container.querySelector(".run-changes .diff-add")?.textContent).toContain("+new"));
+    expect(fetchMock.mock.calls.some(([url]) => String(url) === "/api/runs/r/diff?path=a.txt")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(await screen.findByText("Reverted")).toBeInTheDocument();
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(confirm.mock.calls[1][0]).toContain("a.txt");
+  });
+
+  it("does not request changes without a completed checkpoint", () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    render(<RunView run={run} timeline={[event(1, "checkpoint", { name: "after", error: "git missing" })]} onApproval={vi.fn()} />);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

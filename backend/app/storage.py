@@ -107,7 +107,7 @@ class Store:
                     round_number = 0
                     for event in c.execute(
                         "SELECT type,data FROM events WHERE run_id=? "
-                        "AND type IN ('text_delta','round','response','command','tool','approval') "
+                        "AND type IN ('text_delta','round','response','command','patch','tool','approval') "
                         "ORDER BY seq", (run["id"],)
                     ):
                         data = json.loads(event["data"])
@@ -117,7 +117,7 @@ class Store:
                         elif event["type"] == "response":
                             round_number += 1
                             boundary += 1
-                        elif event["type"] in ("command", "tool", "approval"):
+                        elif event["type"] in ("command", "patch", "tool", "approval"):
                             boundary += 1
                         elif event["type"] == "text_delta":
                             key = (
@@ -217,8 +217,10 @@ class Store:
             output_budget = 24000
             for event in c.execute("SELECT type,data FROM events WHERE run_id=? AND seq>? ORDER BY seq", (rid, state["checkpoint_seq"])):
                 kind, data = event["type"], json.loads(event["data"])
-                if kind in {"command", "command_done", "error", "status", "tool", "tool_result", "approval_resolved"}:
+                if kind in {"command", "command_done", "error", "status", "tool", "tool_result", "approval_resolved", "patch"}:
                     journal.append({"type": kind, "data": data})
+                elif kind == "patch_done":
+                    journal.append({"type": kind, "data": {k: data.get(k) for k in ("call_id", "status", "output", "path")}})
                 elif kind in {"command_output", "text_delta"} and output_budget > 0:
                     text = data.get("text", "")[:output_budget]
                     output_budget -= len(text)
