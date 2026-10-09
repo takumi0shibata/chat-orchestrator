@@ -1594,3 +1594,32 @@ it("keeps a compaction notice visible after Activity collapses", () => {
   expect(notice).toHaveTextContent("Context automatically compacted · 260K → 21.0K tokens");
   expect(notice).toHaveAttribute("title", "Compacts when the context reaches 258K tokens");
 });
+
+it("waits for IME composition to finish before searching", async () => {
+  const c = { id: "c", title: "売上の集計", workspace_id: "w", updated_at: run.updated_at, pinned: false };
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = String(input);
+    let body: unknown = {};
+    if (url === "/api/config") body = { providers: [], workspaces: [{ id: "w", label: "Work" }], skills: [], resources: [], mcp_servers: [] };
+    else if (url === "/api/conversations") body = [c];
+    else if (url.startsWith("/api/conversations?q=")) body = [c];
+    else if (url === "/api/conversations/c") body = { ...c, runs: [] };
+    else if (url.includes("/files")) body = [];
+    return new Response(JSON.stringify(body));
+  });
+  localStorage.setItem("workspace-conversation", "c");
+  render(<App />);
+  await screen.findByRole("button", { name: "売上の集計" });
+  fireEvent.click(screen.getByRole("button", { name: "Search" }));
+  const search = screen.getByRole("searchbox", { name: "Search history" });
+  const searched = () => fetchMock.mock.calls.map(([url]) => String(url)).filter((url) => url.startsWith("/api/conversations?q="));
+  fireEvent.compositionStart(search);
+  fireEvent.change(search, { target: { value: "うりあげ" } });
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  expect(searched()).toEqual([]);
+  expect(screen.queryByText("No matching conversations")).not.toBeInTheDocument();
+  fireEvent.change(search, { target: { value: "売上" } });
+  fireEvent.compositionEnd(search, { target: { value: "売上" } });
+  await waitFor(() => expect(searched()).toEqual([`/api/conversations?q=${encodeURIComponent("売上")}`]));
+  vi.restoreAllMocks();
+});

@@ -1,5 +1,7 @@
 import json
+import re
 import sqlite3
+import unicodedata
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +12,26 @@ TERMINAL = {"completed", "failed", "stopped"}
 
 def now():
     return datetime.now(timezone.utc).isoformat()
+
+
+SEARCH_TOKEN = re.compile(r'"([^"]+)"|“([^”]+)”|(\S+)')
+# Markdown emphasis and code markers often split Japanese phrases (修正案だけ**、**理由).
+SEARCH_MARKUP = str.maketrans("", "", "*`~")
+
+
+def search_text(text):
+    """Comparable form: NFKC (全角ＡＢＣ１２３ → ABC123), casefold, no markup, single spaces."""
+    return " ".join(unicodedata.normalize("NFKC", text).casefold().translate(SEARCH_MARKUP).split())
+
+
+def search_terms(query):
+    """Whitespace-separated terms (including full-width spaces); quotes keep a phrase."""
+    terms = []
+    for match in SEARCH_TOKEN.finditer(unicodedata.normalize("NFKC", query)):
+        term = search_text(match.group(1) or match.group(2) or match.group(3))
+        if term and term not in terms:
+            terms.append(term)
+    return terms
 
 
 class Store:
@@ -90,18 +112,19 @@ class Store:
             c.close()
 
     def conversations(self, query=""):
-        needle = query.strip().casefold()
+        terms = search_terms(query)
         with self.connect() as c:
             rows = [dict(r) for r in c.execute(
                 "SELECT id,workspace_id,title,updated_at,pinned,azure_connection_id FROM conversations "
                 "ORDER BY pinned DESC,updated_at DESC,id"
             )]
-            if needle:
-                matches = set()
+            if terms:
+                # Every term must appear somewhere in the conversation, not necessarily together.
+                texts = {r["id"]: [search_text(r["title"])] for r in rows}
                 for run in c.execute("SELECT id,conversation_id,request FROM runs"):
-                    if needle in json.loads(run["request"]).get("input", "").casefold():
-                        matches.add(run["conversation_id"])
-                        continue
+                    texts.setdefault(run["conversation_id"], []).append(
+                        search_text(json.loads(run["request"]).get("input", ""))
+                    )
                     blocks = {}
                     boundary = 0
                     round_number = 0
@@ -125,9 +148,11 @@ class Store:
                                 data.get("item_id") or f"anonymous-{boundary}",
                             )
                             blocks[key] = blocks.get(key, "") + data.get("text", "")
-                    if any(needle in value.casefold() for value in blocks.values()):
-                        matches.add(run["conversation_id"])
-                rows = [r for r in rows if needle in r["title"].casefold() or r["id"] in matches]
+                    texts[run["conversation_id"]].extend(search_text(v) for v in blocks.values())
+                rows = [
+                    r for r in rows
+                    if all(any(term in text for text in texts[r["id"]]) for term in terms)
+                ]
         return [{**r, "pinned": bool(r["pinned"])} for r in rows]
 
     def pin_conversation(self, cid, pinned):

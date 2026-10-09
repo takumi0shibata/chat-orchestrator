@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app.storage import Store
+from app.storage import Store, search_terms
 
 
 def test_connection_commits_and_closes(tmp_path):
@@ -118,6 +118,56 @@ def test_history_search_and_pin_persistence(tmp_path):
     assert restored.conversation(second)["pinned"] is False
     with pytest.raises(KeyError):
         restored.pin_conversation("missing", True)
+
+
+def test_search_matches_every_space_separated_term(tmp_path):
+    store = Store(tmp_path)
+    both = store.create_conversation("work")["id"]
+    one = store.create_conversation("work")["id"]
+    run = store.create_run({"conversation_id": both, "input": "売上のCSVを集計して"})
+    store.event(run["id"], "text_delta", {"item_id": "a", "text": "棒グラフを chart.png に保存しました"})
+    store.event(run["id"], "command_output", {"text": "secret-term"})
+    other = store.create_run({"conversation_id": one, "input": "売上を確認"})
+    store.event(other["id"], "text_delta", {"item_id": "a", "text": "完了しました"})
+
+    def ids(query):
+        return {c["id"] for c in store.conversations(query)}
+
+    # Terms may sit in different places (request vs. answer) and in any order.
+    assert ids("売上 グラフ") == {both}
+    assert ids("グラフ　売上") == {both}  # full-width space
+    assert ids("売上") == {both, one}
+    assert ids("売上 存在しない") == set()
+    assert ids("CSV chart.PNG") == {both}
+    assert ids('"chart.png に保存"') == {both}
+    assert ids('"保存 chart.png"') == set()
+    assert ids("売上 secret-term") == set()
+    assert ids("   ") == {both, one}
+
+
+def test_search_normalizes_width_markup_and_line_breaks(tmp_path):
+    store = Store(tmp_path)
+    cid = store.create_conversation("work")["id"]
+    run = store.create_run({"conversation_id": cid, "input": "ＣＳＶの売上（第１四半期）を集計"})
+    store.event(run["id"], "text_delta", {"item_id": "a", "text": "修正案だけ**、**修正理由付き。`sales.csv` を\n読み込み"})
+
+    def found(query):
+        return [c["id"] for c in store.conversations(query)] == [cid]
+
+    assert found("csv 第1四半期")  # half-width query, full-width text
+    assert found("（第１四半期）")
+    assert found("(第1四半期)")
+    assert found("修正案だけ、修正理由")  # bold markers inside the phrase
+    assert found('"sales.csv を 読み込み"')  # code markers and a line break
+    assert found("ｓａｌｅｓ.ＣＳＶ")  # full-width query
+    assert not found("第2四半期")
+
+
+def test_search_terms_parsing():
+    assert search_terms("  a\u3000B  c ") == ["a", "b", "c"]
+    assert search_terms('"two  words" x') == ["two words", "x"]
+    assert search_terms("“月次 報告” 売上 売上") == ["月次 報告", "売上"]
+    assert search_terms('"unclosed phrase') == ['"unclosed', "phrase"]
 
 
 def test_migrates_existing_history_without_data_loss(tmp_path):

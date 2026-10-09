@@ -1074,6 +1074,8 @@ export function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Conversation[] | null>(null);
+  // IME composition (Japanese input) must not search unconverted kana or romaji.
+  const [searchComposing, setSearchComposing] = useState(false);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1226,6 +1228,7 @@ export function App() {
     setHistoryRevision((value) => value + 1);
   }
   useEffect(() => {
+    if (searchComposing) return;
     const abort = new AbortController();
     setSearchResults(null);
     setSearchError("");
@@ -1238,7 +1241,7 @@ export function App() {
         .finally(() => { if (!abort.signal.aborted) setSearching(false); });
     }, 250);
     return () => { clearTimeout(timer); abort.abort(); };
-  }, [query, historyRevision]);
+  }, [query, historyRevision, searchComposing]);
 
   useEffect(() => {
     if (searchOpen) searchInput.current?.focus();
@@ -1880,9 +1883,17 @@ export function App() {
                 type="search"
                 aria-label="Search history"
                 placeholder="Search chats"
+                title='Separate words with spaces to match all of them; use "quotes" for a phrase'
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={(event) => { if (event.key === "Escape") toggleSearch(); }}
+                onCompositionStart={() => setSearchComposing(true)}
+                onCompositionEnd={(event) => {
+                  setQuery(event.currentTarget.value);
+                  setSearchComposing(false);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape" && !event.nativeEvent.isComposing) toggleSearch();
+                }}
               />
               <button className="sidebar-search-close" type="button" aria-label="Close search" title="Close search" onClick={toggleSearch}>
                 <Icon name="close" size={15} />
