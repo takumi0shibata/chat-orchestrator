@@ -97,6 +97,11 @@ describe("reasoning summaries", () => {
 });
 
 describe("current activity", () => {
+  it("reports an unfinished image view", () => {
+    const events = [e(1, "image_view", { call_id: "i", path: "plot.png" })];
+    expect(activityLabel(events, "command_running", [])).toBe("Viewing: plot.png");
+    expect(activityLabel([...events, e(2, "image_view_done", { call_id: "i" })], "model_wait", [])).toBe("Waiting for model");
+  });
   it("reports an unfinished file edit", () => {
     const events = [e(1, "patch", { call_id: "p", path: "src/app.py" })];
     expect(activityLabel(events, "command_running", [])).toBe("Editing: src/app.py");

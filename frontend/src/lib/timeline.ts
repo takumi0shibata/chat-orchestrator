@@ -1,7 +1,7 @@
 import type { AgentEvent } from "../types";
 
 /** Events that represent an operation in Activity, as opposed to model text. */
-export const ACTION_TYPES = ["command", "patch", "tool", "approval"];
+export const ACTION_TYPES = ["command", "patch", "image_view", "tool", "approval"];
 
 export interface MessageBlock {
   key: string;
@@ -168,6 +168,9 @@ export function activityLabel(events: AgentEvent[], status: string, blocks: Mess
   const patch = [...events].reverse().find((event) => event.type === "patch" &&
     !events.some((other) => other.type === "patch_done" && other.data.call_id === event.data.call_id));
   if (patch) return `Editing: ${short(patch.data.path)}`;
+  const image = [...events].reverse().find((event) => event.type === "image_view" &&
+    !events.some((other) => other.type === "image_view_done" && other.data.call_id === event.data.call_id));
+  if (image) return `Viewing: ${short(image.data.path)}`;
   const tool = [...events].reverse().find((event) => event.type === "tool" &&
     !events.some((other) => other.type === "tool_result" && other.data.id === event.data.id));
   if (tool) return tool.data.type === "web_search_call" ? "Searching the web" :

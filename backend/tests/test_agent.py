@@ -98,6 +98,14 @@ class FakeSandbox:
         self.patches = []
         self.instances.append(self)
 
+    async def view_image(self, path):
+        if path != "plot.png":
+            return dict(status="failed", output=f"Image not found: {path}", path=path)
+        return dict(status="completed", output="Image /workspace/plot.png (2x1 image/png)",
+                    path="/workspace/plot.png", mime="image/png", width=2, height=1,
+                    original_width=2, original_height=1, thumbnail="data:image/jpeg;base64,AA==",
+                    image_url="data:image/png;base64,iVBORw0KGgo=")
+
     async def apply_patch(self, operation):
         self.patches.append(operation)
         return apply_operation(str(self.workspace), operation)
@@ -643,7 +651,7 @@ def test_mcp_approval_is_run_scoped(tmp_path):
         assert c.calls[1]["input"][-1] == dict(
             type="mcp_approval_response", approval_request_id="approval1", approve=False
         )
-        assert c.calls[0]["tools"][2]["require_approval"] == "always"
+        assert next(t for t in c.calls[0]["tools"] if t["type"] == "mcp")["require_approval"] == "always"
         assert store.run(run["id"])["status"] == "completed"
 
     asyncio.run(scenario())
@@ -1259,5 +1267,45 @@ def test_checkpoints_can_be_disabled(tmp_path):
         await manager.tasks[run["id"]]
         assert not [e for e in store.events(run["id"]) if e["type"] == "checkpoint"]
         assert (await manager.changes(run["id"])) == {"available": False, "files": []}
+
+    asyncio.run(scenario())
+
+
+def function_call(name, arguments, call="fn_1"):
+    return {"type": "function_call", "id": "fc_" + call, "call_id": call,
+            "name": name, "arguments": arguments}
+
+
+def test_view_image_returns_image_to_model(tmp_path):
+    async def scenario():
+        manager, store, client, request = setup(tmp_path, [
+            [function_call("view_image", '{"path": "plot.png"}'),
+             function_call("view_image", '{"path": "missing.png"}', "fn_2"),
+             function_call("view_image", "not json", "fn_3"),
+             function_call("delete_everything", "{}", "fn_4")],
+            [message()],
+        ])
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        assert store.run(run["id"])["status"] == "completed"
+        tool = next(t for t in client.calls[0]["tools"] if t.get("name") == "view_image")
+        assert tool["strict"] and tool["parameters"]["required"] == ["path"]
+        assert "view_image" in client.calls[0]["instructions"]
+        outputs = {i["call_id"]: i["output"] for i in client.calls[1]["input"]
+                   if i.get("type") == "function_call_output"}
+        assert outputs["fn_1"] == [
+            {"type": "input_text", "text": "Image /workspace/plot.png (2x1 image/png)"},
+            {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=", "detail": "auto"},
+        ]
+        assert outputs["fn_2"] == "Image not found: missing.png"
+        assert outputs["fn_3"] == "Image not found: None"
+        assert outputs["fn_4"] == "Unknown function: delete_everything"
+        events = store.events(run["id"])
+        done = [e["data"] for e in events if e["type"] == "image_view_done"]
+        assert done[0]["thumbnail"] == "data:image/jpeg;base64,AA==" and done[0]["width"] == 2
+        assert "image_url" not in done[0]
+        assert [e["data"]["path"] for e in events if e["type"] == "image_view"] == [
+            "plot.png", "missing.png", None,
+        ]
 
     asyncio.run(scenario())

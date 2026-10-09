@@ -1490,6 +1490,21 @@ describe("file edits and checkpoints", () => {
     expect(screen.getByText("Failed: Hunk 1: context not found")).toBeInTheDocument();
   });
 
+  it("shows the image the model viewed and failed views", () => {
+    const { container } = render(<RunView run={run} timeline={[
+      event(1, "image_view", { call_id: "i1", path: "plot.png" }),
+      event(2, "image_view_done", { call_id: "i1", status: "completed", path: "/workspace/plot.png",
+        mime: "image/png", width: 640, height: 480, thumbnail: "data:image/jpeg;base64,AA==" }),
+      event(3, "image_view", { call_id: "i2", path: "x.png" }),
+      event(4, "image_view_done", { call_id: "i2", status: "failed", path: "x.png", output: "Image not found: x.png" }),
+    ]} onApproval={vi.fn()} />);
+    expect(screen.getByText("Viewed images")).toBeInTheDocument();
+    expect(screen.getByText("View image · /workspace/plot.png")).toBeInTheDocument();
+    expect(container.querySelector("img.image-view-thumbnail")?.getAttribute("src")).toBe("data:image/jpeg;base64,AA==");
+    expect(screen.getByText("640×480 · image/png")).toBeInTheDocument();
+    expect(screen.getByText("Failed: Image not found: x.png")).toBeInTheDocument();
+  });
+
   it("lists run changes, loads a diff and undoes after confirming conflicts", async () => {
     let reverted = false;
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {

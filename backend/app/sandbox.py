@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 PATCH_TOOL = (Path(__file__).parent / "patch_tool.py").read_text()
+IMAGE_TOOL = (Path(__file__).parent / "image_tool.py").read_text()
 
 
 class CommandTimeoutError(TimeoutError):
@@ -181,17 +182,18 @@ class Sandbox:
             captured[channel] += "\n[output truncated]"
         return {**captured, "outcome": outcome}
 
-    async def apply_patch(self, operation, timeout=60):
-        """Run the stdlib patch tool in the container so paths resolve there."""
+    async def run_tool(self, source, request, timeout=60):
+        """Run a stdlib tool script in the container so paths resolve there."""
         process = await asyncio.create_subprocess_exec(
-            "docker", "exec", "-i", self.name, "python", "-I", "-c", PATCH_TOOL,
+            "docker", "exec", "-i", self.name, "python", "-I", "-c", source,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        request = json.dumps(dict(root="/workspace", operation=operation)).encode()
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(request), timeout)
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(json.dumps(request).encode()), timeout
+            )
         except BaseException:
             if process.returncode is None:
                 process.kill()
@@ -200,7 +202,15 @@ class Sandbox:
         if process.returncode:
             return dict(
                 status="failed",
-                output="Patch tool failed: " + stderr.decode(errors="replace")[-2000:],
-                path=operation.get("path"),
+                output="Tool failed: " + stderr.decode(errors="replace")[-2000:],
             )
         return json.loads(stdout)
+
+    async def apply_patch(self, operation):
+        result = await self.run_tool(
+            PATCH_TOOL, dict(root="/workspace", operation=operation)
+        )
+        return {"path": operation.get("path"), **result}
+
+    async def view_image(self, path):
+        return {"path": path, **await self.run_tool(IMAGE_TOOL, dict(path=path))}

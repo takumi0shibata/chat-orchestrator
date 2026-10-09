@@ -2158,3 +2158,12 @@ h2 {
 .change-modified { color: #9a6700; }
 .change-loading { margin: 4px 12px 8px; color: #85878f; font-size: 12px; }
 .run-changes-note { display: block; padding: 0 12px 8px; color: #85878f; font-size: 11px; }
+
+.image-view-thumbnail {
+  display: block;
+  max-width: min(100%, 320px);
+  max-height: 240px;
+  margin-top: 6px;
+  border-radius: 4px;
+  background: #fff;
+}

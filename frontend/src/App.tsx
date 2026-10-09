@@ -569,6 +569,7 @@ function WorkGroup({ actions, timeline, status, active }: {
 }) {
   const category = (action: AgentEvent) => action.type === "command" ? "command" :
     action.type === "patch" ? "edit" :
+    action.type === "image_view" ? "image" :
     action.type === "approval" ? "approval" :
       action.data.type === "web_search_call" ? "web" : "tool";
   const categories = [...new Set(actions.map(category))];
@@ -579,15 +580,19 @@ function WorkGroup({ actions, timeline, status, active }: {
     event.type === "tool_result" && event.data.id === action.data.id);
   const patchDone = (action: AgentEvent) => timeline.find((event) =>
     event.type === "patch_done" && event.data.call_id === action.data.call_id);
+  const imageDone = (action: AgentEvent) => timeline.find((event) =>
+    event.type === "image_view_done" && event.data.call_id === action.data.call_id);
   const runningCommand = !terminal(status) ? [...actions].reverse().find((action) =>
     action.type === "command" && !commandDone(action)) : undefined;
   const labels = categories.map((kind) => {
     const matching = actions.filter((action) => category(action) === kind);
     const running = !terminal(status) && matching.some((action) =>
       kind === "command" ? !commandDone(action) : kind === "edit" ? !patchDone(action) :
+        kind === "image" ? !imageDone(action) :
         kind !== "approval" && !toolResult(action));
     const label = kind === "command" ? (running ? "Running commands" : "Ran commands") :
       kind === "edit" ? (running ? "Editing files" : "Edited files") :
+      kind === "image" ? (running ? "Viewing images" : "Viewed images") :
       kind === "web" ? (running ? "Searching web" : "Searched web") :
         kind === "tool" ? (running ? "Using external tools" : "Used external tools") : "Requested approval";
     return { kind, label, running };
@@ -641,6 +646,23 @@ function WorkGroup({ actions, timeline, status, active }: {
                 <small>
                   {done ? (done.data.status === "completed" ? text(done.data.output) : `Failed: ${text(done.data.output)}`) :
                     terminal(status) ? "Interrupted" : "Applying…"}
+                </small>
+              </div>
+            );
+          }
+          if (action.type === "image_view") {
+            const done = imageDone(action);
+            const thumbnail = text(done?.data.thumbnail);
+            const size = done?.data.width ? `${text(done.data.width)}×${text(done.data.height)}` : "";
+            return (
+              <div className="work-detail" key={action.seq}>
+                <div className="work-detail-title">View image · {text(done?.data.path || action.data.path)}</div>
+                {thumbnail.startsWith("data:image/") && (
+                  <img className="image-view-thumbnail" src={thumbnail} alt={`Image viewed by the model: ${text(done?.data.path)}`} />
+                )}
+                <small>
+                  {done ? (done.data.status === "completed" ? [size, text(done.data.mime)].filter(Boolean).join(" · ") :
+                    `Failed: ${text(done.data.output)}`) : terminal(status) ? "Interrupted" : "Loading…"}
                 </small>
               </div>
             );

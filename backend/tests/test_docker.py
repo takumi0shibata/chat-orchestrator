@@ -354,3 +354,41 @@ def test_apply_patch_runs_inside_sandbox(tmp_path):
         assert not (outside / "x.txt").exists()
 
     asyncio.run(scenario())
+
+
+def test_view_image_runs_inside_sandbox(tmp_path):
+    async def scenario():
+        work = tmp_path / "work"
+        work.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        (work / "link.png").symlink_to(outside / "secret.png")
+        sandbox = Sandbox(
+            Settings(_env_file=None), Folder(id="w", label="Work", path=work),
+            uuid4().hex, [], [], tmp_path / "input",
+        )
+        await sandbox.start()
+        try:
+            made = await sandbox.execute(
+                "python -c \"from PIL import Image; "
+                "Image.new('RGBA', (4000, 1000), (255, 0, 0, 128)).save('/workspace/wide.png'); "
+                "Image.new('RGB', (64, 32), 'blue').save('/tmp/small.bmp')\"",
+                emit,
+            )
+            assert made["outcome"]["exit_code"] == 0, made
+            wide = await sandbox.view_image("wide.png")
+            assert wide["status"] == "completed", wide
+            assert (wide["width"], wide["height"]) == (2048, 512)
+            assert (wide["original_width"], wide["original_height"]) == (4000, 1000)
+            assert wide["mime"] == "image/png" and "resized from 4000x1000" in wide["output"]
+            assert wide["thumbnail"].startswith("data:image/jpeg;base64,")
+            small = await sandbox.view_image("/tmp/small.bmp")
+            assert small["status"] == "completed", small
+            assert small["mime"] == "image/jpeg" and small["width"] == 64
+            assert (await sandbox.view_image("link.png"))["status"] == "failed"
+            assert (await sandbox.view_image("/etc/hostname"))["status"] == "failed"
+        finally:
+            await sandbox.close()
+
+    asyncio.run(scenario())
