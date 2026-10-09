@@ -25,6 +25,7 @@ STATUS_PHASES = {
     "Starting sandbox": "sandbox_start",
     "Deciding the next action": "model_wait",
     "Compacting conversation context": "context_compaction",
+    "Checking workspace files": "workspace_scan_start",
 }
 
 
@@ -46,7 +47,7 @@ def recent_runs(database: Path, limit=3):
             rows = db.execute(
                 "SELECT type,created_at,CASE WHEN type IN ('text_delta','reasoning_delta') "
                 "THEN '{}' ELSE data END AS data FROM events WHERE run_id=? "
-                "AND type IN ('status','round','checkpoint','response','artifacts',"
+                "AND type IN ('status','round','checkpoint','workspace_scan','response','artifacts',"
                 "'text_delta','reasoning_delta') ORDER BY seq", (run["id"],),
             )
             for row in rows:
@@ -65,6 +66,9 @@ def recent_runs(database: Path, limit=3):
                     checkpoint_events += 1
                     name = data.get("name") if data.get("name") in {"before", "after"} else "unknown"
                     phase = "checkpoint_" + name + ("_failed" if "error" in data else "_done")
+                elif kind == "workspace_scan":
+                    name = data.get("name") if data.get("name") in {"before", "after"} else "unknown"
+                    phase = "workspace_scan_" + name + "_done"
                 elif kind == "response":
                     phase = "model_response_with_tools" if data.get("continues") else "model_response_final"
                 else:
@@ -75,6 +79,10 @@ def recent_runs(database: Path, limit=3):
                     elapsed_seconds=round((stamp - origin).total_seconds(), 3),
                     since_previous_seconds=round((stamp - previous).total_seconds(), 3),
                 ))
+                if kind in {"workspace_scan", "checkpoint"}:
+                    for key in ("duration_ms", "files", "hashed_files"):
+                        if isinstance(data.get(key), (int, float)):
+                            markers[-1][key] = data[key]
                 previous = stamp
             report.append(dict(run_id=run["id"], workspace_id=run["workspace_id"],
                                status=run["status"], checkpoint_events=checkpoint_events,

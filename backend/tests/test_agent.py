@@ -1276,7 +1276,7 @@ def test_apply_patch_edits_and_run_can_be_reverted(tmp_path):
 
 def test_checkpoints_can_be_disabled(tmp_path):
     async def scenario():
-        manager, store, _, request = setup(tmp_path, [[message()]], checkpoints=False)
+        manager, store, _, request = setup(tmp_path, [[shell("true")], [message()]], checkpoints=False)
         run = manager.start(request)
         await manager.tasks[run["id"]]
         assert not [e for e in store.events(run["id"]) if e["type"] == "checkpoint"]
@@ -1288,13 +1288,14 @@ def test_checkpoints_can_be_disabled(tmp_path):
 @pytest.mark.parametrize("checkpoints", [True, False])
 def test_run_scans_once_per_boundary_off_event_loop(tmp_path, monkeypatch, checkpoints):
     class Editing(FakeSandbox):
-        async def start(self):
+        async def execute(self, command, emit, timeout):
             (self.workspace / "a.txt").write_text("changed\n")
             (self.workspace / "large.bin").write_bytes(b"x" * 2048)
+            return await super().execute(command, emit, timeout)
 
     async def scenario():
         manager, store, _, request = setup(
-            tmp_path, [[message()]], sandbox=Editing,
+            tmp_path, [[shell("edit"), shell("edit-again", "call_2")], [message()]], sandbox=Editing,
             checkpoints=checkpoints, checkpoint_max_file_bytes=1024,
         )
         (tmp_path / "work/a.txt").write_text("old\n")
@@ -1312,6 +1313,9 @@ def test_run_scans_once_per_boundary_off_event_loop(tmp_path, monkeypatch, check
         assert store.run(run["id"])["status"] == "completed"
         assert len(scan_threads) == 2
         assert all(thread != loop_thread for thread in scan_threads)
+        scans = [e["data"] for e in store.events(run["id"]) if e["type"] == "workspace_scan"]
+        assert [s["name"] for s in scans] == ["before", "after"]
+        assert all(s["duration_ms"] >= 0 for s in scans)
         artifacts = next(e["data"]["files"] for e in store.events(run["id"]) if e["type"] == "artifacts")
         assert {f["path"]: f["change"] for f in artifacts} == {
             "a.txt": "modified", "large.bin": "created",
@@ -1330,7 +1334,7 @@ def test_run_scans_once_per_boundary_off_event_loop(tmp_path, monkeypatch, check
 @pytest.mark.parametrize("phase", ["before", "after", "after_scan"])
 def test_stop_waits_for_snapshot_and_preserves_workspace_lock(tmp_path, monkeypatch, phase):
     async def scenario():
-        manager, store, _, request = setup(tmp_path, [[message()], [message()]])
+        manager, store, _, request = setup(tmp_path, [[shell("true")], [message()], [message()]])
         loop = asyncio.get_running_loop()
         entered = asyncio.Event()
         release = threading.Event()
@@ -1389,6 +1393,95 @@ def test_stop_waits_for_snapshot_and_preserves_workspace_lock(tmp_path, monkeypa
 def function_call(name, arguments, call="fn_1"):
     return {"type": "function_call", "id": "fc_" + call, "call_id": call,
             "name": name, "arguments": arguments}
+
+
+@pytest.mark.parametrize("checkpoints", [True, False])
+@pytest.mark.parametrize("kind", ["chat", "image", "web", "empty_shell"])
+def test_runs_without_local_writes_never_scan_or_checkpoint(tmp_path, monkeypatch, checkpoints, kind):
+    async def scenario():
+        outputs = {
+            "chat": [[message()]],
+            "image": [[function_call("view_image", '{"path":"plot.png"}')], [message()]],
+            "web": [[{"type": "web_search_call", "id": "web"}, message()]],
+            "empty_shell": [[{**shell("unused"), "action": {"commands": []}}], [message()]],
+        }[kind]
+        manager, store, _, request = setup(tmp_path, outputs, checkpoints=checkpoints)
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("A non-editing run must never scan or snapshot the workspace")
+
+        monkeypatch.setattr(manager.checkpoints, "scan", forbidden)
+        monkeypatch.setattr(manager.checkpoints, "snapshot", forbidden)
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        assert store.run(run["id"])["status"] == "completed"
+        assert not any(e["type"] in {"workspace_scan", "checkpoint", "artifacts"}
+                       for e in store.events(run["id"]))
+        assert not manager.checkpoints.root.exists()
+        assert not manager.locks[str(tmp_path / "work")].locked()
+
+    asyncio.run(scenario())
+
+
+def test_checkpoint_captures_state_immediately_before_first_edit(tmp_path):
+    async def scenario():
+        manager, store, client, request = setup(tmp_path, [
+            [patch_call(dict(type="update_file", path="a.txt", diff="@@\n-user\n+agent\n"))],
+            [message()],
+        ])
+        target = tmp_path / "work/a.txt"
+        target.write_text("original\n")
+        create = client.create
+
+        async def external_edit_while_thinking(**kwargs):
+            if kwargs.get("stream") and not client.calls:
+                target.write_text("user\n")
+            return await create(**kwargs)
+
+        client.create = external_edit_while_thinking
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        assert store.run(run["id"])["status"] == "completed"
+        assert target.read_text() == "agent\n"
+        events = store.events(run["id"])
+        first_response = next(e["seq"] for e in events if e["type"] == "response")
+        before = next(e["seq"] for e in events if e["type"] == "checkpoint" and e["data"]["name"] == "before")
+        patch = next(e["seq"] for e in events if e["type"] == "patch")
+        assert first_response < before < patch
+        await manager.revert(run["id"])
+        assert target.read_text() == "user\n"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("outcome", ["failed", "stopped"])
+def test_lazy_checkpoint_preserves_undo_after_partial_shell_edit(tmp_path, outcome):
+    async def scenario():
+        edited = asyncio.Event()
+
+        class PartialEdit(FakeSandbox):
+            async def execute(self, command, emit, timeout):
+                (self.workspace / "a.txt").write_text("partial\n")
+                edited.set()
+                if outcome == "failed":
+                    raise RuntimeError("Command failed after writing")
+                await asyncio.Event().wait()
+
+        manager, store, _, request = setup(tmp_path, [[shell("edit")]], sandbox=PartialEdit)
+        target = tmp_path / "work/a.txt"
+        target.write_text("before\n")
+        run = manager.start(request)
+        task = manager.tasks[run["id"]]
+        await asyncio.wait_for(edited.wait(), 3)
+        if outcome == "stopped":
+            await manager.stop(run["id"])
+        await task
+        assert store.run(run["id"])["status"] == outcome
+        assert [f["path"] for f in (await manager.changes(run["id"]))["files"]] == ["a.txt"]
+        await manager.revert(run["id"])
+        assert target.read_text() == "before\n"
+
+    asyncio.run(scenario())
 
 
 def test_view_image_returns_image_to_model(tmp_path):

@@ -529,22 +529,33 @@ class RunManager:
                 name=name, error=self.redact(str(error))[:2000],
             ))
 
+    async def scan_workspace(self, rid, workspace, name):
+        self.store.status(rid, "preparing", "Checking workspace files")
+        started = monotonic()
+        files = await asyncio.to_thread(self.checkpoints.scan, workspace.path)
+        self.store.event(rid, "workspace_scan", dict(
+            name=name, files=len(files), duration_ms=round((monotonic() - started) * 1000),
+        ))
+        return files
+
     async def finish_workspace(self, rid, workspace, before_files):
+        if before_files is None:
+            # No local write-capable tool ran, so there is nothing to snapshot.
+            return
         after_files = None
-        if before_files is not None:
-            try:
-                after_files = await asyncio.to_thread(self.checkpoints.scan, workspace.path)
-                changed = [
-                    dict(path=p, change="created" if p not in before_files else "modified")
-                    for p in after_files
-                    if p not in before_files or before_files[p][:2] != after_files[p][:2]
-                ]
-                changed += [dict(path=p, change="deleted") for p in before_files if p not in after_files]
-                self.store.event(
-                    rid, "artifacts", dict(files=changed, label=f"{len(changed)} file changes"),
-                )
-            except OSError:
-                self.store.event(rid, "error", dict(message="Could not list file changes"))
+        try:
+            after_files = await self.scan_workspace(rid, workspace, "after")
+            changed = [
+                dict(path=p, change="created" if p not in before_files else "modified")
+                for p in after_files
+                if p not in before_files or before_files[p][:2] != after_files[p][:2]
+            ]
+            changed += [dict(path=p, change="deleted") for p in before_files if p not in after_files]
+            self.store.event(
+                rid, "artifacts", dict(files=changed, label=f"{len(changed)} file changes"),
+            )
+        except OSError:
+            self.store.event(rid, "error", dict(message="Could not list file changes"))
         await self.checkpoint(rid, workspace, "after", after_files)
 
     def run_workspace(self, rid):
@@ -673,6 +684,13 @@ class RunManager:
         before_files = None
         run_timer = None
         final_status, final_label = "completed", "Work completed"
+
+        async def prepare_workspace():
+            nonlocal before_files
+            if before_files is None:
+                before_files = await self.scan_workspace(rid, workspace, "before")
+                await self.checkpoint(rid, workspace, "before", before_files)
+
         try:
             conversation = self.store.conversation(request.conversation_id)
             workspace = self.select(
@@ -686,8 +704,6 @@ class RunManager:
                 raise ValueError(
                     "Workspace is blocked after a container cleanup failure"
                 )
-            before_files = await asyncio.to_thread(self.checkpoints.scan, workspace.path)
-            await self.checkpoint(rid, workspace, "before", before_files)
             async with asyncio.timeout(self.settings.run_timeout) as run_timer:
                 skills = list(self.config.skills)
                 resources = self.select(self.config.resources, request.resource_ids)
@@ -728,6 +744,7 @@ class RunManager:
                     skills,
                     resources,
                     project_instructions,
+                    prepare_workspace=prepare_workspace,
                 )
         except asyncio.CancelledError:
             final_status, final_label = (
@@ -811,7 +828,8 @@ class RunManager:
                 self.store.preserve_interrupted_context(rid)
 
     async def loop(
-        self, rid, request, sandbox, skills, resources, project_instructions=None
+        self, rid, request, sandbox, skills, resources, project_instructions=None,
+        *, prepare_workspace,
     ):
         client = self.client(request.provider, request.model)
         deployment = self.routes.resolve(request.provider, request.model).deployment
@@ -1130,6 +1148,7 @@ class RunManager:
                     continue
                 if item["type"] == "apply_patch_call":
                     operation = item["operation"]
+                    await prepare_workspace()
                     self.store.status(rid, "command_running", "Editing files")
                     self.store.event(
                         rid, "patch",
@@ -1150,6 +1169,9 @@ class RunManager:
                 requested_timeout = (action.get("timeout_ms") or self.settings.command_timeout * 1000) / 1000
                 timeout = command_time_limit(self.settings, requested_timeout)
                 for index, command in enumerate(action["commands"]):
+                    # Even a read-looking shell command can write files. Prepare
+                    # once before the first command, without trying to classify it.
+                    await prepare_workspace()
                     self.store.status(
                         rid, "command_running", "Running command"
                     )

@@ -4,7 +4,7 @@ from app.attachments import open_regular
 from app.config import Folder, RuntimeConfig, Settings, Skill
 from app.main import create_app
 from fastapi.testclient import TestClient
-from test_agent import Client, FakeSandbox, message
+from test_agent import Client, FakeSandbox, message, shell
 
 
 @pytest.fixture
@@ -255,7 +255,8 @@ def test_japanese_artifact_download(app_client, filename):
 
 
 def test_changes_diff_and_revert_conflict_api(app_client):
-    http, work, _ = app_client
+    http, work, client = app_client
+    client.outputs = [[shell("true")], [message()]]
     target = work / "a.txt"
     target.write_text("before\n")
     cid = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]
@@ -324,7 +325,8 @@ def test_new_chat_defaults_and_budget_settings(app_client):
 
 
 def test_storage_usage_and_cleanup(app_client, tmp_path):
-    http, work, _ = app_client
+    http, work, client = app_client
+    client.outputs = [[shell("true")], [message()]]
     (work / "a.txt").write_text("one\n")
     cid = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]
     gone = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]

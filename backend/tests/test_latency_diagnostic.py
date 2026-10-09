@@ -41,3 +41,10 @@ def test_latency_report_is_read_only_and_omits_content(tmp_path):
     assert phases["sandbox_start"] == 12
     assert phases["first_model_output"] == 2
     assert phases["sandbox_close_and_scan_after_done"] == 13
+    store.event(run["id"], "workspace_scan", dict(
+        name="after", duration_ms=4077, files=347246, private="PRIVATE_SCAN_FIELD",
+    ))
+    measured = diagnostic.recent_runs(store.db)[0]["timeline"][-1]
+    assert measured["phase"] == "workspace_scan_after_done"
+    assert measured["duration_ms"] == 4077 and measured["files"] == 347246
+    assert "PRIVATE" not in json.dumps(measured)
