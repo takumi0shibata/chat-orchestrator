@@ -7,6 +7,7 @@ export interface Model {
   model: string;
   label: string;
   efforts: string[];
+  max_input_tokens?: number;
   deployment?: string;
   connection_id?: string;
   connection_label?: string;
@@ -25,6 +26,7 @@ export interface Config {
   skills: Skill[];
   resources: Named[];
   mcp_servers: Named[];
+  compact_token_threshold?: number;
 }
 export interface AppSettings {
   title_provider: string;
@@ -64,11 +66,20 @@ export interface RunRequest {
   mcp_ids: string[];
   web_search: boolean;
 }
+export interface RunAttachment {
+  id: string;
+  name: string;
+  size: number;
+  content_type: string;
+  /** Sent to the model as file or image input, not only placed under /input. */
+  direct: boolean;
+}
 export interface Run {
   id: string;
   conversation_id: string;
   status: string;
   request: RunRequest;
+  attachments?: RunAttachment[];
   created_at: string;
   updated_at: string;
 }

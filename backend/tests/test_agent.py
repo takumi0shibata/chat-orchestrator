@@ -167,8 +167,14 @@ def setup(tmp_path, outputs, provider="openai", sandbox=FakeSandbox, **settings)
     return manager, store, client, request
 
 
-def run_environment(instructions):
-    return json.loads(instructions.split("Current run environment (metadata only): ", 1)[1])
+def run_environment(call):
+    """The latest run environment message in a request's input."""
+    prefix = "Run environment for the next user message"
+    message = next(
+        item for item in reversed(call["input"])
+        if item.get("role") == "developer" and item["content"][0]["text"].startswith(prefix)
+    )
+    return json.loads(message["content"][0]["text"].split("): ", 1)[1])
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure_openai"])
@@ -193,6 +199,12 @@ def test_fixed_sandbox_instructions_survive_rounds_and_compaction(
         assert store.run(run["id"])["status"] == "completed"
         assert len(client.calls) == 2
         assert len(client.compacts) == 1
+        events = store.events(run["id"])
+        start = next(e for e in events if e["type"] == "compaction_start")
+        done = next(e for e in events if e["type"] == "compaction")
+        assert start["seq"] < done["seq"]
+        assert start["data"] == {"tokens": 1100, "threshold": 1000}
+        assert done["data"]["tokens_before"] == 1100 and done["data"]["threshold"] == 1000
         instructions = client.calls[0]["instructions"]
         assert all(call["instructions"] == instructions for call in client.calls)
         assert client.compacts[0]["instructions"] == instructions
@@ -212,7 +224,7 @@ def test_fixed_sandbox_instructions_survive_rounds_and_compaction(
             "verify the actual files in /workspace",
         ):
             assert requirement in instructions
-        environment = run_environment(instructions)
+        environment = run_environment(client.calls[1])
         assert environment["host_os"] == host_os
         assert environment["host_workspace_path"] == str(workspace.resolve())
         assert environment["sandbox_workspace_path"] == "/workspace"
@@ -266,7 +278,7 @@ def test_run_instructions_refresh_selected_external_tools_and_resources(
             run = manager.start(request)
             await manager.tasks[run["id"]]
             call = client.calls[-1]
-            environment = run_environment(call["instructions"])
+            environment = run_environment(call)
             assert environment["web_search_enabled"] is web_search
             assert environment["remote_mcp_servers"] == (
                 [{"id": "chosen", "allowed_tools": ["search", "fetch"]}] if use_mcp else []
@@ -325,7 +337,7 @@ def test_all_skills_available_and_explicit_selection_refreshes_after_compaction(
             compacts = client.compacts[compacts_before:]
             assert compacts
             for call in [*calls, *compacts]:
-                environment = run_environment(call["instructions"])
+                environment = run_environment(call)
                 assert environment["available_skills"] == catalog
                 assert environment["explicit_skill_ids"] == ids
                 assert "smallest relevant set" in call["instructions"]
@@ -673,7 +685,8 @@ def test_stop_kills_execution(tmp_path):
         assert store.run(r["id"])["status"] == "stopped"
         assert Blocking.instances[-1].closed
         context = store.conversation(req.conversation_id)["context"]
-        assert context[0]["content"][0]["text"] == req.input
+        assert context[0]["role"] == "developer"
+        assert context[1]["content"][0]["text"] == req.input
         assert "sleep 100" in str(context)
         assert not any(i.get("type") == "shell_call" for i in context)
 
@@ -989,7 +1002,7 @@ def test_failed_run_preserves_instruction_and_partial_history(tmp_path, failure)
         req.input = "続けてください"
         resumed = m.start(req)
         await m.tasks[resumed["id"]]
-        assert client.calls[-1]["input"][:-1] == context
+        assert client.calls[-1]["input"][:len(context)] == context
         assert FakeSandbox.instances[-1].commands == []
     asyncio.run(scenario())
 
@@ -1011,7 +1024,7 @@ def test_restart_preserves_started_command_without_replaying(tmp_path, monkeypat
         req.input = "続けて"
         resumed = m.start(req)
         await m.tasks[resumed["id"]]
-        assert client.calls[0]["input"][:-1] == context
+        assert client.calls[0]["input"][:len(context)] == context
     asyncio.run(scenario())
 
 
@@ -1307,5 +1320,69 @@ def test_view_image_returns_image_to_model(tmp_path):
         assert [e["data"]["path"] for e in events if e["type"] == "image_view"] == [
             "plot.png", "missing.png", None,
         ]
+
+    asyncio.run(scenario())
+
+
+def test_run_settings_do_not_change_cached_prefix(tmp_path):
+    async def scenario():
+        manager, _, client, request = setup(tmp_path, [[message()], [message()]])
+        first = manager.start(request)
+        await manager.tasks[first["id"]]
+        second = manager.start(request.model_copy(update={"web_search": True, "input": "次"}))
+        await manager.tasks[second["id"]]
+        one, two = client.calls
+        assert one["instructions"] == two["instructions"]
+        assert "Run environment" not in one["instructions"]
+        # The second request extends the first request's input instead of rewriting it.
+        assert two["input"][:len(one["input"])] == one["input"]
+        assert run_environment(one)["web_search_enabled"] is False
+        assert run_environment(two)["web_search_enabled"] is True
+        roles = [item.get("role") for item in two["input"]]
+        assert roles[-3:] == ["assistant", "developer", "user"]
+        # Unchanged settings are not repeated in history.
+        third = manager.start(request.model_copy(update={"web_search": True, "input": "三"}))
+        client.outputs.append([message()])
+        await manager.tasks[third["id"]]
+        roles = [item.get("role") for item in client.calls[-1]["input"]]
+        assert roles.count("developer") == 2 and roles[-2:] == ["assistant", "user"]
+
+    asyncio.run(scenario())
+
+
+def test_apply_patch_tool_can_be_disabled(tmp_path):
+    async def scenario():
+        manager, _, client, request = setup(tmp_path, [[message()]], apply_patch_tool=False)
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        assert {"type": "apply_patch"} not in client.calls[0]["tools"]
+        assert "Edit files with Shell." in client.calls[0]["instructions"]
+        assert "apply_patch" not in client.calls[0]["instructions"]
+        assert "{editing}" not in client.calls[0]["instructions"]
+
+    asyncio.run(scenario())
+
+
+def test_environment_is_not_duplicated_when_compaction_echoes_it(tmp_path):
+    async def scenario():
+        manager, store, client, request = setup(
+            tmp_path, [[message()], [message()]], compact_token_threshold=1000
+        )
+        client.tokens = 1100
+
+        async def compact(**kwargs):
+            client.compacts.append(copy.deepcopy(kwargs))
+            # The API echoes kept messages with an explicit type.
+            kept = [{**item, "type": "message"} for item in kwargs["input"] if item.get("role")]
+            return NS(id="cmp", usage={"input_tokens": 1, "output_tokens": 1},
+                      output=[*kept, {"type": "compaction", "id": "c", "encrypted_content": "x"}])
+
+        client.compact = compact
+        for text in ("一", "二"):
+            run = manager.start(request.model_copy(update={"input": text}))
+            await manager.tasks[run["id"]]
+        context = store.conversation(request.conversation_id)["context"]
+        environments = [i for i in context if i.get("role") == "developer"]
+        assert len(environments) == 1
 
     asyncio.run(scenario())

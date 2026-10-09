@@ -17,6 +17,7 @@ def test_gpt_5_6_terra_is_available_for_openai_and_azure():
         "model": "gpt-5.6-terra",
         "label": "GPT-5.6 Terra",
         "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+        "max_input_tokens": 922_000,
     }
 
     azure_model = validate_model("azure_openai", "azure-terra", "max", config)
@@ -32,6 +33,7 @@ def test_gpt_6_models_are_available_with_all_supported_efforts(model):
         "model": model,
         "label": "GPT-6 " + model.rsplit("-", 1)[1].title(),
         "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+        "max_input_tokens": 922_000,
     }
     validate_model("openai", model, "max", config)
     with pytest.raises(ValueError):
@@ -71,3 +73,8 @@ def test_gpt_6_1_sol_supports_reasoning_and_deployment_pricing(provider, selecti
     assert pricing_for(provider, selection, config) == (
         "gpt-6.1-sol", {"input": 2.0, "cached_input": 0.1, "cache_write": 2.5, "output": 10.0}
     )
+
+
+def test_every_model_reports_input_limit():
+    config = RuntimeConfig()
+    assert {m["max_input_tokens"] for m in models_for("openai", config)} == {922_000}

@@ -263,3 +263,30 @@ def test_changes_diff_and_revert_conflict_api(app_client):
     target.write_text("user\n")
     assert http.post(f"/api/runs/{run['id']}/revert", json={}).json() == {"restored": [], "overwritten": []}
     assert target.read_text() == "user\n"
+
+
+def test_runs_include_attachment_names_and_files(app_client):
+    http, _, _ = app_client
+    cid = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]
+    uploaded = http.post(
+        "/api/attachments",
+        data={"conversation_id": cid},
+        files=[("files", ("報告書 v2.pdf", b"%PDF-1.4 test", "application/pdf")),
+               ("files", ("data.csv", b"a,b\n1,2\n", "text/csv"))],
+    ).json()
+    ids = [a["id"] for a in uploaded]
+    run = http.post("/api/runs", json={
+        "conversation_id": cid, "input": "x", "attachment_ids": ids,
+        "direct_attachment_ids": [ids[0]],
+    }).json()
+    assert [(a["name"], a["size"], a["direct"]) for a in run["attachments"]] == [
+        ("報告書 v2.pdf", 13, True), ("data.csv", 8, False),
+    ]
+    http.get(f"/api/runs/{run['id']}/events")
+    runs = http.get(f"/api/conversations/{cid}").json()["runs"]
+    assert [a["name"] for a in runs[0]["attachments"]] == ["報告書 v2.pdf", "data.csv"]
+    response = http.get(f"/api/conversations/{cid}/attachments/{ids[1]}")
+    assert response.content == b"a,b\n1,2\n"
+    assert "attachment;" in response.headers["content-disposition"]
+    other = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]
+    assert http.get(f"/api/conversations/{other}/attachments/{ids[1]}").status_code == 404

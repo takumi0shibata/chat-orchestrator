@@ -1,31 +1,42 @@
+# Official model pages list a 1,050,000-token window with at most 922,000 input
+# tokens for every model below (checked 2026-10-09).
+MAX_INPUT_TOKENS = 922_000
+
 MODELS = {
     "gpt-6-sol": {
         "label": "GPT-6 Sol",
         "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+        "max_input_tokens": MAX_INPUT_TOKENS,
     },
     "gpt-6-luna": {
         "label": "GPT-6 Luna",
         "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+        "max_input_tokens": MAX_INPUT_TOKENS,
     },
     "gpt-5.6-sol": {
         "label": "GPT-5.6 Sol",
         "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+        "max_input_tokens": MAX_INPUT_TOKENS,
     },
     "gpt-5.6-terra": {
         "label": "GPT-5.6 Terra",
         "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+        "max_input_tokens": MAX_INPUT_TOKENS,
     },
     "gpt-5.6-luna": {
         "label": "GPT-5.6 Luna",
         "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "max_input_tokens": MAX_INPUT_TOKENS,
     },
     "gpt-6-astra": {
         "label": "GPT-6 Astra",
         "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "max_input_tokens": MAX_INPUT_TOKENS,
     },
     "gpt-6.1-sol": {
         "label": "GPT-6.1 Sol",
         "efforts": ["low", "medium", "high", "xhigh", "max"],
+        "max_input_tokens": MAX_INPUT_TOKENS,
     },
 }
 

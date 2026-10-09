@@ -342,7 +342,29 @@ class Store:
             raise KeyError("Run not found")
         result = dict(row)
         result["request"] = json.loads(result["request"])
+        result["attachments"] = self.run_attachments(result)
         return result
+
+    def run_attachments(self, run):
+        """Attachment metadata in request order; deleted rows are omitted."""
+        request = run["request"]
+        ids = request.get("attachment_ids", [])
+        if not ids:
+            return []
+        direct = set(request.get("direct_attachment_ids", []))
+        with self.connect() as c:
+            rows = {
+                r["id"]: r for r in c.execute(
+                    f"SELECT id,name,size,content_type FROM attachments "
+                    f"WHERE conversation_id=? AND id IN ({','.join('?' * len(ids))})",
+                    (run["conversation_id"], *ids),
+                )
+            }
+        return [
+            dict(id=aid, name=rows[aid]["name"], size=rows[aid]["size"],
+                 content_type=rows[aid]["content_type"], direct=aid in direct)
+            for aid in ids if aid in rows
+        ]
 
     def runs(self, cid):
         with self.connect() as c:

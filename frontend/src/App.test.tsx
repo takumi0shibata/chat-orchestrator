@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { App, RunView } from "./App";
+import { App, ContextRing, RunView } from "./App";
 import type { AgentEvent, Run } from "./types";
 
 vi.mock("./components/HostTerminalPanel", () => ({
@@ -1542,4 +1542,55 @@ describe("file edits and checkpoints", () => {
     render(<RunView run={run} timeline={[event(1, "checkpoint", { name: "after", error: "git missing" })]} onApproval={vi.fn()} />);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+});
+
+
+describe("message attachments and context ring", () => {
+  it("lists attachment names, sizes and direct inputs with download links", () => {
+    const { container } = render(<RunView run={{
+      ...run,
+      request: { ...run.request, attachment_ids: ["a1", "a2", "gone"], direct_attachment_ids: ["a2"] },
+      attachments: [
+        { id: "a1", name: "売上 2026.xlsx", size: 2048, content_type: "application/vnd.ms-excel", direct: false },
+        { id: "a2", name: "figure.png", size: 500, content_type: "image/png", direct: true },
+      ],
+    }} timeline={[]} onApproval={vi.fn()} />);
+    const links = screen.getAllByRole("link");
+    expect(links[0]).toHaveAttribute("href", "/api/conversations/c/attachments/a1");
+    expect(links[0]).toHaveTextContent("売上 2026.xlsx");
+    expect(links[0]).toHaveTextContent("2.0 KB");
+    expect(links[0].querySelector('[data-icon="file-spreadsheet"]')).toBeInTheDocument();
+    expect(links[1].querySelector("img")).toHaveAttribute("src", "/api/conversations/c/attachments/a2");
+    expect(links[1]).toHaveTextContent("Sent to model");
+    expect(screen.getByText("1 unavailable attachment")).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/\d+ attachments/);
+  });
+
+  it("shows context fill against the compaction threshold", () => {
+    const { rerender } = render(<ContextRing tokens={45_000} compacted={false} threshold={100_000} modelLimit={922_000} />);
+    const ring = screen.getByRole("img");
+    expect(ring).toHaveAccessibleName("Context 45% used · 45.0K / 100K tokens before auto-compaction · model input limit 922K");
+    rerender(<ContextRing tokens={260_000} compacted={false} compacting threshold={258_000} />);
+    expect(screen.getByRole("img")).toHaveClass("is-compacting");
+    expect(screen.getByRole("img")).toHaveTextContent("Compacting");
+    rerender(<ContextRing tokens={45_000} compacted={false} threshold={100_000} modelLimit={922_000} />);
+    expect(ring).toHaveClass("context-ring-low");
+    rerender(<ContextRing tokens={95_000} compacted threshold={100_000} />);
+    expect(screen.getByRole("img")).toHaveClass("context-ring-high");
+    expect(screen.getByRole("img").getAttribute("aria-label")).toContain("compacted earlier");
+    rerender(<ContextRing tokens={null} compacted threshold={100_000} />);
+    expect(screen.getByRole("img")).toHaveTextContent("—");
+  });
+});
+
+
+it("keeps a compaction notice visible after Activity collapses", () => {
+  const { container } = render(<RunView run={run} timeline={[
+    event(1, "compaction_start", { tokens: 260_000, threshold: 258_000 }),
+    event(2, "compaction", { usage: { input_tokens: 260_000, output_tokens: 14_000 }, tokens_before: 260_000, threshold: 258_000 }),
+    event(3, "response", { round: 1, continues: false, final_item_ids: ["m"], usage: { input_tokens: 21_000, output_tokens: 300 } }),
+  ]} onApproval={vi.fn()} />);
+  const notice = container.querySelector(".assistant-message > .compaction-notice");
+  expect(notice).toHaveTextContent("Context automatically compacted · 260K → 21.0K tokens");
+  expect(notice).toHaveAttribute("title", "Compacts when the context reaches 258K tokens");
 });

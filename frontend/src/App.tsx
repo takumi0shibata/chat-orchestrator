@@ -1,5 +1,11 @@
 import { DragEvent as ReactDragEvent, FormEvent, KeyboardEvent, Suspense, lazy, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
+import {
+  ArrowUp, Check, ChevronDown, ChevronRight, Copy, File, FileArchive, FileCode, FileImage,
+  FileSpreadsheet, FileText, Folder, FolderOpen, Globe, Paperclip, PanelRight, Pin, Plus,
+  Presentation, RefreshCw, Search, Settings, Sparkles, SquarePen, SquareTerminal, X,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { api, events } from "./api";
 import { MarkdownContent } from "./components/MarkdownContent";
 import {
@@ -11,8 +17,8 @@ import {
 } from "./lib/skillMention";
 import type { SkillMention } from "./lib/skillMention";
 import {
-  activityEntries, finalAnswerStart, messageBlocks, reasoningActive, reasoningBlocks, reasoningTitle,
-  type ReasoningBlock,
+  activityEntries, compactions, contextUsage, finalAnswerStart, messageBlocks, reasoningActive, reasoningBlocks, reasoningTitle,
+  type Compaction, type ReasoningBlock,
 } from "./lib/timeline";
 import { terminal } from "./types";
 import type {
@@ -122,27 +128,34 @@ function elapsedLabel(seconds: number) {
   return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
-function Icon({ name, size = 18 }: { name: "refresh" | "paperclip" | "globe" | "check" | "close" | "copy" | "spark" | "pin" | "panel-right" | "terminal" | "compose" | "search" | "folder" | "folder-open" | "chevron-right" | "chevron-down" | "gear"; size?: number }) {
-  const paths = {
-    "panel-right": <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M15 4v16" /></>,
-    terminal: <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="m7 9 3 3-3 3M12 16h5" /></>,
-    "chevron-right": <path d="m9 18 6-6-6-6" />,
-    compose: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" /></>,
-    search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></>,
-    folder: <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5Z" />,
-    "folder-open": <><path d="M3 10V7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5V10" /><path d="M4.4 10h15.2a2 2 0 0 1 1.9 2.6l-1.4 4.5A2.7 2.7 0 0 1 17.5 19h-12a2.7 2.7 0 0 1-2.6-3.4l1.5-5.6Z" /></>,
-    "chevron-down": <path d="m6 9 6 6 6-6" />,
-    pin: <><path d="m8 3 8 0-1 6 3 3v2H6v-2l3-3-1-6Z" /><path d="M12 14v7" /></>,
-    refresh: <><path d="M20 11a8 8 0 1 0-2.2 6.4" /><path d="M20 4v7h-7" /></>,
-    paperclip: <path d="m20.5 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5l9.5-9.5a4 4 0 0 1 5.7 5.7l-9.5 9.5a2 2 0 0 1-2.8-2.8l8.8-8.8" />,
-    globe: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" /></>,
-    check: <path d="m5 12 4 4L19 6" />,
-    close: <path d="M6 6l12 12M18 6 6 18" />,
-    copy: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3" /></>,
-    spark: <><path d="m12 2 1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2Z" /><path d="m19 17 .6 1.4L21 19l-1.4.6L19 21l-.6-1.4L17 19l1.4-.6L19 17Z" /></>,
-    gear: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" /></>,
-  };
-  return <svg aria-hidden="true" data-icon={name} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
+/** UI icons from Lucide (ISC License, https://lucide.dev); names are app-level aliases. */
+const ICONS = {
+  "panel-right": PanelRight,
+  terminal: SquareTerminal,
+  "chevron-right": ChevronRight,
+  "chevron-down": ChevronDown,
+  compose: SquarePen,
+  search: Search,
+  folder: Folder,
+  "folder-open": FolderOpen,
+  pin: Pin,
+  refresh: RefreshCw,
+  paperclip: Paperclip,
+  globe: Globe,
+  check: Check,
+  close: X,
+  copy: Copy,
+  spark: Sparkles,
+  gear: Settings,
+  plus: Plus,
+  "arrow-up": ArrowUp,
+} satisfies Record<string, LucideIcon>;
+
+type IconName = keyof typeof ICONS;
+
+function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
+  const Component = ICONS[name];
+  return <Component aria-hidden="true" data-icon={name} size={size} strokeWidth={1.8} />;
 }
 
 function CopyButton({ content, tooltip }: { content: string; tooltip: string }) {
@@ -374,25 +387,23 @@ function formatFileSize(size: number) {
   return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${unit}`;
 }
 
+const FILE_ICONS: Record<FileKind, LucideIcon> = {
+  pdf: FileText,
+  image: FileImage,
+  document: FileText,
+  spreadsheet: FileSpreadsheet,
+  presentation: Presentation,
+  code: FileCode,
+  archive: FileArchive,
+  generic: File,
+};
+
 function FileTypeIcon({ name }: { name: string }) {
   const kind = fileKind(name);
-  const marks: Record<FileKind, ReactNode> = {
-    pdf: <path d="M8 15h8M8 12h5" />,
-    image: <><circle cx="10" cy="10" r="1.2" /><path d="m7.5 16 3.1-3 2.1 2 1.5-1.4 2.3 2.4" /></>,
-    document: <path d="M8 11h8M8 14h8M8 17h5" />,
-    spreadsheet: <><path d="M8 10h8v7H8zM8 13.5h8M12 10v7" /></>,
-    presentation: <><path d="M8 10h8v5H8zM12 15v3M9.5 18h5" /></>,
-    code: <path d="m10 11-2 2 2 2m4-4 2 2-2 2" />,
-    archive: <><path d="M11 8h2M11 11h2M11 14h2" /><path d="M10.5 17h3" /></>,
-    generic: <path d="M8 12h8M8 15h6" />,
-  };
+  const Component = FILE_ICONS[kind];
   return (
     <span className={`file-type-icon file-type-${kind}`}>
-      <svg aria-hidden="true" data-icon={`file-${kind}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M6 3.5h7l5 5v12H6z" />
-        <path d="M13 3.5v5h5" />
-        {marks[kind]}
-      </svg>
+      <Component aria-hidden="true" data-icon={`file-${kind}`} size={16} strokeWidth={1.8} />
     </span>
   );
 }
@@ -497,7 +508,7 @@ function SettingsPanel({
         {presets.map((color) => <button key={color} type="button" aria-label={`Use ${color}`} aria-pressed={settings.theme_color === color} style={{ backgroundColor: color }} onClick={() => void onChange({ theme_color: color })} />)}
       </div>
       <label className="custom-color">Custom color<input type="color" aria-label="Custom theme color" value={settings.theme_color} onChange={(event) => void onChange({ theme_color: event.target.value.toUpperCase() })} /><code>{settings.theme_color}</code></label>
-      <div className="theme-preview"><div className="user-message"><p>Theme preview</p></div><button className="send" type="button" aria-label="Theme preview send">↑</button></div>
+      <div className="theme-preview"><div className="user-message"><p>Theme preview</p></div><button className="send" type="button" aria-label="Theme preview send"><Icon name="arrow-up" size={17} /></button></div>
     </section>
   );
   return (
@@ -799,6 +810,94 @@ export function RunChanges({ runId, timeline }: { runId: string; timeline: Agent
   );
 }
 
+function formatTokens(value: number) {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 2)}M`;
+  if (value >= 1000) return `${(value / 1000).toFixed(value >= 100_000 ? 0 : 1)}K`;
+  return String(value);
+}
+
+/** Context fill relative to the auto-compaction threshold, with the model limit in the tooltip. */
+/** Shown both in Activity and, once finished, as a persistent divider in the turn. */
+function CompactionNotice({ compaction, active }: { compaction: Compaction; active: boolean }) {
+  const sizes = compaction.before && compaction.after
+    ? ` · ${formatTokens(compaction.before)} → ${formatTokens(compaction.after)} tokens`
+    : compaction.before ? ` · ${formatTokens(compaction.before)} tokens` : "";
+  const label = compaction.done ? "Context automatically compacted" : active ? "Compacting context…" : "Context compaction interrupted";
+  return (
+    <div className={`compaction-notice${compaction.done ? "" : " is-running"}`} role={compaction.done ? undefined : "status"}
+      title={compaction.threshold ? `Compacts when the context reaches ${formatTokens(compaction.threshold)} tokens` : undefined}>
+      <span className="compaction-line" aria-hidden="true" />
+      <span className={active && !compaction.done ? "activity-shimmer" : undefined}>{label}{sizes}</span>
+      <span className="compaction-line" aria-hidden="true" />
+    </div>
+  );
+}
+
+export function ContextRing({ tokens, compacted, compacting = false, threshold, modelLimit }: {
+  tokens: number | null;
+  compacted: boolean;
+  compacting?: boolean;
+  threshold: number;
+  modelLimit?: number;
+}) {
+  const limit = Math.min(threshold, modelLimit ?? threshold);
+  const ratio = tokens === null ? 0 : Math.min(1, tokens / limit);
+  const percent = Math.round(ratio * 100);
+  const level = ratio >= 0.9 ? "high" : ratio >= 0.7 ? "medium" : "low";
+  const radius = 7;
+  const circumference = 2 * Math.PI * radius;
+  const label = compacting
+    ? "Compacting the conversation context…"
+    : tokens === null
+    ? "Context compacted; usage updates after the next response"
+    : `Context ${percent}% used · ${formatTokens(tokens)} / ${formatTokens(limit)} tokens before auto-compaction` +
+      (modelLimit ? ` · model input limit ${formatTokens(modelLimit)}` : "") +
+      (compacted ? " · compacted earlier" : "");
+  return (
+    <span className={`context-ring context-ring-${level}${compacting ? " is-compacting" : ""}`} role="img" aria-label={label} data-tooltip={label} tabIndex={0}>
+      <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+        <circle className="context-ring-track" cx="10" cy="10" r={radius} />
+        <circle className="context-ring-value" cx="10" cy="10" r={radius}
+          strokeDasharray={circumference} strokeDashoffset={circumference * (1 - ratio)} />
+      </svg>
+      <span className="context-ring-text">{compacting ? "Compacting" : tokens === null ? "—" : `${percent}%`}</span>
+    </span>
+  );
+}
+
+const PREVIEWABLE_IMAGE = /^image\/(png|jpeg|gif|webp)$/;
+
+/** Files sent with a message; each chip downloads the original upload. */
+function RunAttachments({ run }: { run: Run }) {
+  const attachments = run.attachments ?? [];
+  const missing = run.request.attachment_ids.length - attachments.length;
+  if (!attachments.length && missing <= 0) return null;
+  return (
+    <ul className="message-attachments" aria-label="Attachments">
+      {attachments.map((attachment) => {
+        const url = `/api/conversations/${encodeURIComponent(run.conversation_id)}/attachments/${encodeURIComponent(attachment.id)}`;
+        return (
+          <li key={attachment.id}>
+            <a className="message-attachment" href={url} download={attachment.name} title={`${attachment.name} — Download`}>
+              {PREVIEWABLE_IMAGE.test(attachment.content_type)
+                ? <img className="message-attachment-preview" src={url} alt="" loading="lazy" />
+                : <FileTypeIcon name={attachment.name} />}
+              <span className="message-attachment-text">
+                <span className="message-attachment-name">{attachment.name}</span>
+                <small>
+                  {formatFileSize(attachment.size)}
+                  {attachment.direct && <span className="message-attachment-direct"> · Sent to model</span>}
+                </small>
+              </span>
+            </a>
+          </li>
+        );
+      })}
+      {missing > 0 && <li className="message-attachment-missing">{missing} unavailable {missing === 1 ? "attachment" : "attachments"}</li>}
+    </ul>
+  );
+}
+
 function ReasoningGroup({ block, active }: { block: ReasoningBlock; active: boolean }) {
   const latest = reasoningTitle(block.parts[block.parts.length - 1]);
   return (
@@ -885,11 +984,9 @@ export function RunView({
   return (
     <article className="turn">
       <div className="user-message-wrap">
+        <RunAttachments run={run} />
         <div className="user-message">
           <p>{userMessage}</p>
-          {run.request.attachment_ids.length > 0 && (
-            <small>{run.request.attachment_ids.length} attachments</small>
-          )}
         </div>
         <CopyButton content={userMessage} tooltip="Copy message" />
       </div>
@@ -912,6 +1009,8 @@ export function RunView({
               <div className="activity-message" key={entry.block.key}>
                 <MarkdownContent conversationId={run.conversation_id} content={entry.block.content} />
               </div>
+            ) : entry.kind === "compaction" ? (
+              <CompactionNotice key={`compaction-${entry.seq}`} compaction={entry.compaction} active={active} />
             ) : entry.kind === "reasoning" ? (
               <ReasoningGroup key={`reasoning-${entry.block.key}`} block={entry.block}
                 active={active && reasoningActive(entry.block, timeline, run.status)} />
@@ -920,6 +1019,9 @@ export function RunView({
             ))}
           </div>
         </details>
+        {!activityOpen && compactions(timeline).filter((item) => item.done).map((item) => (
+          <CompactionNotice key={`compaction-summary-${item.seq}`} compaction={item} active={false} />
+        ))}
         {answerBlocks.map((block) => (
           <div className="answer-block" key={block.key}><MarkdownContent conversationId={run.conversation_id} content={block.content} /></div>
         ))}
@@ -1972,7 +2074,9 @@ export function App() {
               <div className="attachments">
                 {attachments.map((a) => (
                   <div className="attachment" key={a.id}>
-                    <span>{a.name}</span>
+                    <FileTypeIcon name={a.name} />
+                    <span className="attachment-name" title={a.name}>{a.name}</span>
+                    <small className="attachment-size">{formatFileSize(a.size)}</small>
                     {/\.(pdf|png|jpe?g|webp)$/i.test(a.name) && (
                       <label>
                         <input
@@ -1997,7 +2101,7 @@ export function App() {
                         setDirect((old) => old.filter((id) => id !== a.id));
                       }}
                     >
-                      ×
+                      <Icon name="close" size={13} />
                     </button>
                   </div>
                 ))}
@@ -2073,7 +2177,7 @@ export function App() {
                     }}
                     disabled={active || busy}
                   >
-                    +
+                    <Icon name="plus" size={18} />
                   </button>
                   {plusOpen && (
                     <div className="plus-menu" aria-label="Attachments and tools" onKeyDown={(e) => {
@@ -2181,6 +2285,13 @@ export function App() {
                     onChange={setEffort}
                   />
                 </div>
+                {(() => {
+                  const usage = contextUsage(runs.map((run) => timelines[run.id] || []));
+                  return usage && config?.compact_token_threshold ? (
+                    <ContextRing tokens={usage.tokens} compacted={usage.compacted} compacting={usage.compacting}
+                      threshold={config.compact_token_threshold} modelLimit={selectedModel?.max_input_tokens} />
+                  ) : null;
+                })()}
                 {activeRun ? (
                   <button
                     className="send stop-send"
@@ -2197,7 +2308,7 @@ export function App() {
                     aria-label="Send"
                     disabled={!canSend}
                   >
-                    ↑
+                    <Icon name="arrow-up" size={18} />
                   </button>
                 )}
               </div>
@@ -2211,7 +2322,7 @@ export function App() {
           <div className="error-banner" role="alert">
             {error}
             <button aria-label="Dismiss error" onClick={() => setError("")}>
-              ×
+              <Icon name="close" size={14} />
             </button>
           </div>
         )}

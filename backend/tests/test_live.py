@@ -91,3 +91,67 @@ def test_live_local_shell(tmp_path, model, mode):
             await manager.shutdown()
 
     asyncio.run(scenario())
+
+
+
+def live_targets():
+    """OpenAI Luna plus every Azure deployment registered in runtime.toml."""
+    targets = [("openai", "gpt-6-luna")]
+    try:
+        config = Settings().load_runtime()
+    except (OSError, ValueError):
+        return targets
+    return targets + [("azure_openai", d.selection_id) for d in config.azure_models]
+
+
+# 8x8 solid red PNG, small enough to inline in the test.
+RED_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000080000000808020000004b6d29dc000000"
+    "1249444154789c63f8cfc0801561171db4120028ff3fc16eecdf610000000049454e44ae426082"
+)
+
+
+@pytest.mark.parametrize("provider, model", live_targets())
+def test_live_apply_patch_and_view_image_with_full_toolset(tmp_path, provider, model):
+    """Azure has reported dropping apply_patch when other tools are present."""
+    async def scenario():
+        settings = Settings(data_dir=tmp_path / "data", max_model_rounds=10, run_timeout=300)
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "notes.txt").write_text("status: draft\nowner: team\n")
+        (work / "swatch.png").write_bytes(RED_PNG)
+        runtime = settings.load_runtime()
+        config = RuntimeConfig(
+            workspaces=[Folder(id="w", label="w", path=work)],
+            azure_connections=runtime.azure_connections,
+            azure_models=runtime.azure_models,
+        )
+        store = Store(settings.data_dir)
+        manager = RunManager(settings, config, store)
+        try:
+            manager.routes.resolve(provider, model)
+        except ValueError:
+            pytest.skip(f"{provider}/{model} credentials are not configured")
+        if provider == "openai" and not settings.openai_api_key:
+            pytest.skip("OpenAI credential unavailable")
+        try:
+            run = manager.start(RunCreate(
+                conversation_id=store.create_conversation("w")["id"],
+                provider=provider, model=model, reasoning_effort="low",
+                input="notes.txt の status を final に変更してください。また swatch.png を見て何色か答えてください。",
+            ))
+            await manager.tasks[run["id"]]
+            events = store.events(run["id"], limit=100000)
+            assert store.run(run["id"])["status"] == "completed", [
+                e for e in events if e["type"] == "error"
+            ]
+            assert any(e["type"] == "patch" for e in events), "the model did not call apply_patch"
+            assert any(e["type"] == "patch_done" and e["data"]["status"] == "completed" for e in events)
+            assert (work / "notes.txt").read_text() == "status: final\nowner: team\n"
+            assert any(
+                e["type"] == "image_view_done" and e["data"]["status"] == "completed" for e in events
+            ), "the model did not view the image"
+        finally:
+            await manager.shutdown()
+
+    asyncio.run(scenario())

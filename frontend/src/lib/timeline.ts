@@ -25,7 +25,48 @@ export interface ReasoningBlock {
 export type ActivityEntry =
   | { kind: "message"; block: MessageBlock }
   | { kind: "reasoning"; block: ReasoningBlock }
+  | { kind: "compaction"; seq: number; compaction: Compaction }
   | { kind: "work"; seq: number; actions: AgentEvent[] };
+
+export interface Compaction {
+  seq: number;
+  /** Context size that triggered compaction, when known. */
+  before: number | null;
+  /** Input size of the first response after compaction (the compact API's own usage understates it). */
+  after: number | null;
+  threshold: number | null;
+  done: boolean;
+}
+
+const TERMINAL_STATUSES = ["completed", "failed", "stopped"];
+
+/** Pair compaction start and finish events; older runs only have the finish event. */
+export function compactions(events: AgentEvent[]): Compaction[] {
+  const result: Compaction[] = [];
+  let awaitingSize: Compaction | null = null;
+  for (const event of events) {
+    const threshold = Number(event.data.threshold) || null;
+    if (event.type === "compaction_start") {
+      result.push({ seq: event.seq, before: Number(event.data.tokens) || null, after: null, threshold, done: false });
+    } else if (event.type === "compaction") {
+      const usage = (event.data.usage ?? {}) as Record<string, unknown>;
+      let item = result.find((candidate) => !candidate.done);
+      if (!item) {
+        item = { seq: event.seq, before: Number(event.data.tokens_before) || Number(usage.input_tokens) || null,
+          after: null, threshold, done: false };
+        result.push(item);
+      }
+      item.done = true;
+      item.threshold = item.threshold ?? threshold;
+      awaitingSize = item;
+    } else if (event.type === "response" && awaitingSize) {
+      const usage = (event.data.usage ?? {}) as Record<string, unknown>;
+      awaitingSize.after = Number(usage.input_tokens) || null;
+      awaitingSize = null;
+    }
+  }
+  return result;
+}
 
 /** Group reasoning summary deltas by response round and reasoning item. */
 export function reasoningBlocks(events: AgentEvent[]): ReasoningBlock[] {
@@ -135,6 +176,7 @@ export function activityEntries(events: AgentEvent[], blocks: MessageBlock[], st
   reasoning: ReasoningBlock[] = []): ActivityEntry[] {
   const provisional = !["completed", "failed", "stopped"].includes(status);
   const items = [
+    ...compactions(events).map((compaction) => ({ seq: compaction.seq, kind: "compaction" as const, compaction })),
     ...reasoning.map((block) => ({ seq: block.seq, kind: "reasoning" as const, block })),
     ...blocks.filter((block) => block.progress || (provisional && !block.final)).map((block) =>
       ({ seq: block.seq, kind: "message" as const, block })),
@@ -143,6 +185,10 @@ export function activityEntries(events: AgentEvent[], blocks: MessageBlock[], st
   ].sort((a, b) => a.seq - b.seq);
   const entries: ActivityEntry[] = [];
   for (const item of items) {
+    if (item.kind === "compaction") {
+      entries.push({ kind: "compaction", seq: item.seq, compaction: item.compaction });
+      continue;
+    }
     if (item.kind === "message" || item.kind === "reasoning") {
       entries.push(item.kind === "message" ? { kind: "message", block: item.block } : { kind: "reasoning", block: item.block });
       continue;
@@ -175,6 +221,7 @@ export function activityLabel(events: AgentEvent[], status: string, blocks: Mess
     !events.some((other) => other.type === "tool_result" && other.data.id === event.data.id));
   if (tool) return tool.data.type === "web_search_call" ? "Searching the web" :
     `Using ${short(tool.data.server_label || tool.data.name || "external tool")}`;
+  if (compactions(events).some((item) => !item.done)) return "Compacting context";
   const reasoning = reasoningBlocks(events);
   const thinking = reasoning[reasoning.length - 1];
   if (thinking && reasoningActive(thinking, events, status)) {
@@ -186,4 +233,34 @@ export function activityLabel(events: AgentEvent[], status: string, blocks: Mess
   const label = short(lastStatus?.data.label);
   if (label && !["Deciding the next action", "次の操作を判断しています", "Running command"].includes(label)) return label;
   return latest ? `Waiting for model · ${short(latest.content)}` : "Waiting for model";
+}
+
+export interface ContextUsage {
+  /** Tokens the next request starts from; null right after compaction until a response reports usage. */
+  tokens: number | null;
+  compacted: boolean;
+  /** A compaction request is in flight in the latest run. */
+  compacting: boolean;
+}
+
+/** Latest context size across a conversation's runs, given in creation order. */
+export function contextUsage(timelines: AgentEvent[][]): ContextUsage | null {
+  let usage = null as ContextUsage | null;
+  for (const events of timelines) {
+    for (const event of events) {
+      if (event.type === "compaction_start") {
+        usage = { tokens: usage?.tokens ?? (Number(event.data.tokens) || null), compacted: usage?.compacted ?? false, compacting: true };
+      } else if (event.type === "compaction") {
+        usage = { tokens: null, compacted: true, compacting: false };
+      } else if (usage?.compacting && (event.type === "error" ||
+        (event.type === "status" && TERMINAL_STATUSES.includes(String(event.data.status))))) {
+        usage = { ...usage, compacting: false };
+      } else if (event.type === "response") {
+        const data = (event.data.usage ?? {}) as Record<string, unknown>;
+        const tokens = (Number(data.input_tokens) || 0) + (Number(data.output_tokens) || 0);
+        if (tokens > 0) usage = { tokens, compacted: usage?.compacted ?? false, compacting: false };
+      }
+    }
+  }
+  return usage;
 }

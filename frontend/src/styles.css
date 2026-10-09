@@ -666,10 +666,15 @@ h2 {
   font-size: 10px;
 }
 .attachment button {
-  padding: 0 5px;
+  display: grid;
+  place-items: center;
+  padding: 2px;
   background: transparent;
   border: 0;
+  border-radius: 4px;
+  color: #6e6f75;
 }
+.attachment button:hover { background: #e4e5e8; color: #35373c; }
 .connection {
   font-size: 11px;
   color: #807452;
@@ -690,6 +695,8 @@ h2 {
   overflow-wrap: anywhere;
 }
 .error-banner button {
+  display: grid;
+  place-items: center;
   background: transparent;
   border: 0;
 }
@@ -798,7 +805,9 @@ h2 {
 }
 .file-tree-chevron.is-expanded { transform: rotate(90deg); }
 .file-tree-spacer { width: 13px; flex: 0 0 auto; }
-.folder-icon { display: grid; place-items: center; color: #8a7545; flex: 0 0 auto; }
+.folder-icon { display: grid; place-items: center; color: #a0782a; flex: 0 0 auto; }
+/* A soft fill makes folders distinguishable from files at a glance. */
+.folder-icon svg { fill: rgba(232, 184, 76, 0.3); }
 .file-type-icon {
   display: grid;
   place-items: center;
@@ -2167,3 +2176,116 @@ h2 {
   border-radius: 4px;
   background: #fff;
 }
+
+/* Attachments sent with a message, shown above its bubble. */
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 100%;
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+}
+.message-attachment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 280px;
+  padding: 6px 10px 6px 6px;
+  border: 1px solid #e3e4e8;
+  border-radius: 10px;
+  background: #fff;
+  color: #35373c;
+  text-decoration: none;
+}
+.message-attachment:hover { background: #f7f7f9; border-color: #d5d6db; }
+.message-attachment .file-type-icon { width: 32px; height: 32px; border-radius: 8px; }
+.message-attachment .file-type-icon svg { width: 18px; height: 18px; }
+.message-attachment-preview {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #f0f1f3;
+}
+.message-attachment-text { display: flex; flex-direction: column; min-width: 0; }
+.message-attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+}
+.message-attachment small { color: #85878f; font-size: 11px; }
+.message-attachment-direct { color: #5b6bbf; }
+.message-attachment-missing { align-self: center; color: #85878f; font-size: 11px; }
+.attachment .file-type-icon { width: 20px; height: 20px; border-radius: 5px; }
+.attachment .file-type-icon svg { width: 13px; height: 13px; }
+.attachment-name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-size { color: #85878f; font-size: 10px; }
+
+/* Context window fill: a compact ring beside the model selectors. */
+.context-ring {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin: 0 4px;
+  padding: 4px 6px;
+  border-radius: 999px;
+  color: #6e6f75;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+.context-ring:hover, .context-ring:focus-visible { background: #f2f3f5; outline: none; }
+.context-ring svg { transform: rotate(-90deg); }
+.context-ring circle { fill: none; stroke-width: 2.6; }
+.context-ring-track { stroke: #e4e5e8; }
+.context-ring-value { stroke: #6b7280; stroke-linecap: round; transition: stroke-dashoffset 300ms ease; }
+.context-ring-medium .context-ring-value { stroke: #c58a1b; }
+.context-ring-high .context-ring-value { stroke: #c4302b; }
+.context-ring::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 10;
+  width: max-content;
+  max-width: 260px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: #25262a;
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: normal;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.context-ring:hover::after, .context-ring:focus-visible::after { opacity: 1; transform: translateY(0); }
+@media (max-width: 700px) { .context-ring-text { display: none; } }
+
+/* Auto-compaction divider: visible in Activity and below a collapsed Activity. */
+.compaction-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+  color: #7b7e88;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.compaction-notice > span:not(.compaction-line) { overflow: hidden; text-overflow: ellipsis; }
+.compaction-line { flex: 1; min-width: 16px; height: 1px; background: #e3e4e8; }
+.compaction-notice.is-running { color: #484b54; }
+.context-ring.is-compacting svg { animation: context-ring-spin 1.2s linear infinite; }
+.context-ring.is-compacting .context-ring-value { stroke-dasharray: 12 32; stroke-dashoffset: 0; }
+@keyframes context-ring-spin { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
+@media (prefers-reduced-motion: reduce) { .context-ring.is-compacting svg { animation: none; } }

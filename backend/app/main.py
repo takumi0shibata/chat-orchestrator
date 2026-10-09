@@ -161,6 +161,7 @@ def create_app(settings=None, manager_factory=RunManager):
             ],
             resources=[dict(id=r.id, label=r.label) for r in c.resources],
             mcp_servers=[dict(id=m.id, label=m.label) for m in c.mcp_servers],
+            compact_token_threshold=settings.compact_token_threshold,
         )
 
     @app.get("/api/settings")
@@ -239,6 +240,33 @@ def create_app(settings=None, manager_factory=RunManager):
             return list_files(workspace(cid).path, path)
         except (OSError, ValueError):
             raise HTTPException(400, "Invalid or unavailable directory") from None
+
+    @app.get("/api/conversations/{cid}/attachments/{aid}")
+    async def attachment_file(cid: str, aid: str):
+        attachment = app.state.store.attachment(aid, cid)
+        try:
+            file = open_regular(
+                app.state.store.root / "attachments" / cid, f"{aid}/{attachment['name']}"
+            )
+        except (OSError, ValueError):
+            raise HTTPException(404, "Attachment file is unavailable") from None
+
+        def chunks():
+            try:
+                while block := file.read(65536):
+                    yield block
+            finally:
+                file.close()
+
+        return StreamingResponse(
+            chunks(),
+            media_type=mimetypes.guess_type(attachment["name"])[0] or "application/octet-stream",
+            headers={
+                "Content-Disposition": "attachment; filename*=UTF-8''"
+                + quote(attachment["name"]),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @app.get("/api/conversations/{cid}/download")
     async def download(cid: str, path: str):

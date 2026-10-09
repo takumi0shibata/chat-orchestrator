@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  activityEntries, activityLabel, finalAnswerStart, messageBlocks, reasoningActive, reasoningBlocks, reasoningTitle,
+  activityEntries, activityLabel, compactions, contextUsage, finalAnswerStart, messageBlocks, reasoningActive, reasoningBlocks, reasoningTitle,
 } from "./timeline";
 import type { AgentEvent } from "../types";
 const e = (seq: number, type: string, data: Record<string, unknown> = {}): AgentEvent =>
@@ -126,5 +126,40 @@ describe("current activity", () => {
     events.push(e(5, "approval", { id: "a", name: "search" }));
     expect(activityLabel(events, "approval_wait", [])).toBe("Approval needed: search");
     expect(activityLabel(events, "completed", [])).toBe("Activity");
+  });
+});
+
+describe("context usage", () => {
+  it("uses the latest response across runs and resets after compaction", () => {
+    const first = [e(1, "response", { usage: { input_tokens: 1000, output_tokens: 200 } })];
+    const second = [e(1, "response", { usage: { input_tokens: 5000, output_tokens: 300 } })];
+    expect(contextUsage([])).toBeNull();
+    expect(contextUsage([first, second])).toEqual({ tokens: 5300, compacted: false, compacting: false });
+    const compacted = [...second, e(2, "compaction", {})];
+    expect(contextUsage([first, compacted])).toEqual({ tokens: null, compacted: true, compacting: false });
+    expect(contextUsage([first, [...compacted, e(3, "response", { usage: { input_tokens: 800, output_tokens: 20 } })]]))
+      .toEqual({ tokens: 820, compacted: true, compacting: false });
+  });
+});
+
+describe("auto-compaction", () => {
+  const start = e(2, "compaction_start", { tokens: 260_000, threshold: 258_000 });
+  const done = e(3, "compaction", { usage: { input_tokens: 260_000, output_tokens: 14_000 }, tokens_before: 260_000, threshold: 258_000 });
+  it("pairs start and finish and shows it in Activity", () => {
+    expect(compactions([start])).toEqual([{ seq: 2, before: 260_000, after: null, threshold: 258_000, done: false }]);
+    expect(compactions([start, done])).toEqual([{ seq: 2, before: 260_000, after: null, threshold: 258_000, done: true }]);
+    const next = e(4, "response", { usage: { input_tokens: 21_000, output_tokens: 500 } });
+    expect(compactions([start, done, next])[0].after).toBe(21_000);
+    // Runs recorded before the start event existed still show the finished compaction.
+    expect(compactions([done, next])[0]).toMatchObject({ seq: 3, before: 260_000, after: 21_000, done: true });
+    expect(activityLabel([start], "model_wait", [])).toBe("Compacting context");
+    const entries = activityEntries([e(1, "command", { call_id: "c", index: 0 }), start, done], [], "model_wait");
+    expect(entries.map((entry) => entry.kind)).toEqual(["work", "compaction"]);
+  });
+  it("marks the ring as compacting until the compaction finishes or the run ends", () => {
+    const before = [e(1, "response", { usage: { input_tokens: 259_000, output_tokens: 1000 } })];
+    expect(contextUsage([[...before, start]])).toEqual({ tokens: 260_000, compacted: false, compacting: true });
+    expect(contextUsage([[...before, start, done]])?.compacting).toBe(false);
+    expect(contextUsage([[...before, start, e(4, "status", { status: "failed" })]])?.compacting).toBe(false);
   });
 });

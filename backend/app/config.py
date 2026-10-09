@@ -179,9 +179,11 @@ class Settings(BaseSettings):
     max_model_output_tokens: int = Field(default=32768, ge=1)
     max_title_output_tokens: int = Field(default=1024, ge=1)
     max_output_chars: int = Field(default=64000, ge=1024)
-    compact_token_threshold: int = Field(default=100000, ge=1000)
+    # Matches the usable context Codex reports for its default sessions.
+    compact_token_threshold: int = Field(default=258_000, ge=1000)
     reasoning_summary: Literal["auto", "concise", "detailed", "off"] = "auto"
     checkpoints: bool = True
+    apply_patch_tool: bool = True
     checkpoint_max_file_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
     max_upload_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
 
