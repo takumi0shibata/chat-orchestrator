@@ -1,7 +1,7 @@
 """Workspace checkpoints stored in an app-managed Git repository.
 
-The user's own repository, ignore rules, attributes and filters are never used:
-files are hashed with ``--no-filters`` and trees are built from a private index.
+File selection respects .gitignore while retaining tracked files. Contents are
+hashed with ``--no-filters`` and trees are built from a private index.
 """
 
 import hashlib
@@ -31,6 +31,17 @@ class CheckpointConflict(Exception):
     def __init__(self, paths):
         self.paths = paths
         super().__init__("Files changed after the run: " + ", ".join(paths[:10]))
+
+
+def walk(root: Path, max_file_bytes: int, *, include=()):
+    """Apply checkpoint size limits to the shared workspace selection."""
+    files, skipped = {}, []
+    for relative, state in scan_files(root, include=include).items():
+        if state[0] > max_file_bytes or "\n" in relative:
+            skipped.append(relative)
+        else:
+            files[relative] = state
+    return files, sorted(skipped)
 
 
 def safe_relative(path: str):
@@ -68,81 +79,49 @@ class Checkpoints:
             )
         return result.stdout
 
-    def scan(self, workspace: Path):
-        # A workspace containing the app must never back up its own backups.
-        return scan_files(workspace, excluded=(self.root,))
-
-    def snapshot(self, workspace: Path, label: str, *, files=None):
+    def snapshot(self, workspace: Path, label: str, *, include=()):
         """Return a commit for the workspace's current regular files."""
         repo = self.repo(workspace)
-        if files is None:
-            files = self.scan(workspace)
-        skipped = sorted(
-            p for p, state in files.items()
-            if state.size > self.max_file_bytes or "\n" in p
-        )
-        files = {p: state for p, state in files.items()
-                 if state.size <= self.max_file_bytes and "\n" not in p}
+        files, skipped = walk(workspace, self.max_file_bytes, include=include)
         cache_path = repo / "snapshot-cache.json"
         try:
             cache = json.loads(cache_path.read_text())
         except (OSError, ValueError):
             cache = {}
-        if not isinstance(cache, dict) or cache.get("version") != 2:
+        # The reverted optimization used a different, versioned cache layout.
+        # Rebuild that metadata without touching existing commits or run refs.
+        if not isinstance(cache, dict) or isinstance(cache.get("version"), int):
             cache = {}
-        previous = cache.get("files", {})
-        racy = set(cache.get("racy", ()))
         # A file modified again within the same mtime tick must be re-hashed later.
         recent = time.time_ns() - 2_000_000_000
         pending = [
-            p for p, state in files.items()
-            if previous.get(p, [])[:-1] != list(state) or p in racy
+            p for p, (size, mtime, _) in files.items()
+            if cache.get(p, [None, None])[:2] != [size, mtime]
         ]
         hashed = {}
         if pending:
-            # Prefer latency to compression on the run's critical path. Git still
-            # deduplicates blobs; explicit cleanup can pack/compress them later.
             output = self.git(
-                repo, "-c", "core.looseCompression=0",
-                "hash-object", "-w", "--no-filters", "--stdin-paths",
-                # --stdin-paths treats a leading quote as a C-quoted path.
-                input=b"".join(os.fsencode(json.dumps(str((workspace / p).absolute()), ensure_ascii=False))
-                               + b"\n" for p in pending),
+                repo, "hash-object", "-w", "--no-filters", "--stdin-paths",
+                input=b"".join(os.fsencode(workspace / p) + b"\n" for p in pending),
             ).decode().split()
             hashed = dict(zip(pending, output, strict=True))
         entries, next_cache = [], {}
-        removed = previous.keys() - files.keys()
-        for path in sorted(removed):
-            entries.append(b"0 " + b"0" * len(previous[path][-1]) + b"\t" + os.fsencode(path) + b"\0")
-        for path, state in sorted(files.items()):
-            sha = hashed.get(path) or previous[path][-1]
-            next_cache[path] = [*state, sha]
-            old = previous.get(path)
-            if old is None or (old[-2], old[-1]) != (state.mode, sha):
-                entries.append(f"{state.mode} {sha}\t".encode() + os.fsencode(path) + b"\0")
-        tree = cache.get("tree")
-        if entries or tree is None:
-            with tempfile.TemporaryDirectory(dir=repo) as scratch:
-                index = {"GIT_INDEX_FILE": str(Path(scratch) / "index")}
-                if tree:
-                    self.git(repo, "read-tree", tree, env=index)
-                if entries:
-                    self.git(
-                        repo, "update-index", "-z", "--index-info",
-                        input=b"".join(entries), env=index,
-                    )
-                tree = self.git(repo, "write-tree", env=index).decode().strip()
+        for path, (size, mtime, mode) in sorted(files.items()):
+            sha = hashed.get(path) or cache[path][2]
+            entries.append(f"{mode} {sha}\t".encode() + os.fsencode(path) + b"\0")
+            if mtime < recent:
+                next_cache[path] = [size, mtime, sha]
+        with tempfile.TemporaryDirectory(dir=repo) as scratch:
+            index = {"GIT_INDEX_FILE": str(Path(scratch) / "index")}
+            if entries:
+                self.git(
+                    repo, "update-index", "-z", "--index-info",
+                    input=b"".join(entries), env=index,
+                )
+            tree = self.git(repo, "write-tree", env=index).decode().strip()
         commit = self.git(repo, "commit-tree", tree, "-m", label).decode().strip()
-        state = dict(version=2, tree=tree, files=next_cache,
-                     racy=[p for p, s in files.items() if s.mtime_ns >= recent])
-        if state != cache:
-            # A failed write must not leave a cache describing half an index update.
-            with tempfile.TemporaryDirectory(dir=repo) as scratch:
-                temporary = Path(scratch) / "cache.json"
-                temporary.write_text(json.dumps(state, separators=(",", ":")))
-                os.replace(temporary, cache_path)
-        return dict(commit=commit, files=len(files), skipped=skipped,
-                    hashed_files=len(pending))
+        cache_path.write_text(json.dumps(next_cache))
+        return dict(commit=commit, files=len(files), skipped=skipped)
 
     def repos(self):
         return sorted(self.root.glob("*.git")) if self.root.exists() else []
@@ -161,8 +140,6 @@ class Checkpoints:
         ]
         if not refs:
             return 0
-        # The cached tree may become unreachable when refs are pruned.
-        (repo / "snapshot-cache.json").unlink(missing_ok=True)
         self.git(repo, "update-ref", "--stdin", input="".join(f"delete {r}\n" for r in refs).encode())
         self.git(repo, "gc", "--prune=now", "--quiet")
         return len({r.split("/")[2] for r in refs})
@@ -243,9 +220,10 @@ class Checkpoints:
     def restore(self, workspace: Path, before, after, force=False):
         """Return files changed between before and after to their before state."""
         repo = self.repo(workspace)
-        current = self.snapshot(workspace, "pre-restore")["commit"]
-        old, new, now = (self.tree(repo, c) for c in (before, after, current))
+        old, new = (self.tree(repo, c) for c in (before, after))
         changed = sorted(p for p in set(old) | set(new) if old.get(p) != new.get(p))
+        current = self.snapshot(workspace, "pre-restore", include=changed)["commit"]
+        now = self.tree(repo, current)
         conflicts = [p for p in changed if now.get(p) != new.get(p)]
         if conflicts and not force:
             raise CheckpointConflict(conflicts)

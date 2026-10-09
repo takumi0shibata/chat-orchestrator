@@ -10,7 +10,7 @@ import stat
 from datetime import datetime, timedelta, timezone
 from time import monotonic
 
-from app.attachments import direct_input
+from app.attachments import direct_input, file_snapshot
 from app.checkpoints import Checkpoints
 from app.model_catalog import pricing_for, validate_model
 from app.openai_client import build_openai_client
@@ -492,71 +492,28 @@ class RunManager:
             dict(type="input_image", image_url=result["image_url"], detail="auto"),
         ])
 
-    async def checkpoint(self, rid, workspace, name, files=None):
+    async def checkpoint(self, rid, workspace, name):
         """Checkpoint failures are reported but never fail the run."""
         if not self.settings.checkpoints or not self.checkpoints.available:
             return
         if name == "before":
             self.store.status(rid, "preparing", "Saving a workspace checkpoint")
-
-        def save():
-            result = self.checkpoints.snapshot(workspace.path, f"{rid} {name}", files=files)
-            self.checkpoints.set_ref(workspace.path, rid, name, result["commit"])
-            return result
-
-        started = monotonic()
         try:
-            # A cancelled to_thread keeps running. Drain it before releasing the
-            # workspace lock or starting another snapshot of the same repository.
-            task = asyncio.create_task(asyncio.to_thread(save))
-            try:
-                result = await asyncio.shield(task)
-            except asyncio.CancelledError:
-                try:
-                    await task
-                except Exception:
-                    log.exception("Checkpoint failed while stopping run %s", rid)
-                raise
+            result = await asyncio.to_thread(
+                self.checkpoints.snapshot, workspace.path, f"{rid} {name}"
+            )
+            await asyncio.to_thread(
+                self.checkpoints.set_ref, workspace.path, rid, name, result["commit"]
+            )
             self.store.event(rid, "checkpoint", dict(
                 name=name, files=result["files"],
                 skipped=result["skipped"][:50], skipped_count=len(result["skipped"]),
-                hashed_files=result["hashed_files"],
-                duration_ms=round((monotonic() - started) * 1000),
             ))
         except Exception as error:
             log.warning("Checkpoint %s failed for run %s: %s", name, rid, error)
             self.store.event(rid, "checkpoint", dict(
                 name=name, error=self.redact(str(error))[:2000],
             ))
-
-    async def scan_workspace(self, rid, workspace, name):
-        self.store.status(rid, "preparing", "Checking workspace files")
-        started = monotonic()
-        files = await asyncio.to_thread(self.checkpoints.scan, workspace.path)
-        self.store.event(rid, "workspace_scan", dict(
-            name=name, files=len(files), duration_ms=round((monotonic() - started) * 1000),
-        ))
-        return files
-
-    async def finish_workspace(self, rid, workspace, before_files):
-        if before_files is None:
-            # No local write-capable tool ran, so there is nothing to snapshot.
-            return
-        after_files = None
-        try:
-            after_files = await self.scan_workspace(rid, workspace, "after")
-            changed = [
-                dict(path=p, change="created" if p not in before_files else "modified")
-                for p in after_files
-                if p not in before_files or before_files[p][:2] != after_files[p][:2]
-            ]
-            changed += [dict(path=p, change="deleted") for p in before_files if p not in after_files]
-            self.store.event(
-                rid, "artifacts", dict(files=changed, label=f"{len(changed)} file changes"),
-            )
-        except OSError:
-            self.store.event(rid, "error", dict(message="Could not list file changes"))
-        await self.checkpoint(rid, workspace, "after", after_files)
 
     def run_workspace(self, rid):
         run = self.store.run(rid)
@@ -684,13 +641,6 @@ class RunManager:
         before_files = None
         run_timer = None
         final_status, final_label = "completed", "Work completed"
-
-        async def prepare_workspace():
-            nonlocal before_files
-            if before_files is None:
-                before_files = await self.scan_workspace(rid, workspace, "before")
-                await self.checkpoint(rid, workspace, "before", before_files)
-
         try:
             conversation = self.store.conversation(request.conversation_id)
             workspace = self.select(
@@ -704,6 +654,8 @@ class RunManager:
                 raise ValueError(
                     "Workspace is blocked after a container cleanup failure"
                 )
+            before_files = file_snapshot(workspace.path)
+            await self.checkpoint(rid, workspace, "before")
             async with asyncio.timeout(self.settings.run_timeout) as run_timer:
                 skills = list(self.config.skills)
                 resources = self.select(self.config.resources, request.resource_ids)
@@ -744,7 +696,6 @@ class RunManager:
                     skills,
                     resources,
                     project_instructions,
-                    prepare_workspace=prepare_workspace,
                 )
         except asyncio.CancelledError:
             final_status, final_label = (
@@ -799,12 +750,7 @@ class RunManager:
             if sandbox:
                 try:
                     # Keep the workspace lock until every container process has stopped.
-                    cleanup = asyncio.create_task(sandbox.close())
-                    try:
-                        await asyncio.shield(cleanup)
-                    except asyncio.CancelledError:
-                        final_status, final_label = "stopped", "Stopped. Applied changes remain."
-                        await cleanup
+                    await asyncio.shield(sandbox.close())
                 except Exception:
                     final_status, final_label = (
                         "failed",
@@ -813,23 +759,42 @@ class RunManager:
                     self.store.event(rid, "error", dict(message=final_label))
                     self.poisoned_workspaces.add(str(workspace.path))
                     self.store.event(rid, "sandbox_cleanup_failed", {})
-            if acquired:
-                finalizing = asyncio.create_task(self.finish_workspace(rid, workspace, before_files))
+            if before_files is not None:
                 try:
-                    try:
-                        await asyncio.shield(finalizing)
-                    except asyncio.CancelledError:
-                        final_status, final_label = "stopped", "Stopped. Applied changes remain."
-                        await finalizing
-                finally:
-                    lock.release()
+                    after_files = file_snapshot(workspace.path)
+                    changed = [
+                        dict(
+                            path=p,
+                            change="created" if p not in before_files else "modified",
+                        )
+                        for p in after_files
+                        if before_files.get(p) != after_files[p]
+                    ]
+                    changed += [
+                        dict(path=p, change="deleted")
+                        for p in before_files
+                        if p not in after_files
+                    ]
+                    self.store.event(
+                        rid,
+                        "artifacts",
+                        dict(files=changed, label=f"{len(changed)} file changes"),
+                    )
+                except OSError:
+                    self.store.event(
+                        rid,
+                        "error",
+                        dict(message="Could not list file changes"),
+                    )
+            if acquired:
+                await self.checkpoint(rid, workspace, "after")
+                lock.release()
             self.store.status(rid, final_status, final_label)
             if final_status != "completed":
                 self.store.preserve_interrupted_context(rid)
 
     async def loop(
-        self, rid, request, sandbox, skills, resources, project_instructions=None,
-        *, prepare_workspace,
+        self, rid, request, sandbox, skills, resources, project_instructions=None
     ):
         client = self.client(request.provider, request.model)
         deployment = self.routes.resolve(request.provider, request.model).deployment
@@ -1148,7 +1113,6 @@ class RunManager:
                     continue
                 if item["type"] == "apply_patch_call":
                     operation = item["operation"]
-                    await prepare_workspace()
                     self.store.status(rid, "command_running", "Editing files")
                     self.store.event(
                         rid, "patch",
@@ -1169,9 +1133,6 @@ class RunManager:
                 requested_timeout = (action.get("timeout_ms") or self.settings.command_timeout * 1000) / 1000
                 timeout = command_time_limit(self.settings, requested_timeout)
                 for index, command in enumerate(action["commands"]):
-                    # Even a read-looking shell command can write files. Prepare
-                    # once before the first command, without trying to classify it.
-                    await prepare_workspace()
                     self.store.status(
                         rid, "command_running", "Running command"
                     )

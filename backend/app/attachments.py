@@ -152,5 +152,5 @@ def direct_input(attachment):
 
 
 def file_snapshot(root: Path):
-    """Metadata only: never reads document contents or follows directory symlinks."""
+    """Use the same .gitignore-aware selection as checkpoints."""
     return {path: state[:2] for path, state in scan_files(root).items()}
