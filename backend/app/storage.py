@@ -71,6 +71,8 @@ class Store:
                 CREATE TABLE IF NOT EXISTS app_settings (
                   id INTEGER PRIMARY KEY CHECK(id=1), title_provider TEXT NOT NULL,
                   title_model TEXT NOT NULL, theme_color TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS guild_snapshot (
+                  id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS llm_costs (
                   response_id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL,
                   kind TEXT NOT NULL, input_tokens INTEGER NOT NULL,
@@ -167,6 +169,19 @@ class Store:
                     if all(any(term in text for text in texts[r["id"]]) for term in terms)
                 ]
         return [{**r, "pinned": bool(r["pinned"])} for r in rows]
+
+    def guild_snapshot(self):
+        with self.connect() as c:
+            row = c.execute("SELECT data FROM guild_snapshot WHERE id=1").fetchone()
+        return json.loads(row["data"]) if row else {"synced_at": None, "projects": []}
+
+    def save_guild_snapshot(self, snapshot):
+        with self.connect() as c:
+            c.execute(
+                "INSERT INTO guild_snapshot(id,data) VALUES(1,?) "
+                "ON CONFLICT(id) DO UPDATE SET data=excluded.data",
+                (json.dumps(snapshot, ensure_ascii=False),),
+            )
 
     def pin_conversation(self, cid, pinned):
         with self.connect() as c:

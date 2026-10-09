@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 import {
   ArrowUp, Check, ChevronDown, ChevronRight, Copy, File, FileArchive, FileCode, FileImage,
   FileSpreadsheet, FileText, Folder, FolderOpen, Globe, Paperclip, PanelRight, Pin, Plus,
-  Presentation, RefreshCw, Search, Settings, Sparkles, SquarePen, SquareTerminal, X,
+  Presentation, RefreshCw, Search, Settings, Shield, Sparkles, SquarePen, SquareTerminal, X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { api, events } from "./api";
@@ -38,6 +38,7 @@ import type {
 
 const LAST_PROJECT_KEY = "workspace-last-project";
 const HostTerminalPanel = lazy(() => import("./components/HostTerminalPanel").then((module) => ({ default: module.HostTerminalPanel })));
+const GuildBoard = lazy(() => import("./components/GuildBoard").then((module) => ({ default: module.GuildBoard })));
 const SIDEBAR_WIDTH_KEY = "workspace-sidebar-width";
 const MIN_SIDEBAR_WIDTH = 200;
 const MAX_SIDEBAR_WIDTH = 400;
@@ -667,7 +668,7 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
   );
 }
 
-type SettingsPage = "chat" | "settings" | "cost" | "theme" | "defaults" | "budget" | "storage";
+type SettingsPage = "chat" | "guild" | "settings" | "cost" | "theme" | "defaults" | "budget" | "storage";
 
 const CHECKPOINT_AGES = [
   { days: 7, label: "Older than 7 days" },
@@ -2302,6 +2303,10 @@ export function App() {
           </span>
         </a>
         <div className="sidebar-commands">
+          <button className="sidebar-command guild-nav" aria-current={settingsPage === "guild" ? "page" : undefined} onClick={() => setSettingsPage("guild")}>
+            <Shield size={19} strokeWidth={1.7} />
+            <span>Guild Board</span>
+          </button>
           <button className="sidebar-command" disabled={!workspace || busy} onClick={() => void newConversation()}>
             <Icon name="compose" size={19} />
             <span>New chat</span>
@@ -2391,7 +2396,7 @@ export function App() {
           </section>
           {query.trim() && !searching && !searchError && searchResults?.length === 0 && <p className="muted">No matching conversations</p>}
         </nav>
-        <button className="sidebar-settings" type="button" aria-current={settingsPage !== "chat" ? "page" : undefined} onClick={() => setSettingsPage("settings")}>
+        <button className="sidebar-settings" type="button" aria-current={settingsPage !== "chat" && settingsPage !== "guild" ? "page" : undefined} onClick={() => setSettingsPage("settings")}>
           <Icon name="gear" size={18} />
           <span>Settings</span>
         </button>
@@ -2431,7 +2436,11 @@ export function App() {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        {settingsPage !== "chat" ? (
+        {settingsPage === "guild" ? <Suspense fallback={<p role="status">Loading the board…</p>}><GuildBoard onOpenProject={async (projectId) => {
+          const latest = sortedConversations(conversations.filter((conversation) => conversation.workspace_id === projectId))[0];
+          if (latest) selectConversation(latest);
+          else await newConversation(projectId);
+        }} /></Suspense> : settingsPage !== "chat" ? (
           <SettingsPanel page={settingsPage} config={config} settings={appSettings} costs={costs} onNavigate={setSettingsPage} onChange={saveAppSettings} />
         ) : <>
         {cid && (

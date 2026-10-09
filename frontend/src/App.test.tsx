@@ -43,6 +43,39 @@ const event = (
 beforeEach(() => localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
 
+it("opens the guild from the sidebar and returns to the project's chat with its draft", async () => {
+  localStorage.setItem("workspace-conversation", "c");
+  const conversation = { id: "c", workspace_id: "w", title: "Research chat", updated_at: run.updated_at };
+  const project = {
+    id: "w", label: "Research", summary: "比較実験が完了", next_action: "結果を確認", status: "unknown",
+    tasks: [], documents: [], activity: [], updated_at: null, synced_at: run.updated_at,
+    fingerprint: "test", warnings: [], error: null,
+  };
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = String(input);
+    if (url === "/api/config") return new Response(JSON.stringify({
+      providers: [], workspaces: [{ id: "w", label: "Research", path: "/research" }], skills: [], resources: [], mcp_servers: [],
+    }));
+    if (url === "/api/settings") return new Response(JSON.stringify({ title_provider: "openai", title_model: "gpt-6-luna", theme_color: "#25262A" }));
+    if (url === "/api/conversations") return new Response(JSON.stringify([conversation]));
+    if (url === "/api/conversations/c") return new Response(JSON.stringify({ ...conversation, runs: [] }));
+    if (url === "/api/guild") return new Response(JSON.stringify({ synced_at: run.updated_at, projects: [project] }));
+    return new Response(JSON.stringify([]));
+  });
+  render(<App />);
+  const message = await screen.findByRole("textbox", { name: "Message" });
+  fireEvent.change(message, { target: { value: "途中の依頼" } });
+  fireEvent.click(screen.getByRole("button", { name: "Guild Board" }));
+  const card = await screen.findByRole("button", { name: "Open quest log for Research" });
+  expect(screen.queryByRole("button", { name: /files panel/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Settings" })).not.toHaveAttribute("aria-current");
+  expect(fetch.mock.calls.some(([url]) => url === "/api/guild/sync")).toBe(false);
+  fireEvent.click(card);
+  fireEvent.click(screen.getByRole("button", { name: "Open project chat" }));
+  expect(await screen.findByRole("textbox", { name: "Message" })).toHaveValue("途中の依頼");
+  expect(screen.getByRole("heading", { name: "Research chat" })).toBeInTheDocument();
+});
+
 it.each([false, true])("shows Azure connection labels and filters a bound chat: %s", async (bound) => {
   localStorage.setItem("workspace-conversation", "c");
   const azureModels = [
@@ -379,6 +412,8 @@ it.each(["unselected", "cleared"])("keeps configured skills automatic when %s", 
     if (url === "/api/conversations/c") return new Response(JSON.stringify({ ...conversation, runs: [] }));
     if (url.startsWith("/api/conversations/c/files")) return new Response(JSON.stringify([]));
     if (url === "/api/runs" && options?.method === "POST") return new Response(JSON.stringify(run));
+    if (url.includes("/events")) return new Response("");
+    if (url === "/api/runs/r") return new Response(JSON.stringify(run));
     return new Response(JSON.stringify({}));
   });
   render(<App />);
@@ -423,6 +458,8 @@ it("selects configured skills with an @ mention and sends their ids without the 
     if (url === "/api/conversations/c") return new Response(JSON.stringify({ ...conversation, runs: [] }));
     if (url.startsWith("/api/conversations/c/files")) return new Response(JSON.stringify([]));
     if (url === "/api/runs" && options?.method === "POST") return new Response(JSON.stringify(run));
+    if (url.includes("/events")) return new Response("");
+    if (url === "/api/runs/r") return new Response(JSON.stringify(run));
     return new Response(JSON.stringify({}));
   });
 

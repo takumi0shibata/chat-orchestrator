@@ -50,6 +50,8 @@ Docker Composeはイメージのビルド専用です (`docker compose --profile
 
 ## 設定
 
+サイドバーの「Guild Board」では、直下に `.chat-orchestrator/` があるProjectだけをまとめて閲覧できます。SyncでMarkdownの現在地・TODO・作業記録を取り込みます。フォルダの自動生成や編集、モデル呼び出し、常時監視は行いません。フォルダの用意・更新はユーザーが登録するSkillなどに任せます。[記録形式とSyncの仕様](docs/guild-board.md)を参照してください。
+
 `runtime.toml` はGit管理外です。[設定例](runtime.example.toml)を参照してください。
 
 - `workspaces`: ID・表示名・絶対パス。相互に重なるディレクトリは禁止。APIキーやアプリ設定・状態を含むフォルダは登録しないでください。
