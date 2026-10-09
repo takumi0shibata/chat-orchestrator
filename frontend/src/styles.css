@@ -796,6 +796,7 @@ h2 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.file-tree-ignored .file-tree-name { color: #999aa0; }
 .file-tree-row small {
   color: #999aa0;
   font-size: 9px;

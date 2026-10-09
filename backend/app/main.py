@@ -276,7 +276,7 @@ def create_app(settings=None, manager_factory=RunManager):
     @app.get("/api/conversations/{cid}/files")
     async def files(cid: str, path: str = ""):
         try:
-            return list_files(workspace(cid).path, path)
+            return await asyncio.to_thread(list_files, workspace(cid).path, path)
         except (OSError, ValueError):
             raise HTTPException(400, "Invalid or unavailable directory") from None
 

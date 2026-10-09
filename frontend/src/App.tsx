@@ -634,9 +634,11 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
     <ul className={depth ? "file-tree file-tree-children" : "file-tree"}>
       {entries.map((entry) => {
         const isExpanded = expanded.includes(entry.path);
+        const ignoredClass = entry.ignored ? " file-tree-ignored" : "";
+        const ignoredHint = entry.ignored ? " — Ignored by .gitignore" : "";
         if (!entry.directory) return (
           <li key={entry.path}>
-            <button className="file-tree-row file-tree-file" type="button" draggable title={`${entry.path} — Click to open; drag to the message input`}
+            <button className={`file-tree-row file-tree-file${ignoredClass}`} type="button" draggable title={`${entry.path}${ignoredHint} — Click to open; drag to the message input`}
               onClick={() => onOpen(entry.path)}
               onDragStart={(event) => startDrag(event, entry)}>
               <span className="file-tree-spacer" />
@@ -651,7 +653,7 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
         const error = errors[entry.path];
         return (
           <li key={entry.path}>
-            <button className="file-tree-row file-tree-directory" type="button" draggable aria-expanded={isExpanded} onClick={() => onToggle(entry)} title={`${entry.path} — Click to expand or collapse; drag to the message input`} onDragStart={(event) => startDrag(event, entry)}>
+            <button className={`file-tree-row file-tree-directory${ignoredClass}`} type="button" draggable aria-expanded={isExpanded} onClick={() => onToggle(entry)} title={`${entry.path}${ignoredHint} — Click to expand or collapse; drag to the message input`} onDragStart={(event) => startDrag(event, entry)}>
               <span className={`file-tree-chevron ${isExpanded ? "is-expanded" : ""}`}><Icon name="chevron-right" size={13} /></span>
               <span className="folder-icon"><Icon name={isExpanded ? "folder-open" : "folder"} size={17} /></span>
               <span className="file-tree-name">{entry.name}</span>
