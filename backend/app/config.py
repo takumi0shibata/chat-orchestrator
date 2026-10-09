@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_valid
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]
+BUNDLED_SKILLS = Path(__file__).resolve().parent / "bundled_skills"
 IDENTIFIER = r"^[a-zA-Z0-9_-]{1,64}$"
 
 
@@ -216,11 +217,15 @@ class Settings(BaseSettings):
         return endpoint if endpoint.endswith("/openai/v1") else endpoint + "/openai/v1"
 
     def load_runtime(self):
-        if not self.runtime_config.exists():
-            return RuntimeConfig()
-        return RuntimeConfig.model_validate(
-            tomllib.loads(self.runtime_config.read_text())
+        data = tomllib.loads(self.runtime_config.read_text()) if self.runtime_config.exists() else {}
+        config = RuntimeConfig.model_validate(data)
+        bundled = Skill(
+            id="guild-journal", label="ギルド記録", path=BUNDLED_SKILLS / "guild-journal"
         )
+        # A registered replacement takes precedence without duplicate @mentions.
+        if not any(skill.id == bundled.id or skill.name == bundled.name for skill in config.skills):
+            config.skills.insert(0, bundled)
+        return config
 
 
 @lru_cache

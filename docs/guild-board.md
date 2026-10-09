@@ -1,6 +1,8 @@
 # Guild Boardの記録形式
 
-登録済みProjectの直下に `.chat-orchestrator/` がある場合だけ、ギルド掲示板のSync対象になります。フォルダを削除・リネームすると、次回Syncで一覧から外れます。アプリはこのフォルダを作成・編集しません。用意や更新はユーザーまたはユーザーが登録したSkillで行います。作成手順はモデルのsystem promptに追加していません。
+登録済みProjectの直下に `.chat-orchestrator/` がある場合だけ、ギルド掲示板のSync対象になります。フォルダを削除・リネームすると、次回Syncで一覧から外れます。掲示板のSync処理はこのフォルダを作成・編集しません。作成手順はモデルのsystem promptに追加していません。
+
+標準で利用できる同梱Skill [guild-journal](../backend/app/bundled_skills/guild-journal/SKILL.md)に、チャットから記録の作成・更新を依頼できます。`runtime.toml`への追加登録は不要です。たとえば「このProjectをギルドに登録して」「比較実験が終わったのでギルドのTODOと作業日誌を更新して」と依頼します。`@guild-journal` または＋メニューの「ギルド記録」で明示指定もできます。Skillがファイルを保存した後、ユーザーがSyncして表示へ取り込みます。Skillがあるだけで全Projectにフォルダを作ったり、毎回の作業を自動記録したりはしません。
 
 ```text
 プロジェクト/

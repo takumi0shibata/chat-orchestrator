@@ -50,12 +50,14 @@ Docker Composeはイメージのビルド専用です (`docker compose --profile
 
 ## 設定
 
-サイドバーの「Guild Board」では、直下に `.chat-orchestrator/` があるProjectだけをまとめて閲覧できます。SyncでMarkdownの現在地・TODO・作業記録を取り込みます。フォルダの自動生成や編集、モデル呼び出し、常時監視は行いません。フォルダの用意・更新はユーザーが登録するSkillなどに任せます。[記録形式とSyncの仕様](docs/guild-board.md)を参照してください。
+サイドバーの「Guild Board」では、直下に `.chat-orchestrator/` があるProjectだけをまとめて閲覧できます。SyncでMarkdownの現在地・TODO・作業記録を取り込みます。掲示板自体はフォルダの自動生成や編集、モデル呼び出し、常時監視を行いません。[記録形式とSyncの仕様](docs/guild-board.md)を参照してください。
+
+ギルド用の標準Skill [guild-journal](backend/app/bundled_skills/guild-journal/SKILL.md)を同梱しており、`runtime.toml`への登録は不要です。対象Projectのチャットで「このプロジェクトをギルドに登録して」「今回の成果をギルドに記録して」と依頼すると、記録ファイルを作成・更新できます。`@guild-journal` または＋メニューの「ギルド記録」で明示指定もできます。記録後にGuild BoardのSyncを押してください。通常の作業だけで記録を作ったり、TODOの完了・期限を推測したりしない方針です。同梱Skillを追加したバージョンへの更新後は、バックエンドを再起動すると利用できます。
 
 `runtime.toml` はGit管理外です。[設定例](runtime.example.toml)を参照してください。
 
 - `workspaces`: ID・表示名・絶対パス。相互に重なるディレクトリは禁止。APIキーやアプリ設定・状態を含むフォルダは登録しないでください。
-- `skills`: 外部で用意した標準 `SKILL.md` を含むフォルダ。全登録Skillsのfront matterの `name` / `description` を毎回Responsesのlocal shellへ渡し、読み取り専用の `/skills/<id>` に配置します。モデルは依頼に関連するSkillsを判断し、必要な本文・参照ファイルだけを読んで適用します。
+- `skills`: 追加で利用する標準 `SKILL.md` を含むフォルダ。同梱Skillと全登録Skillsのfront matterの `name` / `description` を毎回Responsesのlocal shellへ渡し、読み取り専用の `/skills/<id>` に配置します。モデルは依頼に関連するSkillsを判断し、必要な本文・参照ファイルだけを読んで適用します。同梱版と同じIDまたはmanifestの `name` を登録した場合は登録したSkillを優先します。
 - `resources`: 事前ダウンロードしたNLPモデルやデータ等。実行ごとに選択し、読み取り専用の `/resources/<id>` に配置します。
 - `azure_connections`: 接続先ID・表示名・Endpoint/APIキーの環境変数名を登録。実値は `.env` またはプロセス環境変数に保存します。
 - `azure_models`: `model` にモデルID、`deployment` にAzureのデプロイ名、`connection_id` に接続先IDを記載。任意の `id` はアプリの選択用IDで、省略時はデプロイ名を使います。選択用IDは全Azureモデルで一意にしてください。
@@ -67,7 +69,7 @@ Docker Composeはイメージのビルド専用です (`docker compose --profile
 
 Remote MCPはプロバイダ側から接続されるため、ローカルの `localhost` URLは利用できません。このリポジトリにMCPサーバーや業務API本体は含みません。モデルAPI・MCP・Web検索の通信と、ネットワーク無効のローカルサンドボックスは別経路です。
 
-ローカルShellではホスト型Skillsの `skill_reference` IDは使いません。標準Skills本体はユーザーが別途用意します。旧skill.yaml / skill.py のローダーや互換機能はありません。
+ローカルShellではホスト型Skillsの `skill_reference` IDは使いません。同梱Skill以外のSkills本体はユーザーが別途用意します。旧skill.yaml / skill.py のローダーや互換機能はありません。
 
 Skillsの自動利用は標準動作で、ON/OFF設定はありません。`@skill-name` または＋メニューの選択は明示的な適用指定です。チップや選択を解除すると明示指定を外し、自動判断に戻ります。自動候補からの除外ではありません。モデルには、適用するSkill名と目的を日本語の進捗で短く伝え、本文を読んでから実行するよう指示します。明示指定と自動利用の方針は各実行・履歴圧縮に渡します。ユーザーの依頼とsandboxの制約がSkillの指示に優先し、Skillから未選択のモデル／データ、Web検索、Remote MCPが有効になることはありません。
 

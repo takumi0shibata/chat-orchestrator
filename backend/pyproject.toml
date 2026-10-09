@@ -25,5 +25,8 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["app*"]
 
+[tool.setuptools.package-data]
+app = ["bundled_skills/*/SKILL.md"]
+
 [tool.pytest.ini_options]
 markers = ["docker: requires the built sandbox image and a running Docker daemon", "live: explicit paid API smoke test"]
