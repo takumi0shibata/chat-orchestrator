@@ -868,6 +868,53 @@ def test_response_events_identify_final_messages(tmp_path):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("stage", ["sandbox", "checkpoint"])
+def test_stop_during_normal_finalization_waits_and_releases_workspace(tmp_path, stage):
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        class SlowClose(FakeSandbox):
+            async def close(self):
+                if stage == "sandbox":
+                    entered.set()
+                    await release.wait()
+                self.closed = True
+
+        manager, store, client, request = setup(
+            tmp_path, [[message()], [message()]], sandbox=SlowClose
+        )
+        original_checkpoint = manager.checkpoint
+
+        async def checkpoint(rid, workspace, name):
+            if stage == "checkpoint" and name == "after":
+                entered.set()
+                await release.wait()
+            await original_checkpoint(rid, workspace, name)
+
+        manager.checkpoint = checkpoint
+        run = manager.start(request)
+        await asyncio.wait_for(entered.wait(), 5)
+        stops = [asyncio.create_task(manager.stop(run["id"])) for _ in range(2)]
+        await asyncio.sleep(0)
+        assert all(not task.done() for task in stops)
+        assert store.run(run["id"])["status"] not in {"completed", "failed", "stopped"}
+        assert next(iter(manager.locks.values())).locked()
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*stops), 5)
+        assert SlowClose.instances[-1].closed
+        assert store.run(run["id"])["status"] == "completed"
+        assert not next(iter(manager.locks.values())).locked()
+        assert any(e["type"] == "checkpoint" and e["data"].get("name") == "after"
+                   for e in store.events(run["id"]))
+        next_run = manager.start(request)
+        await asyncio.wait_for(manager.tasks[next_run["id"]], 5)
+        assert store.run(next_run["id"])["status"] == "completed"
+        assert len(client.calls) == 2
+        await manager.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_reasoning_summary_streams_and_conversation_shares_cache_key(tmp_path):
     async def scenario():
         reasoning = {

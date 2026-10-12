@@ -1450,6 +1450,59 @@ it("retains the draft and attachments when sending fails", async () => {
   expect(screen.getByRole("button", { name: "Remove input.txt" })).toBeInTheDocument();
 });
 
+it("keeps each chat's draft and attachments in memory and clears only a successfully sent draft", async () => {
+  const other = { ...uxConversation, id: "other", title: "Other chat" };
+  let rejectSend = true;
+  const fetchMock = mockUxApi((url, options) => {
+    if (url === "/api/conversations") return new Response(JSON.stringify([uxConversation, other]));
+    if (url === "/api/conversations/other") return new Response(JSON.stringify({ ...other, runs: [] }));
+    if (url === "/api/attachments") return new Response(JSON.stringify([{ id: "a", name: "input.pdf", size: 1 }]));
+    if (url === "/api/runs" && options?.method === "POST") {
+      if (rejectSend) return new Response(JSON.stringify({ detail: "Send failed" }), { status: 500 });
+      return new Response(JSON.stringify({ ...run, request: JSON.parse(String(options.body)) }));
+    }
+    if (url.includes("/events?")) return new Response(JSON.stringify(event(1, "status", { status: "completed" })) + "\n");
+    if (url === "/api/runs/r") return new Response(JSON.stringify(run));
+  });
+  const view = render(<App />);
+  await screen.findByRole("button", { name: /結果 report.csv/ });
+  fireEvent.change(screen.getByRole("textbox", { name: "Message" }), { target: { value: "First draft" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+  fireEvent.drop(view.container.querySelector(".main")!, { dataTransfer: { types: ["Files"], files: [new File(["x"], "input.pdf")], items: [] } });
+  await screen.findByRole("button", { name: "Remove input.pdf" });
+  fireEvent.click(screen.getByRole("checkbox", { name: "Send directly to model" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Other chat" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Other chat" }));
+  await screen.findByRole("heading", { name: "Other chat" });
+  expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("");
+  expect(screen.queryByRole("button", { name: "Remove input.pdf" })).not.toBeInTheDocument();
+  fireEvent.change(screen.getByRole("textbox", { name: "Message" }), { target: { value: "Second draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "UX chat" }));
+  await screen.findByRole("heading", { name: "UX chat" });
+  expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("First draft");
+  expect(screen.getByRole("checkbox", { name: "Send directly to model" })).toBeChecked();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await screen.findByText(/Send failed/);
+  expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("First draft");
+  expect(screen.getByRole("checkbox", { name: "Send directly to model" })).toBeChecked();
+  rejectSend = false;
+  await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() => expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue(""));
+  expect(screen.queryByRole("button", { name: "Remove input.pdf" })).not.toBeInTheDocument();
+  const sent = fetchMock.mock.calls.filter(([url]) => url === "/api/runs").pop()!;
+  expect(JSON.parse(String(sent[1]?.body))).toMatchObject({ input: "First draft", attachment_ids: ["a"], direct_attachment_ids: ["a"] });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Other chat" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Other chat" }));
+  await screen.findByRole("heading", { name: "Other chat" });
+  expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("Second draft");
+  view.unmount();
+  render(<App />);
+  await screen.findByRole("heading", { name: "Other chat" });
+  expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("");
+});
+
 it("reconnects from the last event sequence and aborts subscriptions when switching conversations", async () => {
   let firstSignal: AbortSignal | undefined;
   let reconnectSignal: AbortSignal | undefined;

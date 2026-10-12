@@ -1527,11 +1527,26 @@ export function App() {
   const [resources, setResources] = useState<string[]>([]);
   const [mcps, setMcps] = useState<string[]>([]);
   const [web, setWeb] = useState(false);
-  const [input, setInput] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, { input: string; attachments: Attachment[]; direct: string[] }>>({});
+  const emptyDraft = { input: "", attachments: [] as Attachment[], direct: [] as string[] };
+  const { input, attachments, direct } = drafts[cid] || emptyDraft;
+  function setInput(value: string) {
+    setDrafts((old) => ({ ...old, [cid]: { ...(old[cid] || emptyDraft), input: value } }));
+  }
+  function setAttachments(value: Attachment[] | ((old: Attachment[]) => Attachment[])) {
+    setDrafts((old) => {
+      const draft = old[cid] || emptyDraft;
+      return { ...old, [cid]: { ...draft, attachments: typeof value === "function" ? value(draft.attachments) : value } };
+    });
+  }
+  function setDirect(value: string[] | ((old: string[]) => string[])) {
+    setDrafts((old) => {
+      const draft = old[cid] || emptyDraft;
+      return { ...old, [cid]: { ...draft, direct: typeof value === "function" ? value(draft.direct) : value } };
+    });
+  }
   const [skillMention, setSkillMention] = useState<SkillMention | null>(null);
   const [skillOption, setSkillOption] = useState(0);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [direct, setDirect] = useState<string[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [timelines, setTimelines] = useState<Record<string, AgentEvent[]>>({});
   const [filesByPath, setFilesByPath] = useState<Record<string, WorkspaceFile[]>>({});
@@ -1859,9 +1874,6 @@ export function App() {
     setExpandedFolders([]);
     setLoadingFolders([]);
     setFileErrors({});
-    setAttachments([]);
-    setDirect([]);
-    setInput("");
     setSkillMention(null);
     setPlusOpen(false);
     setError("");
@@ -2039,6 +2051,11 @@ export function App() {
           web_search: web,
         }),
       });
+      setDrafts((old) => {
+        const next = { ...old };
+        delete next[submittingCid];
+        return next;
+      });
       if (selectedConversation.current !== submittingCid || runSubscription.current !== subscription) return;
       follow.current = true;
       setRuns((old) => old.some((run) => run.id === createdRun.id) ? old : [...old, createdRun]);
@@ -2046,10 +2063,7 @@ export function App() {
         setConversations((old) => old.map((item) => item.id === submittingCid ? { ...item, azure_connection_id: selectedModel.connection_id } : item));
       }
       subscription?.start(createdRun);
-      setInput("");
       setSkillMention(null);
-      setAttachments([]);
-      setDirect([]);
       await refreshConversations();
     } catch (e) {
       setError(String(e));
@@ -2211,6 +2225,11 @@ export function App() {
   async function removeConversation(id: string) {
     try {
       await api(`/conversations/${id}`, { method: "DELETE" });
+      setDrafts((old) => {
+        const next = { ...old };
+        delete next[id];
+        return next;
+      });
       await refreshConversations();
       if (cid === id) setCid("");
     } catch (e) {

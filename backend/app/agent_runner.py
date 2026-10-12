@@ -101,6 +101,7 @@ class RunManager:
     ):
         self.settings, self.config, self.store = settings, config, store
         self.tasks = {}
+        self.finalizing = set()
         self.title_tasks = set()
         self.approvals = {}
         self.locks = {}
@@ -444,7 +445,7 @@ class RunManager:
             return
         task = self.tasks.get(rid)
         if task:
-            if not task.cancelling():
+            if rid not in self.finalizing and not task.cancelling():
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         if self.store.run(rid)["status"] not in TERMINAL:
@@ -744,54 +745,69 @@ class RunManager:
                 "Run failed. Check the activity log.",
             )
         finally:
-            for key in list(self.approvals):
-                if key[0] == rid:
-                    self.approvals.pop(key).cancel()
-            if sandbox:
-                try:
-                    # Keep the workspace lock until every container process has stopped.
-                    await asyncio.shield(sandbox.close())
-                except Exception:
-                    final_status, final_label = (
-                        "failed",
-                        "Could not confirm sandbox shutdown. Check Docker status.",
+            # Stop requests must wait for cleanup, including the final checkpoint.
+            self.finalizing.add(rid)
+            try:
+                await self.finalize_run(
+                    rid, sandbox, workspace, before_files, acquired,
+                    final_status, final_label,
+                )
+            finally:
+                if acquired:
+                    lock.release()
+                self.finalizing.discard(rid)
+
+    async def finalize_run(
+        self, rid, sandbox, workspace, before_files, acquired,
+        final_status, final_label,
+    ):
+        for key in list(self.approvals):
+            if key[0] == rid:
+                self.approvals.pop(key).cancel()
+        if sandbox:
+            try:
+                # Keep the workspace lock until every container process has stopped.
+                await asyncio.shield(sandbox.close())
+            except Exception:
+                final_status, final_label = (
+                    "failed",
+                    "Could not confirm sandbox shutdown. Check Docker status.",
+                )
+                self.store.event(rid, "error", dict(message=final_label))
+                self.poisoned_workspaces.add(str(workspace.path))
+                self.store.event(rid, "sandbox_cleanup_failed", {})
+        if before_files is not None:
+            try:
+                after_files = file_snapshot(workspace.path)
+                changed = [
+                    dict(
+                        path=p,
+                        change="created" if p not in before_files else "modified",
                     )
-                    self.store.event(rid, "error", dict(message=final_label))
-                    self.poisoned_workspaces.add(str(workspace.path))
-                    self.store.event(rid, "sandbox_cleanup_failed", {})
-            if before_files is not None:
-                try:
-                    after_files = file_snapshot(workspace.path)
-                    changed = [
-                        dict(
-                            path=p,
-                            change="created" if p not in before_files else "modified",
-                        )
-                        for p in after_files
-                        if before_files.get(p) != after_files[p]
-                    ]
-                    changed += [
-                        dict(path=p, change="deleted")
-                        for p in before_files
-                        if p not in after_files
-                    ]
-                    self.store.event(
-                        rid,
-                        "artifacts",
-                        dict(files=changed, label=f"{len(changed)} file changes"),
-                    )
-                except OSError:
-                    self.store.event(
-                        rid,
-                        "error",
-                        dict(message="Could not list file changes"),
-                    )
-            if acquired:
-                await self.checkpoint(rid, workspace, "after")
-                lock.release()
-            self.store.status(rid, final_status, final_label)
-            if final_status != "completed":
-                self.store.preserve_interrupted_context(rid)
+                    for p in after_files
+                    if before_files.get(p) != after_files[p]
+                ]
+                changed += [
+                    dict(path=p, change="deleted")
+                    for p in before_files
+                    if p not in after_files
+                ]
+                self.store.event(
+                    rid,
+                    "artifacts",
+                    dict(files=changed, label=f"{len(changed)} file changes"),
+                )
+            except OSError:
+                self.store.event(
+                    rid,
+                    "error",
+                    dict(message="Could not list file changes"),
+                )
+        if acquired:
+            await self.checkpoint(rid, workspace, "after")
+        self.store.status(rid, final_status, final_label)
+        if final_status != "completed":
+            self.store.preserve_interrupted_context(rid)
 
     async def loop(
         self, rid, request, sandbox, skills, resources, project_instructions=None

@@ -1,4 +1,7 @@
 import subprocess
+import json
+import os
+import time
 
 import pytest
 
@@ -144,4 +147,59 @@ def test_versioned_cache_is_rebuilt_without_deleting_old_refs(setup):
     (cp.repo(work) / "snapshot-cache.json").write_text('{"version":2,"files":{},"tree":"unused"}')
     after = cp.snapshot(work, "after")["commit"]
     assert cp.changes(work, before, after) == []
+    assert cp.get_ref(work, "old", "before") == before
+
+
+def test_snapshot_detects_same_size_writes_with_preserved_mtime(setup):
+    cp, work = setup
+    path = work / "a.txt"
+    path.write_text("before")
+    timestamp = time.time_ns() - 10_000_000_000
+    os.utime(path, ns=(timestamp, timestamp))
+    before = cp.snapshot(work, "before")["commit"]
+    path.write_text("AFTER!")
+    os.utime(path, ns=(timestamp, timestamp))
+    after = cp.snapshot(work, "after")["commit"]
+    assert [f["path"] for f in cp.changes(work, before, after)] == ["a.txt"]
+
+
+def test_undo_rehashes_changed_files_even_when_cache_claims_no_change(setup):
+    cp, work = setup
+    path = work / "a.txt"
+    path.write_text("before")
+    before = cp.snapshot(work, "before")["commit"]
+    path.write_text("AFTER!")
+    timestamp = time.time_ns() - 10_000_000_000
+    os.utime(path, ns=(timestamp, timestamp))
+    after = cp.snapshot(work, "after")["commit"]
+    path.write_text("USER!!")
+    os.utime(path, ns=(timestamp, timestamp))
+    # Simulate stale metadata from coarse timestamps or an old cache. Undo must
+    # verify the actual bytes regardless of what the cache says.
+    info = path.stat()
+    sha = cp.tree(cp.repo(work), after)["a.txt"][1]
+    (cp.repo(work) / "snapshot-cache.json").write_text(json.dumps({
+        "a.txt": [info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_dev, info.st_ino, sha],
+    }))
+    with pytest.raises(CheckpointConflict) as error:
+        cp.restore(work, before, after)
+    assert error.value.paths == ["a.txt"]
+    assert path.read_text() == "USER!!"
+
+
+def test_old_unversioned_cache_is_rehashed_without_changing_refs(setup):
+    cp, work = setup
+    path = work / "a.txt"
+    path.write_text("before")
+    before = cp.snapshot(work, "before")["commit"]
+    cp.set_ref(work, "old", "before", before)
+    info = path.stat()
+    sha = cp.tree(cp.repo(work), before)["a.txt"][1]
+    (cp.repo(work) / "snapshot-cache.json").write_text(json.dumps({
+        "a.txt": [info.st_size, info.st_mtime_ns, sha],
+    }))
+    path.write_text("AFTER!")
+    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+    after = cp.snapshot(work, "after")["commit"]
+    assert cp.changes(work, before, after)
     assert cp.get_ref(work, "old", "before") == before

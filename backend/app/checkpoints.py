@@ -79,7 +79,7 @@ class Checkpoints:
             )
         return result.stdout
 
-    def snapshot(self, workspace: Path, label: str, *, include=()):
+    def snapshot(self, workspace: Path, label: str, *, include=(), rehash=()):
         """Return a commit for the workspace's current regular files."""
         repo = self.repo(workspace)
         files, skipped = walk(workspace, self.max_file_bytes, include=include)
@@ -92,11 +92,17 @@ class Checkpoints:
         # Rebuild that metadata without touching existing commits or run refs.
         if not isinstance(cache, dict) or isinstance(cache.get("version"), int):
             cache = {}
+        # Include identity and ctime: writes can preserve both size and mtime.
+        states = {}
+        for path, (size, mtime, _) in files.items():
+            info = (workspace / path).lstat()
+            states[path] = [size, mtime, info.st_ctime_ns, info.st_dev, info.st_ino]
+        rehash = set(rehash)
         # A file modified again within the same mtime tick must be re-hashed later.
         recent = time.time_ns() - 2_000_000_000
         pending = [
-            p for p, (size, mtime, _) in files.items()
-            if cache.get(p, [None, None])[:2] != [size, mtime]
+            p for p in files
+            if p in rehash or cache.get(p, [])[:5] != states[p]
         ]
         hashed = {}
         if pending:
@@ -107,10 +113,10 @@ class Checkpoints:
             hashed = dict(zip(pending, output, strict=True))
         entries, next_cache = [], {}
         for path, (size, mtime, mode) in sorted(files.items()):
-            sha = hashed.get(path) or cache[path][2]
+            sha = hashed.get(path) or cache[path][5]
             entries.append(f"{mode} {sha}\t".encode() + os.fsencode(path) + b"\0")
             if mtime < recent:
-                next_cache[path] = [size, mtime, sha]
+                next_cache[path] = [*states[path], sha]
         with tempfile.TemporaryDirectory(dir=repo) as scratch:
             index = {"GIT_INDEX_FILE": str(Path(scratch) / "index")}
             if entries:
@@ -222,7 +228,7 @@ class Checkpoints:
         repo = self.repo(workspace)
         old, new = (self.tree(repo, c) for c in (before, after))
         changed = sorted(p for p in set(old) | set(new) if old.get(p) != new.get(p))
-        current = self.snapshot(workspace, "pre-restore", include=changed)["commit"]
+        current = self.snapshot(workspace, "pre-restore", include=changed, rehash=changed)["commit"]
         now = self.tree(repo, current)
         conflicts = [p for p in changed if now.get(p) != new.get(p)]
         if conflicts and not force:
