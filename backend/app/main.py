@@ -15,14 +15,12 @@ from app.agent_runner import RunManager
 from app.attachments import list_files, open_regular, save_upload
 from app.checkpoints import CheckpointConflict
 from app.config import get_settings
-from app.chatgpt_client import completed_response, response_text
 from app.guild import Guild
 from app.model_catalog import models_for
 from app.schemas import (
     AppSettingsUpdate,
     Approval,
     CheckpointPrune,
-    ChatGPTTest,
     ConversationCreate,
     ConversationUpdate,
     Revert,
@@ -85,7 +83,6 @@ def create_app(settings=None, manager_factory=RunManager):
             )
             app.state.terminals = set()
             app.state.guild = Guild(config.workspaces, store)
-            app.state.chatgpt_probe_lock = asyncio.Lock()
             await manager.recover()
             try:
                 yield
@@ -186,9 +183,9 @@ def create_app(settings=None, manager_factory=RunManager):
 
     def chatgpt_idle():
         manager = app.state.manager
-        if (app.state.chatgpt_probe_lock.locked() or any(
+        if any(
             not task.done() for task in [*manager.tasks.values(), *manager.title_tasks]
-        )):
+        ):
             raise HTTPException(409, "Wait for active requests to finish before changing the ChatGPT connection.")
 
     @app.get("/api/auth/chatgpt")
@@ -212,51 +209,6 @@ def create_app(settings=None, manager_factory=RunManager):
         chatgpt_idle()
         await app.state.manager.chatgpt_auth.logout()
         return app.state.manager.chatgpt_auth.status()
-
-    @app.post("/api/auth/chatgpt/test")
-    async def chatgpt_test(body: ChatGPTTest):
-        model = body.model
-        auth = app.state.manager.chatgpt_auth
-        if auth.login_status == "pending":
-            raise HTTPException(409, "Finish or cancel ChatGPT sign-in first.")
-        if app.state.chatgpt_probe_lock.locked():
-            raise HTTPException(409, "A ChatGPT test is already running.")
-        async with app.state.chatgpt_probe_lock:
-            await auth.models()
-            client = app.state.manager.client("chatgpt", model)
-            try:
-                async with asyncio.timeout(60):
-                    compacted = None
-                    if body.kind == "compact":
-                        compacted = await client.responses.compact(
-                            model=model,
-                            input=[dict(role="user", content="Remember the compatibility-test value: indigo-42."),
-                                   dict(role="assistant", content="I will remember indigo-42 as the compatibility-test value.")],
-                            instructions="Preserve the compatibility-test value for the next turn.",
-                        )
-                    stream = await client.responses.create(
-                        model=model, input=(
-                            [item.model_dump(exclude_none=True) if hasattr(item, "model_dump") else item for item in compacted.output] +
-                            [dict(role="user", content="What was the compatibility-test value? Reply with that value only.")]
-                            if compacted else [dict(role="user", content="Say exactly: Hello, world!")]
-                        ),
-                    )
-                    response = await completed_response(stream)
-                text = response_text(response)
-                if not text.strip():
-                    raise ValueError("The test response completed without text.")
-                if compacted and (not any((item.get("type") if isinstance(item, dict) else getattr(item, "type", None)) == "compaction" for item in compacted.output) or "indigo-42" not in text):
-                    raise ValueError("Compaction did not preserve the test value in the continuation.")
-                return dict(completed=True, kind=body.kind, text=text, response_id=response.id)
-            except Exception as error:
-                from openai import APIStatusError
-                message = f"ChatGPT {body.kind} test failed or was incomplete."
-                if isinstance(error, APIStatusError):
-                    message += f" HTTP {error.status_code}."
-                    code = getattr(error, "code", None)
-                    if isinstance(code, str) and code.replace("_", "").isalnum() and len(code) < 100:
-                        message += f" Code: {code}."
-                raise HTTPException(502, message + " Check the connection and ChatGPT plan usage.") from None
 
     @app.get("/api/settings")
     async def app_settings():

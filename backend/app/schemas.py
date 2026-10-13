@@ -7,11 +7,6 @@ class Request(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ChatGPTTest(Request):
-    model: str = Field(min_length=1, max_length=200)
-    kind: Literal["response", "compact"] = "response"
-
-
 class ConversationCreate(Request):
     workspace_id: str
 

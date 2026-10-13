@@ -674,7 +674,7 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
   );
 }
 
-type SettingsPage = "chat" | "guild" | "settings" | "cost" | "theme" | "defaults" | "budget" | "storage";
+type SettingsPage = "chat" | "guild" | "settings" | "cost" | "theme" | "defaults" | "budget" | "storage" | "chatgpt";
 
 const CHECKPOINT_AGES = [
   { days: 7, label: "Older than 7 days" },
@@ -887,6 +887,7 @@ function SettingsPanel({
   onChange: (changes: AppSettingsChange) => Promise<void>;
   onRefresh: () => Promise<void>;
 }) {
+  if (page === "chatgpt") return <ChatGPTConnection onRefresh={onRefresh} onBack={() => onNavigate("settings")} />;
   if (page === "defaults") return <DefaultsPage config={config} settings={settings} onNavigate={onNavigate} onChange={onChange} />;
   if (page === "budget") return <BudgetPage settings={settings} costs={costs} onNavigate={onNavigate} onChange={onChange} />;
   if (page === "storage") return <StoragePage onNavigate={onNavigate} />;
@@ -923,10 +924,6 @@ function SettingsPanel({
     <section className="settings-page">
       <button className="settings-back" type="button" onClick={() => onNavigate("chat")}>← Back to chat</button>
       <h1>Settings</h1>
-      {config?.providers.some((item) => item.id === "chatgpt") && <ChatGPTConnection
-        models={config.providers.find((item) => item.id === "chatgpt")?.models || []}
-        onRefresh={onRefresh}
-      />}
       <div className="title-model-setting">
         <h2>Title model</h2>
         <p className="settings-description">Generates a concise title from the first message.</p>
@@ -946,6 +943,7 @@ function SettingsPanel({
           const summary = chosen ? `${modelDisplayLabel(chosen)} · ${reasoningEffortLabel(selection!.effort)}${settings.default_web_search ? " · Web Search" : ""}` : "App default";
           return <button type="button" onClick={() => onNavigate("defaults")}><span><strong>New chat defaults</strong><small>{summary}</small></span><Icon name="chevron-right" /></button>;
         })()}
+        {config?.providers.some((item) => item.id === "chatgpt") && <button type="button" onClick={() => onNavigate("chatgpt")}><span><strong>ChatGPT connection</strong><small>{config.providers.find((item) => item.id === "chatgpt")?.enabled ? "Connected · Uses your ChatGPT plan" : "Connect your ChatGPT account"}</small></span><Icon name="chevron-right" /></button>}
         <button type="button" onClick={() => onNavigate("budget")}><span><strong>Monthly budget</strong><small>{settings.monthly_budget_usd ? `${usd.format(settings.monthly_budget_usd)} per month` : "Not set"}</small></span><Icon name="chevron-right" /></button>
         <button type="button" onClick={() => onNavigate("cost")}><span><strong>Cost</strong><small>Monthly estimated usage</small></span><Icon name="chevron-right" /></button>
         <button type="button" onClick={() => onNavigate("storage")}><span><strong>Storage</strong><small>Checkpoints, attachments and history</small></span><Icon name="chevron-right" /></button>

@@ -56,59 +56,9 @@ def test_config_no_credentials_and_origins(app_client):
     assert http.get("/api/skills").status_code == 404
 
 
-def test_chatgpt_probe_reports_native_compact_rejection_and_preserves_credentials(app_client, monkeypatch):
-    import httpx
-    from openai import AuthenticationError
-    from app.model_catalog import MODELS
-
-    http, _, client = app_client
-    auth = http.app.state.manager.chatgpt_auth
-    auth.record.update(client_id="oaiapp_test", access_token="private-test-token",
-                       scopes=["chatgpt.tokens.use.direct"])
-    auth.catalog = [dict(id="gpt-6-luna", model="gpt-6-luna", **MODELS["gpt-6-luna"])]
-    async def models():
-        return auth.catalog
-    async def rejected(**kwargs):
-        response = httpx.Response(401, request=httpx.Request("POST", "https://api.openai.com/v1/responses/compact"))
-        raise AuthenticationError("Denied", response=response, body={"code": "hardened_oauth_rule_missing"})
-    monkeypatch.setattr(auth, "models", models)
-    monkeypatch.setattr(client, "compact", rejected)
-    response = http.post("/api/auth/chatgpt/test", json={"model": "gpt-6-luna", "kind": "compact"})
-    assert response.status_code == 502
-    assert "HTTP 401" in response.json()["detail"]
-    assert "hardened_oauth_rule_missing" in response.json()["detail"]
-    assert auth.enabled and not client.calls  # No summary/Responses fallback.
-    assert "private-test-token" not in http.get("/api/auth/chatgpt").text
-    assert "private-test-token" not in http.get("/api/config").text
-    assert http.post("/api/auth/chatgpt/test", json={"model": "gpt-6-luna", "kind": "unknown"}).status_code == 422
-    assert http.post("/api/auth/chatgpt/logout", headers={"Origin": "https://evil.example"}).status_code == 403
-    assert auth.enabled
-
-
-def test_chatgpt_compact_probe_checks_continuation(app_client, monkeypatch):
-    from app.model_catalog import MODELS
-    from test_agent import Stream
-
-    http, _, client = app_client
-    auth = http.app.state.manager.chatgpt_auth
-    auth.record.update(client_id="oaiapp_test", access_token="private-test-token",
-                       scopes=["chatgpt.tokens.use.direct"])
-    auth.catalog = [dict(id="gpt-6-luna", model="gpt-6-luna", **MODELS["gpt-6-luna"])]
-    async def models():
-        return auth.catalog
-    calls = []
-    async def response(**kwargs):
-        calls.append(kwargs)
-        text = message()
-        text["content"][0]["text"] = "indigo-42"
-        return Stream([text])
-    monkeypatch.setattr(auth, "models", models)
-    monkeypatch.setattr(client, "create", response)
-    result = http.post("/api/auth/chatgpt/test", json={"model": "gpt-6-luna", "kind": "compact"})
-    assert result.status_code == 200
-    assert result.json()["text"] == "indigo-42"
-    assert calls[0]["input"][0]["type"] == "compaction"
-    assert len(client.compacts) == 1
+def test_chatgpt_debug_probe_is_not_a_product_endpoint(app_client):
+    http, _, _ = app_client
+    assert http.post("/api/auth/chatgpt/test", json={"model": "gpt-6-luna"}).status_code == 404
 
 
 def test_chatgpt_title_selection_survives_disconnection_without_api_billing_fallback(app_client):

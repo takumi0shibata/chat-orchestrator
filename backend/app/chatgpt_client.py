@@ -3,6 +3,19 @@
 from app.openai_client import build_openai_client
 
 
+def compacted_context(context):
+    """Keep the latest native compaction and the subsequent paired tool results."""
+    index = next((i for i in range(len(context) - 1, -1, -1)
+                  if context[i].get("type") == "compaction"), None)
+    if index is None:
+        return context
+    tail = context[index:]
+    visible_calls = {item.get("call_id") for item in tail if item.get("type") == "function_call"}
+    needed = {item.get("call_id") for item in tail if item.get("type") == "function_call_output"} - visible_calls
+    calls = [item for item in context[:index] if item.get("type") == "function_call" and item.get("call_id") in needed]
+    return [tail[0], *calls, *tail[1:]]
+
+
 def workspace_tools(view_image):
     return [dict(
         type="namespace", name="workspace", description="Tools in the local Docker workspace",
@@ -85,12 +98,6 @@ class ChatGPTClient:
             kwargs["input"] = [dict(role="user", content=kwargs["input"])]
         kwargs.update(store=False, stream=True)
         return ChatGPTStream(await self.client.responses.create(**kwargs))
-
-    async def compact(self, *, model, input, instructions):
-        self.client.api_key = await self.auth.access_token()
-        return await self.client.responses.compact(
-            model=model, input=input, instructions=instructions,
-        )
 
     async def close(self):
         await self.client.close()

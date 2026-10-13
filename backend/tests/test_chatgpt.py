@@ -11,7 +11,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from app.chatgpt_auth import ChatGPTAuth, ISSUER, JWKS, RESOURCE, TOKEN
-from app.chatgpt_client import ChatGPTClient, ChatGPTStream, completed_response, response_text
+from app.chatgpt_client import ChatGPTClient, ChatGPTStream, compacted_context, completed_response, response_text
 from app.config import Settings
 from app.model_catalog import MODELS
 from test_agent import Client, FakeSandbox, Stream, message, setup
@@ -184,7 +184,7 @@ def test_identity_without_plan_scope_does_not_enable_inference(tmp_path):
     asyncio.run(scenario())
 
 
-def test_responses_wire_contract_and_native_compact_endpoint(tmp_path):
+def test_responses_wire_contract(tmp_path):
     async def scenario():
         auth = ChatGPTAuth(Settings(_env_file=None, data_dir=tmp_path))
         auth.record.update(credentials())
@@ -215,10 +215,6 @@ def test_responses_wire_contract_and_native_compact_endpoint(tmp_path):
             assert body["store"] is False and body["stream"] is True
             assert body["input"] == [dict(role="user", content="hello")]
             assert "max_output_tokens" not in body and "prompt_cache_key" not in body
-            compacted = await client.compact(model="gpt-6-luna", input=[dict(role="user", content="context")], instructions="Keep facts")
-            assert requests[1].url.path == "/v1/responses/compact"
-            assert compacted.output[0].type == "compaction"
-            assert json.loads(requests[1].content) == dict(model="gpt-6-luna", input=[dict(role="user", content="context")], instructions="Keep facts")
         finally:
             await client.close()
             await auth.close()
@@ -291,26 +287,74 @@ def test_chatgpt_shell_uses_existing_sandbox_and_paired_history(tmp_path):
     asyncio.run(scenario())
 
 
-def test_compact_failure_preserves_original_history_no_summary_fallback(tmp_path):
+def test_server_compaction_preserves_shell_pairs_and_next_turn(tmp_path):
     async def scenario():
-        manager, store, fake, request = setup(tmp_path, [[message()]], provider="chatgpt", compact_token_threshold=1000)
+        first = dict(type="compaction", id="cmp1", encrypted_content="first")
+        latest = dict(type="compaction", id="cmp2", encrypted_content="latest")
+        call = dict(type="function_call", id="fn", call_id="shell1", name="shell", namespace="workspace",
+                    arguments=json.dumps(dict(commands=["printf remembered"], timeout_ms=None)))
+        manager, store, fake, request = setup(tmp_path, [[first, message()], [call, latest], [message()]], provider="chatgpt", compact_token_threshold=1000)
         manager.chatgpt_auth.record.update(credentials())
         manager.chatgpt_auth.catalog = [dict(id="gpt-5.6-sol", model="gpt-5.6-sol", **MODELS["gpt-5.6-sol"])]
-        original = [dict(role="user", content="Important original context")]
-        store.save_context(request.conversation_id, original, "chatgpt", request.model)
-        prior = store.create_run(request.model_dump())
-        store.event(prior["id"], "response", dict(usage=dict(input_tokens=2000, output_tokens=10)))
-        store.save_context(request.conversation_id, original, "chatgpt", request.model, rid=prior["id"])
-        store.status(prior["id"], "completed", "Complete")
-        async def unsupported(**kwargs):
-            raise RuntimeError("subscription_sharing_route_not_supported")
-        fake.compact = unsupported
+        request.input = "Obsolete large transcript to compact"
+        try:
+            run = manager.start(request)
+            await manager.tasks[run["id"]]
+            assert store.run(run["id"])["status"] == "completed"
+            saved = store.conversation(request.conversation_id)["context"]
+            assert saved[0] == first
+            assert "Obsolete large transcript" not in json.dumps(saved)
+            request.input = "Continue and use shell"
+            run = manager.start(request)
+            await manager.tasks[run["id"]]
+            assert store.run(run["id"])["status"] == "completed"
+            assert not fake.compacts
+            assert all(c["context_management"] == [dict(type="compaction", compact_threshold=1000)] for c in fake.calls)
+            next_input = fake.calls[-1]["input"]
+            assert next_input[0] == latest
+            assert first not in next_input
+            assert call in next_input
+            result = next(i for i in next_input if i.get("type") == "function_call_output")
+            assert result["call_id"] == "shell1"
+            assert FakeSandbox.instances[-1].commands == ["printf remembered"]
+            assert any(e["type"] == "compaction" and e["data"]["mode"] == "server" for e in store.events(run["id"]))
+        finally:
+            await manager.shutdown()
+    asyncio.run(scenario())
+
+
+def test_compacted_context_without_boundary_is_unchanged():
+    context = [dict(role="user", content="hello")]
+    assert compacted_context(context) is context
+
+
+def test_failed_server_compaction_stream_does_not_replace_history(tmp_path):
+    async def scenario():
+        manager, store, fake, request = setup(tmp_path, [], provider="chatgpt")
+        manager.chatgpt_auth.record.update(credentials())
+        manager.chatgpt_auth.catalog = [dict(id=request.model, model=request.model, **MODELS[request.model])]
+        original = dict(role="user", content="Keep this original context")
+        store.save_context(request.conversation_id, [original], "chatgpt", request.model)
+        class Failed:
+            closed = False
+            async def __aiter__(self):
+                yield NS(type="response.output_item.added", item=dict(type="compaction", id="partial", encrypted_content="unconfirmed"))
+                yield NS(type="response.failed", response=None)
+            async def close(self):
+                self.closed = True
+        failed = Failed()
+        create = fake.create
+        async def response(**kwargs):
+            return failed if kwargs.get("stream") else await create(**kwargs)
+        fake.create = response
         try:
             run = manager.start(request)
             await manager.tasks[run["id"]]
             assert store.run(run["id"])["status"] == "failed"
-            assert original[0] in store.conversation(request.conversation_id)["context"]
-            assert not fake.calls
+            saved = store.conversation(request.conversation_id)["context"]
+            assert original in saved
+            assert not any(i.get("type") == "compaction" for i in saved)
+            assert failed.closed
         finally:
             await manager.shutdown()
     asyncio.run(scenario())

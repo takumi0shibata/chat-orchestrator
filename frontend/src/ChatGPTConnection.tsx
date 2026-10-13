@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import type { Model } from "./types";
 
 interface Connection {
   connected: boolean;
@@ -10,17 +9,13 @@ interface Connection {
   error: string | null;
 }
 
-export function ChatGPTConnection({ models, onRefresh }: {
-  models: Model[];
+export function ChatGPTConnection({ onRefresh, onBack }: {
   onRefresh: () => Promise<void>;
+  onBack: () => void;
 }) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [result, setResult] = useState("");
-  const [selected, setSelected] = useState("");
-  const model = models.some((item) => item.id === selected) ? selected : models[0]?.id || "";
-
   useEffect(() => {
     let alive = true;
     api<Connection>("/auth/chatgpt").then((value) => alive && setConnection(value))
@@ -51,7 +46,7 @@ export function ChatGPTConnection({ models, onRefresh }: {
     const popup = window.open("about:blank", "_blank");
     if (!popup) { setError("Allow popups to continue with ChatGPT."); return; }
     popup.opener = null;
-    setBusy(true); setError(""); setResult("");
+    setBusy(true); setError("");
     try {
       const { authorization_url } = await api<{ authorization_url: string }>("/auth/chatgpt/login", { method: "POST" });
       popup.location.href = authorization_url;
@@ -60,43 +55,55 @@ export function ChatGPTConnection({ models, onRefresh }: {
     finally { setBusy(false); }
   }
 
-  async function action(path: "logout" | "cancel" | "test", kind: "response" | "compact" = "response") {
-    setBusy(true); setError(""); setResult("");
+  async function action(path: "logout" | "cancel") {
+    setBusy(true); setError("");
     try {
-      if (path === "test") {
-        const value = await api<{ completed: boolean; text: string }>("/auth/chatgpt/test", {
-          method: "POST", body: JSON.stringify({ model, kind }),
-        });
-        setResult(value.completed ? `${kind === "compact" ? "Compact + continuation" : "Response"}: ${value.text}` : "The response did not complete.");
-      } else {
-        setConnection(await api<Connection>(`/auth/chatgpt/${path}`, { method: "POST" }));
-        await onRefresh();
-      }
+      setConnection(await api<Connection>(`/auth/chatgpt/${path}`, { method: "POST" }));
+      await onRefresh();
     } catch (e) { setError(String(e)); }
     finally { setBusy(false); }
   }
 
+  async function refresh() {
+    setBusy(true); setError("");
+    try { setConnection(await api<Connection>("/auth/chatgpt")); await onRefresh(); }
+    catch (e) { setError(String(e)); }
+    finally { setBusy(false); }
+  }
+
   const pending = connection?.login_status === "pending";
-  return <section className="title-model-setting" aria-label="ChatGPT connection">
-    <h2>ChatGPT connection</h2>
-    <p className="settings-description">Connect an eligible ChatGPT account to use your plan in this local app. API-key and Azure connections remain available.</p>
-    {connection?.connected && <p>{connection.email || "ChatGPT account"} · Connected</p>}
-    {connection?.connected && <p className="settings-description">{connection.plan_usage ? "ChatGPT plan usage is enabled." : "ChatGPT plan usage was not granted. Reconnect to enable it."}</p>}
-    {pending && <p role="status">Complete sign-in in your browser.</p>}
-    <div className="settings-actions">
-      <button className="settings-primary" type="button" disabled={busy || pending || !connection} onClick={() => void signIn()}>{connection?.connected ? "Reconnect with ChatGPT" : "Continue with ChatGPT"}</button>
-      {pending && <button className="settings-secondary" type="button" disabled={busy} onClick={() => void action("cancel")}>Cancel sign-in</button>}
-      {connection?.connected && <button className="settings-secondary" type="button" disabled={busy || pending} onClick={() => void action("logout")}>Disconnect ChatGPT</button>}
+  const enabled = connection?.connected && connection.plan_usage;
+  const status = pending ? "Awaiting sign-in" : enabled ? "Connected" : connection?.connected ? "Permission needed" : connection ? "Not connected" : "Loading…";
+  return <section className="settings-page chatgpt-page">
+    <button className="settings-back" type="button" onClick={onBack}>← Settings</button>
+    <h1>ChatGPT connection</h1>
+    <p className="settings-description">Use your ChatGPT plan for chats in this app.</p>
+    <div className="chatgpt-card" aria-label="ChatGPT account">
+      <div className="chatgpt-card-heading">
+        <div className="chatgpt-account-mark" aria-hidden="true">C</div>
+        <div className="chatgpt-account-info">
+          <h2>ChatGPT</h2>
+          <p>{connection?.connected ? connection.email || "Your ChatGPT account" : "Connect your account"}</p>
+        </div>
+        <span className={`chatgpt-status${enabled ? " is-connected" : ""}`}>{status}</span>
+      </div>
+      <div className="chatgpt-card-body">
+        <p>{pending ? "Complete sign-in in the browser tab that opened. This page will update automatically." : enabled ? "Your plan is ready. Select ChatGPT as the provider in a new chat." : connection?.connected ? "Your account is connected, but permission to use your plan is missing. Reconnect and allow ChatGPT plan usage." : "Sign in and allow this app to use your ChatGPT plan. An eligible account is required."}</p>
+        <div className="chatgpt-actions">
+          {!enabled && !pending && <button className="settings-primary" type="button" disabled={busy || !connection} onClick={() => void signIn()}>Continue with ChatGPT</button>}
+          {enabled && !pending && <>
+            <a className="chatgpt-manage" href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">Manage usage ↗</a>
+            <button className="settings-secondary" type="button" disabled={busy} onClick={() => void signIn()}>Reconnect</button>
+          </>}
+          {pending && <button className="settings-secondary" type="button" disabled={busy} onClick={() => void action("cancel")}>Cancel sign-in</button>}
+          {connection?.connected && !pending && <button className="settings-secondary" type="button" disabled={busy} onClick={() => void action("logout")}>Disconnect</button>}
+          {!connection && error && <button className="settings-secondary" type="button" disabled={busy} onClick={() => void refresh()}>Try again</button>}
+        </div>
+        {busy && <p className="chatgpt-feedback" role="status">Updating connection…</p>}
+        {(error || connection?.error) && <p className="chatgpt-error" role="alert">{error || connection?.error}</p>}
+      </div>
     </div>
-    {connection?.plan_usage && <>
-      <div className="title-model-controls"><label>Test model<select aria-label="ChatGPT test model" value={model} disabled={busy || pending} onChange={(e) => setSelected(e.target.value)}>
-        {models.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-      </select></label><button className="settings-secondary" type="button" disabled={busy || pending || !model} onClick={() => void action("test")}>Test ChatGPT response</button>
-      <button className="settings-secondary" type="button" disabled={busy || pending || !model} onClick={() => void action("test", "compact")}>Test ChatGPT compact</button></div>
-      <p className="settings-description">Tests use your ChatGPT plan allowance. Compact calls the native endpoint and checks that a following response remembers the test value. ChatGPT usage is excluded from API cost estimates. Remote MCP is unavailable on this connection.</p>
-    </>}
-    {busy && <p role="status">Working…</p>}
-    {result && <p role="status">Test completed · {result}</p>}
-    {(error || connection?.error) && <p role="alert">{error || connection?.error}</p>}
+    <p className="chatgpt-footnote">ChatGPT plan usage is separate from API billing. Your OpenAI and Azure connections are available independently.</p>
+    {connection?.connected && <p className="chatgpt-footnote">Disconnect removes the connection from this app. You can also manage app access in ChatGPT settings.</p>}
   </section>;
 }

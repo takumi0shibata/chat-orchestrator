@@ -6,7 +6,7 @@ OpenAI APIキー、Azure OpenAIとは別に `chatgpt` プロバイダを追加�
 
 1. 通常どおりバックエンドとフロントエンドを起動します。追加依存関係は `make setup-backend` で同期してください。
 2. Settings → ChatGPT connection → Continue with ChatGPT を押します。ポップアップを許可し、ブラウザで本人がログインとChatGPT利用枠の許可を完了します。対象アカウント・ワークスペースの利用資格やポリシーに依存します。
-3. 接続完了後、Test modelを選び「Test ChatGPT response」で短い挨拶を確認できます。「Test ChatGPT compact」はネイティブ `/v1/responses/compact` を呼び、成功時には圧縮結果を使う次の応答まで検証します。いずれも本人のChatGPT利用枠を使います。
+3. 接続ページのManage usageから利用枠を管理できます。再接続・切断もこのページで行います。設定一覧ではNew chat defaults、Monthly budgetと同じ階層です。応答・compactの確認ボタンとデバッグ用APIは製品から削除しています。
 4. 新規チャットの＋メニュー → ProviderでChatGPTを選択します。既存会話でプロバイダは変更できません。
 
 タイトル生成プロバイダも独立して選べます。ChatGPT会話でOpenAI APIキー・Azureのタイトルモデルを選択した場合、タイトル生成はその接続のAPI課金です。ChatGPTのトークン利用はAPI単価による月額推計に加算しません。利用枠の管理・許可の取り消しはChatGPT側の設定から行います。Disconnect ChatGPTはこのアプリのローカルトークンを削除します。
@@ -43,14 +43,19 @@ ChatGPT接続のShellは名前空間内のfunction toolとして公開し、既�
 | 既存のネイティブ `type=shell` | HTTP 400、`Unsupported tool type: shell` |
 | function toolから既存Docker Shellを実行 | 成功。`printf shell-ok` の終了コード0、出力とコマンド履歴を確認 |
 | ネイティブ `/v1/responses/compact` | HTTP 401、`hardened_oauth_rule_missing` |
+| 公式サーバー側compactionと会話継続 | 成功。圧縮後の再起動・Shell実行・次ターンでの記憶保持を確認 |
 
-compactの拒否は今回のアカウント・権限・経路での観測結果です。すべてのアカウントでの非対応を断定するものではありません。直接呼ぶ実装と再検証ボタンを残し、要約による代替圧縮は入れていません。ChatGPT会話が既存の圧縮閾値に到達するとネイティブcompactを試み、拒否された場合は実行が失敗します。元の履歴を圧縮結果で置き換えず保持し、APIキー課金への切替もしません。長い会話での方針は、この結果を踏まえて別途検討します。
+ChatGPT接続では独立compactを呼びません。通常のResponsesに `context_management=[{"type":"compaction","compact_threshold": COMPACT_TOKEN_THRESHOLD}]` を指定し、公式サーバー側compactionを利用します。閾値は従来と共通で既定258,000トークンです。完了した応答内の最新compactionアイテムより前の履歴を除き、暗号化アイテムとそれ以降の履歴を保存します。圧縮の直前に発行されたShell呼び出しは、実行結果と対応する形で保持します。途中失敗時は未確認の圧縮結果で履歴を置き換えません。人間向け要約による代替圧縮はありません。
+
+実アカウントで、圧縮後にランタイムを再起動し、覚えた値をShellでファイルに書き込み・読み戻し、次のターンでもその値を回答できることを検証しました。テスト用閾値は2048です。APIキー・Azure接続は従来の独立 `/responses/compact` を維持します。
+
+応答全体のトークン使用量は、圧縮して保存した文脈だけのサイズではないため、圧縮直後の使用量表示は未計測になります。次の応答の実測値で更新します。
 
 確認用サーバーは `/private/tmp/chat-orchestrator-chatgpt-dev/` をデータ・作業フォルダに使い、既存の会話データは使っていません。通常のアプリを標準データディレクトリで起動した場合は、そのアプリのSettingsから改めて接続してください。
 
 ## 自動テスト
 
-認証のstate/nonce/署名/issuer/audience/期限検証、再利用拒否、0600保存、更新の直列化とローテーション、失効と一時エラーの区別、利用枠許可の欠落、ストリーム完了とアイテム集約、Shell結果と履歴の対応、compact失敗時の履歴保持を検証します。モックテストが通ることは、実サービスがcompactを許可することを意味しません。
+認証のstate/nonce/署名/issuer/audience/期限検証、再利用拒否、0600保存、更新の直列化とローテーション、失効と一時エラーの区別、利用枠許可の欠落、ストリーム完了とアイテム集約、Shell結果と履歴の対応、複数のサーバー側compaction境界と会話継続を検証します。
 
 ```sh
 backend/.venv/bin/python -m pytest backend/tests -m 'not live and not docker' -q
@@ -66,3 +71,13 @@ npm run build
 - [Models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
 - [Preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
 - [Token reference](https://developers.openai.com/siwc/token-sharing-open-source/token-reference)
+- [公式Compaction仕様](https://developers.openai.com/api/docs/guides/compaction)
+
+## 実アカウント統合テスト
+
+バックエンドを停止し、既存Dockerイメージと本人が許可したChatGPT資格情報を使います。既存データと作業フォルダは変更せず、pytestの一時領域で検証します。トークン更新が競合しないよう、資格情報を使うアプリはテスト中に停止してください。
+
+```sh
+RUN_CHATGPT_LIVE_TESTS=1 CHATGPT_AUTH_FILE=/absolute/path/to/chatgpt-auth.json \
+  backend/.venv/bin/python -m pytest backend/tests/test_chatgpt_live.py -q
+```

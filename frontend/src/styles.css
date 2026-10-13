@@ -2464,6 +2464,26 @@ h2 {
 .settings-form select { width: 100%; background-color: #fff; }
 .settings-form > label.settings-checkbox { display: flex; align-items: center; gap: 8px; color: #35373c; font-size: 13px; }
 .settings-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.chatgpt-card { border: 1px solid #e3e3e6; border-radius: 16px; background: #fff; overflow: hidden; }
+.chatgpt-card-heading { display: flex; align-items: center; gap: 14px; padding: 24px; border-bottom: 1px solid #eeeeef; }
+.chatgpt-account-mark { display: grid; place-items: center; flex: 0 0 44px; height: 44px; border-radius: 13px; background: #f1f2f4; color: #34363b; font-size: 22px; font-weight: 600; }
+.chatgpt-account-info { min-width: 0; flex: 1; }
+.chatgpt-account-info p { margin: 0; color: #777980; font-size: 13px; overflow-wrap: anywhere; }
+.chatgpt-status { flex-shrink: 0; padding: 5px 10px; border-radius: 999px; background: #f0f1f3; color: #696b73; font-size: 11px; }
+.chatgpt-status.is-connected { background: #edf5ef; color: #347246; }
+.chatgpt-card-body { padding: 24px; }
+.chatgpt-card-body > p { margin: 0 0 20px; color: #65676e; font-size: 14px; line-height: 1.6; }
+.chatgpt-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.chatgpt-manage { display: inline-flex; align-items: center; padding: 8px 14px; border-radius: 8px; background: #25262a; color: #fff; font-size: 13px; text-decoration: none; }
+.chatgpt-manage:hover { background: #45464c; color: #fff; }
+.chatgpt-card-body > .chatgpt-feedback, .chatgpt-card-body > .chatgpt-error { margin: 16px 0 0; font-size: 13px; }
+.chatgpt-card-body > .chatgpt-error { color: #a43f36; overflow-wrap: anywhere; }
+.chatgpt-footnote { margin: 18px 2px 0; color: #85878e; font-size: 12px; line-height: 1.6; }
+@media (max-width: 700px) {
+  .chatgpt-card-heading { flex-wrap: wrap; padding: 20px; }
+  .chatgpt-status { margin-left: 58px; }
+  .chatgpt-card-body { padding: 20px; }
+}
 .settings-primary, .settings-secondary {
   justify-self: start;
   padding: 7px 14px;

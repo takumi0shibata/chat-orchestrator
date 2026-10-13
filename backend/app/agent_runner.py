@@ -15,7 +15,7 @@ from app.checkpoints import Checkpoints
 from app.model_catalog import pricing_for, validate_model
 from app.openai_client import build_openai_client
 from app.chatgpt_auth import ChatGPTAuth
-from app.chatgpt_client import ChatGPTClient, completed_response, workspace_tools
+from app.chatgpt_client import ChatGPTClient, compacted_context, completed_response, workspace_tools
 from app.provider_routes import ProviderRoutes
 from app.project_instructions import load_project_instructions
 from app.sandbox import CommandTimeoutError, Sandbox, command_time_limit, docker
@@ -1003,7 +1003,7 @@ class RunManager:
         if self.settings.reasoning_summary != "off" and request.reasoning_effort != "none":
             reasoning["summary"] = self.settings.reasoning_summary
         for round_index in range(self.settings.max_model_rounds):
-            if needs_compact:
+            if needs_compact and request.provider != "chatgpt":
                 self.store.status(rid, "model_wait", "Compacting conversation context")
                 self.store.event(rid, "compaction_start", dict(
                     tokens=context_size, threshold=self.settings.compact_token_threshold,
@@ -1047,9 +1047,13 @@ class RunManager:
                 prompt_cache_key=request.conversation_id,
                 max_output_tokens=self.settings.max_model_output_tokens,
                 stream=True,
+                **(dict(context_management=[dict(
+                    type="compaction", compact_threshold=self.settings.compact_token_threshold,
+                )]) if request.provider == "chatgpt" else {}),
             )
             response = None
             message_phases = {}
+            server_compacting = False
             try:
                 async for event in stream:
                     kind = event.type
@@ -1076,6 +1080,11 @@ class RunManager:
                         )
                     elif kind == "response.output_item.added":
                         item = jsonable(event.item)
+                        if request.provider == "chatgpt" and item.get("type") == "compaction" and not server_compacting:
+                            server_compacting = True
+                            self.store.event(rid, "compaction_start", dict(
+                                threshold=self.settings.compact_token_threshold, mode="server",
+                            ))
                         if item.get("type") == "message" and item.get("phase") in (
                             "commentary", "final_answer"
                         ):
@@ -1251,6 +1260,16 @@ class RunManager:
                     ))
                     continue
                 context.append(await self.shell_call(rid, sandbox, item))
+            if request.provider == "chatgpt" and any(item.get("type") == "compaction" for item in output):
+                context = compacted_context(context)
+                if environment not in map(environment_text, context):
+                    context.append(environment_message)
+                # Usage for the whole response is not the size of the retained
+                # compacted window. The next request will report its actual size.
+                self.store.event(rid, "compaction", dict(
+                    label="Conversation context compacted", mode="server",
+                    threshold=self.settings.compact_token_threshold,
+                ))
             # Checkpoint only fully paired calls; a cancelled partial batch is never replayed automatically.
             self.store.save_context(
                 request.conversation_id, context, request.provider, request.model, rid=rid
