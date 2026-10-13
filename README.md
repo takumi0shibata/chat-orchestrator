@@ -26,6 +26,8 @@ make dev-frontend
 
 [チャット](http://127.0.0.1:5173) / [API仕様](http://127.0.0.1:8000/docs)
 
+APIキーの代わりにChatGPTの利用枠を使う場合は、Settings → ChatGPT connection → Continue with ChatGPT でログインし、利用枠へのアクセスを許可してください。既存のOpenAI APIキー・Azure接続と併用できます。設定画面で最小Responses応答とネイティブcompactを個別にテストできます。ChatGPT接続のShellはfunction tool経由で既存Dockerサンドボックスを使用します。2026-10-13の実アカウント検証ではネイティブcompactが拒否されました。代替圧縮は実装していません。[対応範囲・認証・検証結果](docs/chatgpt-login.md)を参照してください。
+
 バックエンドはホスト上の単一プロセスで起動してください。複数ワーカーは禁止です。同一データディレクトリを使う二重起動はロックで拒否します。通常起動ではreloadを使わず、実行中の再起動を避けます。設定変更後は再起動してください。
 
 Docker Composeはイメージのビルド専用です (`docker compose --profile build build sandbox`)。バックエンドをDocker内で動かしたり、サンドボックスにDockerソケットを渡したりしません。

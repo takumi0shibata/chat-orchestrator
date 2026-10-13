@@ -42,8 +42,9 @@ class ModelRoute:
 
 
 class ProviderRoutes:
-    def __init__(self, settings, config, *, allow_unconfigured=False):
+    def __init__(self, settings, config, *, allow_unconfigured=False, chatgpt_auth=None):
         self.config = config
+        self.chatgpt_auth = chatgpt_auth
         self.allow_unconfigured = allow_unconfigured
         self.openai = Connection("openai", "OpenAI", None, settings.openai_api_key)
         self.azure = {}
@@ -71,6 +72,8 @@ class ProviderRoutes:
         )
 
     def models(self, provider):
+        if provider == "chatgpt":
+            return self.chatgpt_auth.catalog if self.chatgpt_auth and self.chatgpt_auth.enabled else []
         catalog = models_for(provider, self.config)
         if provider == "openai":
             return catalog if self.available(self.openai) else []
@@ -88,8 +91,12 @@ class ProviderRoutes:
             raise ValueError("Unsupported or unavailable model/deployment")
         if provider == "openai":
             return ModelRoute(self.openai, model)
+        if provider == "chatgpt":
+            return ModelRoute(Connection(self.chatgpt_auth.record["client_id"], "ChatGPT", None, None), model)
         deployment = next(d for d in self.config.azure_models if d.selection_id == model)
         return ModelRoute(self.azure[deployment.connection_id], deployment.deployment)
 
     def secrets(self):
-        return [c.api_key for c in [self.openai, *self.azure.values()] if c.api_key]
+        return [c.api_key for c in [self.openai, *self.azure.values()] if c.api_key] + (
+            self.chatgpt_auth.secrets() if self.chatgpt_auth else []
+        )

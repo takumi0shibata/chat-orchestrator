@@ -9,6 +9,7 @@ import type { LucideIcon } from "lucide-react";
 import { api, events } from "./api";
 import { MarkdownContent } from "./components/MarkdownContent";
 import { TextFileEditor } from "./components/TextFileEditor";
+import { ChatGPTConnection } from "./ChatGPTConnection";
 import {
   exactSkillMatch,
   findSkillMention,
@@ -876,6 +877,7 @@ function SettingsPanel({
   costs,
   onNavigate,
   onChange,
+  onRefresh,
 }: {
   page: SettingsPage;
   config: Config | null;
@@ -883,6 +885,7 @@ function SettingsPanel({
   costs: CostSummary | null;
   onNavigate: (page: SettingsPage) => void;
   onChange: (changes: AppSettingsChange) => Promise<void>;
+  onRefresh: () => Promise<void>;
 }) {
   if (page === "defaults") return <DefaultsPage config={config} settings={settings} onNavigate={onNavigate} onChange={onChange} />;
   if (page === "budget") return <BudgetPage settings={settings} costs={costs} onNavigate={onNavigate} onChange={onChange} />;
@@ -898,7 +901,7 @@ function SettingsPanel({
       <h1>Cost</h1>
       <p className="settings-description">Monthly estimated LLM token costs in USD.</p>
       <div className="cost-current"><span>This month</span><strong>{money.format(current)}</strong></div>
-      <div className="cost-notes"><span>Estimated</span><span>LLM token costs only</span><span>Tool fees excluded</span><span>UTC</span></div>
+      <div className="cost-notes"><span>Estimated</span><span>LLM token costs only</span><span>Tool fees excluded</span><span>ChatGPT plan usage excluded</span><span>UTC</span></div>
       <div className="cost-list" aria-label="Monthly costs">
         {(costs?.months || []).map((item) => <div className="cost-row" key={item.month}><span>{item.month}</span><strong>{money.format(item.usd)}</strong></div>)}
       </div>
@@ -920,6 +923,10 @@ function SettingsPanel({
     <section className="settings-page">
       <button className="settings-back" type="button" onClick={() => onNavigate("chat")}>← Back to chat</button>
       <h1>Settings</h1>
+      {config?.providers.some((item) => item.id === "chatgpt") && <ChatGPTConnection
+        models={config.providers.find((item) => item.id === "chatgpt")?.models || []}
+        onRefresh={onRefresh}
+      />}
       <div className="title-model-setting">
         <h2>Title model</h2>
         <p className="settings-description">Generates a concise title from the first message.</p>
@@ -2466,7 +2473,7 @@ export function App() {
           if (latest) selectConversation(latest);
           else await newConversation(projectId);
         }} /></Suspense> : settingsPage !== "chat" ? (
-          <SettingsPanel page={settingsPage} config={config} settings={appSettings} costs={costs} onNavigate={setSettingsPage} onChange={saveAppSettings} />
+          <SettingsPanel page={settingsPage} config={config} settings={appSettings} costs={costs} onNavigate={setSettingsPage} onChange={saveAppSettings} onRefresh={refreshConfig} />
         ) : <>
         {cid && (
           <header className="chat-header">
@@ -2697,7 +2704,7 @@ export function App() {
                       />
                       <Choices
                         label="Remote MCP"
-                        items={config?.mcp_servers || []}
+                        items={provider === "chatgpt" ? [] : config?.mcp_servers || []}
                         selected={mcps}
                         change={setMcps}
                         disabled={active}
@@ -2710,6 +2717,7 @@ export function App() {
                           disabled={active || runs.length > 0}
                           onChange={(e) => {
                             setProvider(e.target.value);
+                            if (e.target.value === "chatgpt") setMcps([]);
                             setModel(defaultModelId(
                               config?.providers.find((p) => p.id === e.target.value)?.models ?? [],
                             ));

@@ -14,6 +14,8 @@ from app.attachments import direct_input, file_snapshot
 from app.checkpoints import Checkpoints
 from app.model_catalog import pricing_for, validate_model
 from app.openai_client import build_openai_client
+from app.chatgpt_auth import ChatGPTAuth
+from app.chatgpt_client import ChatGPTClient, completed_response, workspace_tools
 from app.provider_routes import ProviderRoutes
 from app.project_instructions import load_project_instructions
 from app.sandbox import CommandTimeoutError, Sandbox, command_time_limit, docker
@@ -112,7 +114,8 @@ class RunManager:
         self.checkpoints = Checkpoints(
             settings.data_dir / "checkpoints", settings.checkpoint_max_file_bytes
         )
-        self.routes = ProviderRoutes(settings, config, allow_unconfigured=bool(client_factory))
+        self.chatgpt_auth = ChatGPTAuth(settings)
+        self.routes = ProviderRoutes(settings, config, allow_unconfigured=bool(client_factory), chatgpt_auth=self.chatgpt_auth)
         default = self.routes.azure["default"]
         if self.routes.available(default):
             self.store.bind_legacy_azure(default.base_url)
@@ -123,6 +126,8 @@ class RunManager:
         if cache_key not in self.clients:
             if self.client_factory:
                 self.clients[cache_key] = self.client_factory(provider, route.connection.id)
+            elif provider == "chatgpt":
+                self.clients[cache_key] = ChatGPTClient(self.settings, self.chatgpt_auth)
             else:
                 self.clients[cache_key] = build_openai_client(
                     settings=self.settings,
@@ -146,9 +151,16 @@ class RunManager:
             raise ValueError(
                 "Workspace is blocked after a container cleanup failure; restart the backend after fixing Docker"
             )
-        validate_model(
-            request.provider, request.model, request.reasoning_effort, self.config
-        )
+        if request.provider == "chatgpt":
+            if self.chatgpt_auth.login_status == "pending":
+                raise ValueError("Finish or cancel ChatGPT sign-in first")
+            capability = next((m for m in self.routes.models("chatgpt") if m["id"] == request.model), None)
+            if not capability or request.reasoning_effort not in capability["efforts"]:
+                raise ValueError("Unsupported ChatGPT model or reasoning effort")
+            if request.mcp_ids:
+                raise ValueError("Remote MCP is unavailable with ChatGPT plan usage. Use an API-key connection.")
+        else:
+            validate_model(request.provider, request.model, request.reasoning_effort, self.config)
         if (conversation["provider"] and conversation["provider"] != request.provider) or (
             conversation["azure_connection_id"] and request.provider != "azure_openai"
         ):
@@ -181,8 +193,12 @@ class RunManager:
 
     def title_selection(self):
         configured = self.store.settings()
+        if configured["title_provider"] == "chatgpt" and not self.routes.models("chatgpt"):
+            # A disconnected account or temporarily unavailable catalog must not
+            # silently turn a ChatGPT title request into API-key billing.
+            return configured
         available = []
-        for provider in ("openai", "azure_openai"):
+        for provider in ("openai", "azure_openai", "chatgpt"):
             available.extend((provider, item) for item in self.routes.models(provider))
         current = next(
             (
@@ -235,6 +251,8 @@ class RunManager:
                 ),
                 None,
             )
+        if not current and available:
+            current = next((item for item in available if item[0] == "chatgpt" and item[1]["model"] == "gpt-6-luna"), None)
         if not current and available:
             current = available[0]
         if current and (
@@ -321,6 +339,8 @@ class RunManager:
             raise ValueError("Unsupported or unavailable title model")
 
     def record_usage(self, response_id, provider, model, kind, usage):
+        if provider == "chatgpt":
+            return  # ChatGPT plan usage is not a Platform API dollar charge.
         usage = jsonable(usage) if usage else {}
         base_model, prices = pricing_for(provider, model, self.config)
         if not response_id or not base_model or not prices:
@@ -414,6 +434,8 @@ class RunManager:
                     max_output_tokens=self.settings.max_title_output_tokens,
                     store=False,
                 )
+                if provider == "chatgpt":
+                    response = await completed_response(response)
             raw = getattr(response, "output_text", "") or ""
             if not raw:
                 for raw_item in getattr(response, "output", []):
@@ -465,10 +487,91 @@ class RunManager:
             dict(request_id=approval.request_id, approved=approval.approve),
         )
 
+    async def shell_call(self, rid, sandbox, item):
+        action = item["action"]
+        results = []
+        requested_timeout = (action.get("timeout_ms") or self.settings.command_timeout * 1000) / 1000
+        timeout = command_time_limit(self.settings, requested_timeout)
+        for index, command in enumerate(action["commands"]):
+            self.store.status(
+                rid, "command_running", "Running command"
+            )
+            self.store.event(
+                rid,
+                "command",
+                dict(call_id=item["call_id"], index=index, command=command, timeout_seconds=timeout, requested_timeout_ms=action.get("timeout_ms")),
+            )
+            started = monotonic()
+
+            async def emit(
+                channel, text, call_id=item["call_id"], command_index=index
+            ):
+                self.store.event(
+                    rid,
+                    "command_output",
+                    dict(
+                        call_id=call_id,
+                        index=command_index,
+                        channel=channel,
+                        text=text,
+                    ),
+                )
+
+            try:
+                result = await sandbox.execute(
+                    command,
+                    emit,
+                    timeout,
+                )
+            except CommandTimeoutError as error:
+                self.store.event(
+                    rid,
+                    "command_done",
+                    dict(
+                        call_id=item["call_id"],
+                        index=index,
+                        elapsed=monotonic() - started,
+                        outcome={"type": "timeout", "timeout_seconds": error.timeout_seconds},
+                    ),
+                )
+                raise
+            results.append(result)
+            self.store.event(
+                rid,
+                "command_done",
+                dict(
+                    call_id=item["call_id"],
+                    index=index,
+                    elapsed=monotonic() - started,
+                    outcome=result["outcome"],
+                ),
+            )
+        shell_output = dict(
+            type="shell_call_output", call_id=item["call_id"], output=results
+        )
+        if action.get("max_output_length") is not None:
+            shell_output["max_output_length"] = action["max_output_length"]
+        return shell_output
+
     async def function_call(self, rid, sandbox, item):
         """Run a model function call and return its function_call_output item."""
         def output(value):
             return dict(type="function_call_output", call_id=item["call_id"], output=value)
+
+        if item.get("name") == "shell" and self.store.run(rid)["request"]["provider"] == "chatgpt":
+            try:
+                action = json.loads(item.get("arguments") or "{}")
+                commands = action.get("commands")
+                if (not isinstance(commands, list) or not 1 <= len(commands) <= 20 or
+                        any(not isinstance(c, str) or not c.strip() for c in commands)):
+                    raise ValueError("Expected 1–20 nonempty shell commands")
+                timeout = action.get("timeout_ms")
+                if timeout is not None and (type(timeout) is not int or timeout <= 0):
+                    raise ValueError("timeout_ms must be a positive integer or null")
+            except (ValueError, AttributeError) as error:
+                return output(f"Invalid shell arguments: {error}")
+            result = await self.shell_call(rid, sandbox, dict(call_id=item["call_id"], action=action))
+            return output(json.dumps(result["output"], ensure_ascii=False))
 
         if item.get("name") != "view_image":
             return output(f"Unknown function: {item.get('name')}")
@@ -621,6 +724,7 @@ class RunManager:
             await asyncio.gather(*list(self.title_tasks), return_exceptions=True)
         for client in self.clients.values():
             await client.close()
+        await self.chatgpt_auth.close()
 
     def redact(self, text):
         for secret in [
@@ -869,7 +973,7 @@ class RunManager:
         self.store.save_context(
             request.conversation_id, context, request.provider, request.model, rid=rid
         )
-        apply_patch = self.settings.apply_patch_tool
+        apply_patch = self.settings.apply_patch_tool and request.provider != "chatgpt"
         instructions = (
             INSTRUCTIONS.replace(
                 "{editing}", APPLY_PATCH_EDITING if apply_patch else SHELL_EDITING
@@ -889,6 +993,8 @@ class RunManager:
         tools = [shell, *([dict(type="apply_patch")] if apply_patch else []), VIEW_IMAGE_TOOL] + [
             server.tool() for server in mcp_servers
         ]
+        if request.provider == "chatgpt":
+            tools = workspace_tools(VIEW_IMAGE_TOOL)
         if request.web_search:
             tools.append(dict(type="web_search"))
         context_size = self.store.context_tokens(request.conversation_id)
@@ -1144,70 +1250,7 @@ class RunManager:
                         status=result["status"], output=result["output"],
                     ))
                     continue
-                action = item["action"]
-                results = []
-                requested_timeout = (action.get("timeout_ms") or self.settings.command_timeout * 1000) / 1000
-                timeout = command_time_limit(self.settings, requested_timeout)
-                for index, command in enumerate(action["commands"]):
-                    self.store.status(
-                        rid, "command_running", "Running command"
-                    )
-                    self.store.event(
-                        rid,
-                        "command",
-                        dict(call_id=item["call_id"], index=index, command=command, timeout_seconds=timeout, requested_timeout_ms=action.get("timeout_ms")),
-                    )
-                    started = monotonic()
-
-                    async def emit(
-                        channel, text, call_id=item["call_id"], command_index=index
-                    ):
-                        self.store.event(
-                            rid,
-                            "command_output",
-                            dict(
-                                call_id=call_id,
-                                index=command_index,
-                                channel=channel,
-                                text=text,
-                            ),
-                        )
-
-                    try:
-                        result = await sandbox.execute(
-                            command,
-                            emit,
-                            timeout,
-                        )
-                    except CommandTimeoutError as error:
-                        self.store.event(
-                            rid,
-                            "command_done",
-                            dict(
-                                call_id=item["call_id"],
-                                index=index,
-                                elapsed=monotonic() - started,
-                                outcome={"type": "timeout", "timeout_seconds": error.timeout_seconds},
-                            ),
-                        )
-                        raise
-                    results.append(result)
-                    self.store.event(
-                        rid,
-                        "command_done",
-                        dict(
-                            call_id=item["call_id"],
-                            index=index,
-                            elapsed=monotonic() - started,
-                            outcome=result["outcome"],
-                        ),
-                    )
-                shell_output = dict(
-                    type="shell_call_output", call_id=item["call_id"], output=results
-                )
-                if action.get("max_output_length") is not None:
-                    shell_output["max_output_length"] = action["max_output_length"]
-                context.append(shell_output)
+                context.append(await self.shell_call(rid, sandbox, item))
             # Checkpoint only fully paired calls; a cancelled partial batch is never replayed automatically.
             self.store.save_context(
                 request.conversation_id, context, request.provider, request.model, rid=rid

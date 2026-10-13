@@ -35,7 +35,8 @@ def app_client(tmp_path):
 def test_config_no_credentials_and_origins(app_client):
     http, work, _ = app_client
     config = http.get("/api/config").json()
-    assert [p["id"] for p in config["providers"]] == ["openai", "azure_openai"]
+    assert [p["id"] for p in config["providers"]] == ["openai", "azure_openai", "chatgpt"]
+    assert config["providers"][2] == dict(id="chatgpt", label="ChatGPT", enabled=False, models=[])
     assert config["providers"][0]["models"][0]["id"] == "gpt-6-sol"
     assert config["providers"][1]["models"] == []
     assert "test-key" not in str(config)
@@ -53,6 +54,69 @@ def test_config_no_credentials_and_origins(app_client):
         == 400
     )
     assert http.get("/api/skills").status_code == 404
+
+
+def test_chatgpt_probe_reports_native_compact_rejection_and_preserves_credentials(app_client, monkeypatch):
+    import httpx
+    from openai import AuthenticationError
+    from app.model_catalog import MODELS
+
+    http, _, client = app_client
+    auth = http.app.state.manager.chatgpt_auth
+    auth.record.update(client_id="oaiapp_test", access_token="private-test-token",
+                       scopes=["chatgpt.tokens.use.direct"])
+    auth.catalog = [dict(id="gpt-6-luna", model="gpt-6-luna", **MODELS["gpt-6-luna"])]
+    async def models():
+        return auth.catalog
+    async def rejected(**kwargs):
+        response = httpx.Response(401, request=httpx.Request("POST", "https://api.openai.com/v1/responses/compact"))
+        raise AuthenticationError("Denied", response=response, body={"code": "hardened_oauth_rule_missing"})
+    monkeypatch.setattr(auth, "models", models)
+    monkeypatch.setattr(client, "compact", rejected)
+    response = http.post("/api/auth/chatgpt/test", json={"model": "gpt-6-luna", "kind": "compact"})
+    assert response.status_code == 502
+    assert "HTTP 401" in response.json()["detail"]
+    assert "hardened_oauth_rule_missing" in response.json()["detail"]
+    assert auth.enabled and not client.calls  # No summary/Responses fallback.
+    assert "private-test-token" not in http.get("/api/auth/chatgpt").text
+    assert "private-test-token" not in http.get("/api/config").text
+    assert http.post("/api/auth/chatgpt/test", json={"model": "gpt-6-luna", "kind": "unknown"}).status_code == 422
+    assert http.post("/api/auth/chatgpt/logout", headers={"Origin": "https://evil.example"}).status_code == 403
+    assert auth.enabled
+
+
+def test_chatgpt_compact_probe_checks_continuation(app_client, monkeypatch):
+    from app.model_catalog import MODELS
+    from test_agent import Stream
+
+    http, _, client = app_client
+    auth = http.app.state.manager.chatgpt_auth
+    auth.record.update(client_id="oaiapp_test", access_token="private-test-token",
+                       scopes=["chatgpt.tokens.use.direct"])
+    auth.catalog = [dict(id="gpt-6-luna", model="gpt-6-luna", **MODELS["gpt-6-luna"])]
+    async def models():
+        return auth.catalog
+    calls = []
+    async def response(**kwargs):
+        calls.append(kwargs)
+        text = message()
+        text["content"][0]["text"] = "indigo-42"
+        return Stream([text])
+    monkeypatch.setattr(auth, "models", models)
+    monkeypatch.setattr(client, "create", response)
+    result = http.post("/api/auth/chatgpt/test", json={"model": "gpt-6-luna", "kind": "compact"})
+    assert result.status_code == 200
+    assert result.json()["text"] == "indigo-42"
+    assert calls[0]["input"][0]["type"] == "compaction"
+    assert len(client.compacts) == 1
+
+
+def test_chatgpt_title_selection_survives_disconnection_without_api_billing_fallback(app_client):
+    http, _, _ = app_client
+    manager = http.app.state.manager
+    manager.store.update_settings(title_provider="chatgpt", title_model="gpt-6-luna")
+    assert not manager.chatgpt_auth.enabled
+    assert http.get("/api/settings").json()["title_provider"] == "chatgpt"
 
 
 def test_run_events_replay_delete_preserves_original(app_client):
@@ -237,7 +301,7 @@ def test_settings_and_monthly_cost_api(app_client):
     ).status_code == 400
     costs = http.get("/api/costs/monthly").json()
     assert costs["currency"] == "USD" and costs["estimated"] is True
-    assert costs["exclusions"] == ["tool_fees"]
+    assert costs["exclusions"] == ["tool_fees", "chatgpt_plan_usage"]
     assert costs["months"][0]["usd"] == 0
 
 

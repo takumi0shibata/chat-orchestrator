@@ -7,6 +7,11 @@ class Request(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ChatGPTTest(Request):
+    model: str = Field(min_length=1, max_length=200)
+    kind: Literal["response", "compact"] = "response"
+
+
 class ConversationCreate(Request):
     workspace_id: str
 
@@ -21,10 +26,10 @@ class TextFileUpdate(Request):
 
 
 class AppSettingsUpdate(Request):
-    title_provider: Literal["openai", "azure_openai"] | None = None
+    title_provider: Literal["openai", "azure_openai", "chatgpt"] | None = None
     title_model: str | None = None
     theme_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
-    default_provider: Literal["openai", "azure_openai"] | None = None
+    default_provider: Literal["openai", "azure_openai", "chatgpt"] | None = None
     default_model: str | None = None
     default_effort: str | None = None
     default_web_search: bool | None = None
@@ -51,7 +56,7 @@ class CheckpointPrune(Request):
 
 class RunCreate(Request):
     conversation_id: str
-    provider: Literal["openai", "azure_openai"] = "openai"
+    provider: Literal["openai", "azure_openai", "chatgpt"] = "openai"
     model: str = "gpt-6.1-sol"
     reasoning_effort: str = "medium"
     input: str = Field(default="", max_length=1000000)
