@@ -10,6 +10,9 @@ export default defineConfig({
   server: {
     host: "127.0.0.1",
     port: 5173,
+    // Backend HTTP and terminal WebSocket origins intentionally allow this port.
+    // Fail clearly on a conflict instead of opening an unusable app on 5174.
+    strictPort: true,
     proxy: {
       "/api": { target: "http://localhost:8000", ws: true },
       "/health": "http://localhost:8000",
