@@ -1,7 +1,9 @@
 import asyncio
 import copy
 import json
+import os
 import shlex
+import time
 from types import SimpleNamespace as NS
 
 import pytest
@@ -1429,6 +1431,61 @@ def test_artifacts_fall_back_to_scan_when_after_checkpoint_fails(tmp_path, monke
         assert [e["data"] for e in events if e["type"] == "checkpoint"][-1]["error"]
         artifacts = next(e["data"]["files"] for e in events if e["type"] == "artifacts")
         assert artifacts == [{"path": "a.txt", "change": "modified"}]
+
+    asyncio.run(scenario())
+
+
+def test_warm_up_hashes_workspaces_before_the_first_run(tmp_path, monkeypatch):
+    async def scenario():
+        manager, store, _, request = setup(tmp_path, [[message()]])
+        old = time.time_ns() - 10_000_000_000
+        for i in range(20):
+            (tmp_path / f"work/{i}.txt").write_text(str(i))
+            # Files written within the last mtime tick are re-hashed by design.
+            os.utime(tmp_path / f"work/{i}.txt", ns=(old, old))
+        manager.warm_checkpoints()
+        await manager.warmup
+        hashed = []
+        original = manager.checkpoints.git
+
+        def git(repo, *args, **kwargs):
+            if args[0] == "hash-object":
+                hashed.append(kwargs["input"].count(b"\n"))
+            return original(repo, *args, **kwargs)
+
+        monkeypatch.setattr(manager.checkpoints, "git", git)
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        assert store.run(run["id"])["status"] == "completed"
+        assert hashed == []
+        await manager.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_first_checkpoint_reports_indexing_progress(tmp_path, monkeypatch):
+    from app import checkpoints as checkpoint_module
+
+    monkeypatch.setattr(checkpoint_module, "HASH_BATCH", 5)
+
+    async def scenario():
+        manager, store, _, request = setup(tmp_path, [[message()]])
+        for i in range(12):
+            (tmp_path / f"work/{i}.txt").write_text(str(i))
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        labels = [e["data"]["label"] for e in store.events(run["id"]) if e["type"] == "status"]
+        assert "Indexing workspace files for Undo (5/12)" in labels
+
+    asyncio.run(scenario())
+
+
+def test_shutdown_cancels_the_checkpoint_warm_up(tmp_path):
+    async def scenario():
+        manager, _, _, _ = setup(tmp_path, [])
+        manager.warm_checkpoints()
+        await manager.shutdown()
+        assert manager.warmup.done() and manager.checkpoints.cancelled.is_set()
 
     asyncio.run(scenario())
 

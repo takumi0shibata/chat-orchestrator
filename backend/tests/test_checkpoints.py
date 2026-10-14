@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from app.checkpoints import STATE_REF, CheckpointConflict, Checkpoints, stale_paths
+from app import checkpoints as checkpoint_module
+from app.checkpoints import (
+    STATE_REF, CheckpointCancelled, CheckpointConflict, Checkpoints, stale_paths,
+)
 from app.workspace_watch import Sync
 
 
@@ -221,16 +224,21 @@ class FakeWatcher:
         resumed = since is not None and device == self.device
         self.base = since if resumed else 100
         self.cursor, self.events, self.complete = self.base, set(), resumed
+        self.git = 0
 
     def event(self, *paths):
         self.cursor += 1
         self.events.update(paths)
 
     def sync(self):
-        return Sync(cursor=self.cursor, paths=frozenset(self.events), complete=self.complete, reset=0)
+        return Sync(
+            cursor=self.cursor, paths=frozenset(self.events), complete=self.complete,
+            reset=0, git=self.git,
+        )
 
     def commit(self, sync, *, full):
         self.events -= sync.paths
+        self.git -= sync.git
         self.complete = self.complete or full
 
     def close(self):
@@ -350,7 +358,7 @@ def test_lost_events_fall_back_to_a_full_scan(watched):
     after = cp.snapshot(work, "after")
     assert after["scan"] == "full"
     assert statuses(cp, work, before, after) == {"a.txt": "modified"}
-    assert cp.snapshot(work, "again")["scan"] == "incremental"
+    assert cp.snapshot(work, "again")["scan"] == "unchanged"
 
 
 def test_watcher_resumes_from_the_saved_cursor(watched, tmp_path):
@@ -366,7 +374,7 @@ def test_watcher_resumes_from_the_saved_cursor(watched, tmp_path):
         watcher_factory=lambda root, marks, since, device: restarted.append((since, device))
         or FakeWatcher(since, device),
     )
-    assert cp2.snapshot(work, "third")["scan"] == "incremental"
+    assert cp2.snapshot(work, "third")["scan"] == "unchanged"
     assert restarted == [(101, "volume")]
 
 
@@ -448,3 +456,82 @@ def test_a_mismatched_saved_index_is_rebuilt(watched):
     (work / "b.txt").unlink()
     second = cp.snapshot(work, "second")
     assert cp.tree(repo, second["commit"]) == cp.tree(repo, first["commit"])
+
+
+def test_quiet_workspace_reuses_the_saved_tree_without_listing(watched, monkeypatch):
+    cp, work, _ = watched
+    write_old(work / "a.txt", "a")
+    first = cp.snapshot(work, "first")
+    monkeypatch.setattr(checkpoint_module, "scan_files", lambda *a, **k: pytest.fail("listed"))
+    quiet = cp.snapshot(work, "quiet")
+    assert quiet["scan"] == "unchanged"
+    assert quiet["scanned"] == first["scanned"] and quiet["files"] == 1
+    assert cp.tree(cp.repo(work), quiet["commit"]) == cp.tree(cp.repo(work), first["commit"])
+    monkeypatch.undo()
+    watcher = cp.watchers[cp.repo(work)]
+    # Git activity can change which files are tracked, so the selection is listed again.
+    watcher.git += 1
+    assert cp.snapshot(work, "git")["scan"] == "incremental"
+    assert cp.snapshot(work, "quiet again")["scan"] == "unchanged"
+    write_old(work / "b.txt", "b")
+    watcher.event("b.txt")
+    assert cp.snapshot(work, "event")["scan"] == "incremental"
+
+
+def test_quiet_snapshot_requires_the_same_size_limit(watched, tmp_path):
+    cp, work, _ = watched
+    write_old(work / "fresh.txt", "a file over four bytes")
+    cp.snapshot(work, "first")
+    assert cp.snapshot(work, "quiet")["scan"] == "unchanged"
+    smaller = Checkpoints(
+        tmp_path / "data", max_file_bytes=4,
+        watcher_factory=lambda root, marks, since, device: FakeWatcher(since, device),
+    )
+    result = smaller.snapshot(work, "smaller limit")
+    assert result["scan"] == "incremental" and result["skipped"] == ["fresh.txt"]
+
+
+def test_waiting_snapshot_reports_the_holder_progress(watched):
+    import threading
+
+    cp, work, _ = watched
+    write_old(work / "a.txt", "a")
+    repo = cp.repo(work)
+    holder = cp.locked(repo)
+    cp.progress[repo] = (2000, 50000)
+    reported, done = [], threading.Event()
+
+    def run():
+        cp.snapshot(work, "waiting", progress=lambda *p: reported.append(p))
+        done.set()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    try:
+        time.sleep(1.2)
+        assert not done.is_set() and reported and reported[0] == (2000, 50000)
+    finally:
+        del cp.progress[repo]
+        holder.release()
+    thread.join(5)
+    assert done.is_set()
+
+
+def test_hashing_reports_progress_and_stops_when_closed(setup, monkeypatch):
+    cp, work = setup
+    monkeypatch.setattr(checkpoint_module, "HASH_BATCH", 2)
+    for i in range(5):
+        write_old(work / f"{i}.txt", str(i))
+    reported = []
+    cp.snapshot(work, "first", progress=lambda *p: reported.append(p))
+    assert reported == [(2, 5), (4, 5), (5, 5)]
+    state = (cp.repo(work) / "snapshot-state.json").read_text()
+    for i in range(4):
+        write_old(work / f"new{i}.txt", "new")
+
+    def close_after_first_batch(*progress):
+        cp.close()
+
+    with pytest.raises(CheckpointCancelled):
+        cp.snapshot(work, "cancelled", progress=close_after_first_batch)
+    assert (cp.repo(work) / "snapshot-state.json").read_text() == state

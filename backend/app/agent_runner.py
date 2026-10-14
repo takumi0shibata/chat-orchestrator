@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from time import monotonic
 
 from app.attachments import direct_input, file_snapshot
-from app.checkpoints import Checkpoints
+from app.checkpoints import CheckpointCancelled, Checkpoints
 from app.workspace_watch import FSEventsWatcher
 from app.model_catalog import pricing_for, validate_model
 from app.openai_client import build_openai_client
@@ -106,6 +106,7 @@ class RunManager:
         self.tasks = {}
         self.finalizing = set()
         self.title_tasks = set()
+        self.warmup = None
         self.approvals = {}
         self.locks = {}
         self.poisoned_workspaces = set()
@@ -121,6 +122,22 @@ class RunManager:
         default = self.routes.azure["default"]
         if self.routes.available(default):
             self.store.bind_legacy_azure(default.base_url)
+
+    def warm_checkpoints(self):
+        """Hash registered workspaces in the background before the first run needs them."""
+        if self.settings.checkpoints and self.checkpoints.available:
+            self.warmup = asyncio.create_task(asyncio.to_thread(self._warm_checkpoints))
+
+    def _warm_checkpoints(self):
+        for workspace in self.config.workspaces:
+            if not workspace.path.is_dir():
+                continue
+            try:
+                self.checkpoints.snapshot(workspace.path, "warm-up")
+            except CheckpointCancelled:
+                return
+            except Exception as error:
+                log.warning("Checkpoint warm-up failed for %s: %s", workspace.id, error)
 
     def client(self, provider, model):
         route = self.routes.resolve(provider, model)
@@ -605,11 +622,24 @@ class RunManager:
         """
         if not self.settings.checkpoints or not self.checkpoints.available:
             return None
+        progress = None
         if name == "before":
             self.store.status(rid, "preparing", "Saving a workspace checkpoint")
+            reported = 0.0
+
+            def progress(done, total):
+                # Called from the worker thread, at most every two seconds.
+                nonlocal reported
+                if monotonic() - reported >= 2:
+                    reported = monotonic()
+                    self.store.status(
+                        rid, "preparing",
+                        f"Indexing workspace files for Undo ({done:,}/{total:,})",
+                    )
         try:
             result = await asyncio.to_thread(
-                self.checkpoints.snapshot, workspace.path, f"{rid} {name}"
+                self.checkpoints.snapshot, workspace.path, f"{rid} {name}",
+                progress=progress,
             )
             await asyncio.to_thread(
                 self.checkpoints.set_ref, workspace.path, rid, name, result["commit"]
@@ -740,7 +770,10 @@ class RunManager:
         for client in self.clients.values():
             await client.close()
         await self.chatgpt_auth.close()
+        # Runs have finished their final checkpoints; cancel the warm-up, if any.
         self.checkpoints.close()
+        if self.warmup:
+            await asyncio.gather(self.warmup, return_exceptions=True)
 
     def redact(self, text):
         for secret in [

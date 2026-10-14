@@ -32,9 +32,15 @@ GIT_ENV = {
     "GIT_COMMITTER_EMAIL": "checkpoints@localhost",
 }
 MAX_PATCH_CHARS = 200_000
+# Hashing reports progress and honours cancellation between batches.
+HASH_BATCH = 2000
 STATE_VERSION = 2
 # Keeps the blobs of the saved state reachable when old runs are pruned.
 STATE_REF = "refs/orchestrator/state"
+
+
+class CheckpointCancelled(Exception):
+    pass
 
 
 class CheckpointConflict(Exception):
@@ -105,6 +111,20 @@ class Checkpoints:
         self.watcher_factory = watcher_factory
         self.watchers = {}
         self.watch_lock = threading.Lock()
+        # Snapshots and restores of one workspace (runs, Undo, warm-up) never overlap.
+        self.locks = {}
+        self.progress = {}
+        self.cancelled = threading.Event()
+        self.states = {}
+
+    def locked(self, repo, progress=None):
+        """Acquire the workspace's lock, reporting the holder's hashing progress."""
+        with self.watch_lock:
+            lock = self.locks.setdefault(repo, threading.RLock())
+        while not lock.acquire(timeout=0.5):
+            if progress and repo in self.progress:
+                progress(*self.progress[repo])
+        return lock
 
     def watcher(self, workspace, repo, state):
         """Start watching lazily, resuming from the saved state's event cursor."""
@@ -118,6 +138,7 @@ class Checkpoints:
             return self.watchers[repo]
 
     def close(self):
+        self.cancelled.set()
         with self.watch_lock:
             for watcher in self.watchers.values():
                 if watcher:
@@ -125,10 +146,16 @@ class Checkpoints:
             self.watchers.clear()
 
     def load_state(self, repo):
+        path = repo / "snapshot-state.json"
         try:
-            state = json.loads((repo / "snapshot-state.json").read_text())
+            info = path.stat()
+            key = (info.st_mtime_ns, info.st_size, info.st_ino)
+            cached = self.states.get(repo)
+            if cached and cached[0] == key:
+                return cached[1]  # Callers never mutate the state.
+            state = json.loads(path.read_text())
         except (OSError, ValueError):
-            state = None
+            state, key = None, None
         if not isinstance(state, dict) or state.get("version") != STATE_VERSION:
             # Older releases kept a hash cache: {path: [size, mtime, ctime, dev, ino, sha]}.
             # A versioned cache came from a reverted optimization and is discarded.
@@ -153,6 +180,8 @@ class Checkpoints:
             ).decode().split("\n")
             present = {line.split()[0] for line in output if line.endswith(" blob")}
             state["files"] = {p: e for p, e in state["files"].items() if e[6] in present}
+        if key:
+            self.states[repo] = (key, state)
         return state
 
     def has_ref(self, repo, ref):
@@ -191,9 +220,21 @@ class Checkpoints:
             )
         return result.stdout
 
-    def snapshot(self, workspace: Path, label: str, *, include=(), rehash=()):
-        """Return a commit for the workspace's current regular files."""
+    def snapshot(self, workspace: Path, label: str, *, include=(), rehash=(), progress=None):
+        """Return a commit for the workspace's current regular files.
+
+        progress(done, total) is called while files are hashed, including while
+        waiting for another snapshot of the same workspace (e.g. the warm-up).
+        """
         repo = self.repo(workspace)
+        lock = self.locked(repo, progress)
+        try:
+            return self._snapshot(workspace, repo, label, include, rehash, progress)
+        finally:
+            self.progress.pop(repo, None)
+            lock.release()
+
+    def _snapshot(self, workspace, repo, label, include, rehash, progress):
         state = self.load_state(repo)
         # Undo checks may include ignored paths, so they never update the state.
         persist = not include and not rehash
@@ -203,6 +244,20 @@ class Checkpoints:
             sync and sync.complete and state["cursor"] is not None
             and state["device"] == watcher.device and watcher.base <= state["cursor"]
         )
+        if (
+            incremental and sync.quiet and state.get("tree")
+            and state.get("max_file_bytes") == self.max_file_bytes
+        ):
+            # Nothing could have changed: reuse the saved tree without listing files.
+            # Recently written files need no re-hash here: any write after the
+            # saved snapshot's barrier is a later event, so the sync is not quiet.
+            commit = self.git(repo, "commit-tree", state["tree"], "-m", label).decode().strip()
+            watcher.commit(sync, full=False)
+            known = state["files"] | state["skipped"]
+            return dict(
+                commit=commit, files=len(state["files"]), skipped=sorted(state["skipped"]),
+                scanned={p: tuple(e[:2]) for p, e in known.items()}, scan="unchanged",
+            )
         reuse, stale = None, frozenset()
         if incremental:
             known = state["files"] | state["skipped"]
@@ -218,12 +273,19 @@ class Checkpoints:
             p for p in files if p in rehash or not same_file(previous.get(p), files[p])
         ]
         hashed = {}
-        if pending:
+        for start in range(0, len(pending), HASH_BATCH):
+            if self.cancelled.is_set():
+                raise CheckpointCancelled("Checkpoint cancelled")
+            batch = pending[start:start + HASH_BATCH]
             output = self.git(
                 repo, "hash-object", "-w", "--no-filters", "--stdin-paths",
-                input=b"".join(os.fsencode(workspace / p) + b"\n" for p in pending),
+                input=b"".join(os.fsencode(workspace / p) + b"\n" for p in batch),
             ).decode().split()
-            hashed = dict(zip(pending, output, strict=True))
+            hashed.update(zip(batch, output, strict=True))
+            if len(pending) > HASH_BATCH:
+                self.progress[repo] = (len(hashed), len(pending))
+                if progress:
+                    progress(len(hashed), len(pending))
         recent_ns = time.time_ns() - 2_000_000_000
         saved, recent = {}, []
         for path, file in files.items():
@@ -268,7 +330,7 @@ class Checkpoints:
                 device=watcher.device if sync else None,
                 cursor=sync.cursor if sync else None,
                 index=index_checksum(saved_index) if entries or base else None,
-                files=saved, skipped={p: list(s) for p, s in skipped.items()}, recent=recent,
+                tree=tree, max_file_bytes=self.max_file_bytes, files=saved, skipped={p: list(s) for p, s in skipped.items()}, recent=recent,
             ), commit)
             if sync:
                 watcher.commit(sync, full=not incremental)
@@ -376,6 +438,13 @@ class Checkpoints:
     def restore(self, workspace: Path, before, after, force=False):
         """Return files changed between before and after to their before state."""
         repo = self.repo(workspace)
+        lock = self.locked(repo)
+        try:
+            return self._restore(workspace, repo, before, after, force)
+        finally:
+            lock.release()
+
+    def _restore(self, workspace, repo, before, after, force):
         old, new = (self.tree(repo, c) for c in (before, after))
         changed = sorted(p for p in set(old) | set(new) if old.get(p) != new.get(p))
         current = self.snapshot(workspace, "pre-restore", include=changed, rehash=changed)["commit"]

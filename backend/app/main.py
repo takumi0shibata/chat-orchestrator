@@ -84,6 +84,7 @@ def create_app(settings=None, manager_factory=RunManager):
             app.state.terminals = set()
             app.state.guild = Guild(config.workspaces, store)
             await manager.recover()
+            manager.warm_checkpoints()
             try:
                 yield
             finally:

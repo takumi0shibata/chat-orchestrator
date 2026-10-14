@@ -46,6 +46,12 @@ class Sync:
     paths: frozenset  # Relative NFC paths with events (files and directories).
     complete: bool  # False when events were lost since the last full scan.
     reset: int
+    git: int  # Changes inside .git directories, which can change tracking.
+
+    @property
+    def quiet(self):
+        """No event since the last saved snapshot could change its contents."""
+        return self.complete and not self.paths and self.git == 0
 
 
 class FSEventsWatcher:
@@ -66,6 +72,7 @@ class FSEventsWatcher:
         # A watcher starting without history must be primed by a full scan.
         self.resets = 0 if resumed else 1
         self.cleared = 0
+        self.git_events = 0
         self.stream = self.loop = None
         self.started = threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=True, name="fsevents")
@@ -146,8 +153,12 @@ class FSEventsWatcher:
                 if not path.startswith(self.root + "/"):
                     continue  # The root itself: directory mtimes only.
                 relative = path[len(self.root) + 1:]
-                if EXCLUDED_DIRS.intersection(relative.split("/")):
-                    continue  # Never selected; Git rescans tracking each time.
+                parts = relative.split("/")
+                if ".git" in parts:
+                    self.git_events += 1  # Git rescans tracking on every listing.
+                    continue
+                if EXCLUDED_DIRS.intersection(parts):
+                    continue  # Never selected.
                 if flag & CS.kFSEventStreamEventFlagItemIsDir and not flag & self.DIRECTORY_ENTRY:
                     continue  # Directory mtime changes; entries have their own events.
                 self.pending[relative] = max(event, self.pending.get(relative, 0))
@@ -172,6 +183,7 @@ class FSEventsWatcher:
                 return Sync(
                     cursor=self.seen_marks[name], paths=frozenset(self.pending),
                     complete=self.resets == self.cleared, reset=self.resets,
+                    git=self.git_events,
                 )
         finally:
             with self.lock:
@@ -185,6 +197,8 @@ class FSEventsWatcher:
             for path in sync.paths:
                 if self.pending.get(path, sync.cursor + 1) <= sync.cursor:
                     del self.pending[path]
+            # Git events have no per-event cursor; later ones keep the count above zero.
+            self.git_events -= sync.git
             if full:
                 self.cleared = max(self.cleared, sync.reset)
 
