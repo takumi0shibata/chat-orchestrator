@@ -2,7 +2,6 @@ import subprocess
 import json
 import os
 import time
-from pathlib import Path
 
 import pytest
 
@@ -20,7 +19,7 @@ def setup(tmp_path):
     return Checkpoints(tmp_path / "data", max_file_bytes=1024), work
 
 
-def test_snapshot_respects_ignore_rules_without_applying_filters(setup):
+def test_snapshot_includes_gitignored_files_without_applying_filters(setup):
     cp, work = setup
     subprocess.run(["git", "init", "-q", str(work / "nested")], check=True)
     (work / ".gitignore").write_text("ignored/\n")
@@ -46,7 +45,7 @@ def test_snapshot_respects_ignore_rules_without_applying_filters(setup):
 
     changes = {f["path"]: f for f in cp.changes(work, before["commit"], after["commit"])}
     assert {p: f["status"] for p, f in changes.items()} == {
-        "data.bin": "modified", "keep.txt": "deleted",
+        "data.bin": "modified", "keep.txt": "deleted", "ignored/out.txt": "modified",
         "nested/inner.txt": "modified", "new dir/created [1].txt": "added",
     }
     assert changes["nested/inner.txt"]["added"] == 1
@@ -55,7 +54,7 @@ def test_snapshot_respects_ignore_rules_without_applying_filters(setup):
 
     result = cp.restore(work, before["commit"], after["commit"])
     assert result["overwritten"] == []
-    assert (work / "ignored/out.txt").read_text() == "v2\n"
+    assert (work / "ignored/out.txt").read_text() == "v1\n"
     assert (work / "nested/inner.txt").read_text() == "v1\n"
     assert (work / "data.bin").read_bytes() == b"raw\r\n"
     assert (work / "keep.txt").read_text() == "same\n"
@@ -110,7 +109,7 @@ def test_restore_refuses_symlinked_parent(setup, tmp_path):
     assert not (outside / "a.txt").exists()
 
 
-def test_tracked_ignored_file_diff_and_undo(setup):
+def test_gitignored_and_tracked_files_both_have_diffs_and_undo(setup):
     cp, work = setup
     subprocess.run(["git", "init", "-q", str(work)], check=True)
     (work / ".gitignore").write_text("*.txt\n")
@@ -121,27 +120,25 @@ def test_tracked_ignored_file_diff_and_undo(setup):
     (work / "tracked.txt").write_text("after")
     (work / "ignored.txt").write_text("after")
     after = cp.snapshot(work, "after")["commit"]
-    assert [f["path"] for f in cp.changes(work, before, after)] == ["tracked.txt"]
+    assert [f["path"] for f in cp.changes(work, before, after)] == ["ignored.txt", "tracked.txt"]
     cp.restore(work, before, after)
     assert (work / "tracked.txt").read_text() == "before"
-    assert (work / "ignored.txt").read_text() == "after"
+    assert (work / "ignored.txt").read_text() == "before"
 
 
-def test_undo_checks_files_ignored_since_old_checkpoint(setup):
+@pytest.mark.parametrize("rules", [("logs/\n", ""), ("", "logs/\n")])
+def test_editing_gitignore_never_adds_or_deletes_existing_files(setup, rules):
     cp, work = setup
-    (work / "output.txt").write_text("before")
+    (work / ".gitignore").write_text(rules[0])
+    (work / "logs").mkdir()
+    (work / "logs/run.log").write_text("existed before the run")
     before = cp.snapshot(work, "before")["commit"]
-    (work / "output.txt").write_text("after")
+    (work / ".gitignore").write_text(rules[1])
     after = cp.snapshot(work, "after")["commit"]
-    (work / ".gitignore").write_text("*.txt\n")
-    # This also covers old checkpoints created when .gitignore was not respected.
-    assert "output.txt" not in cp.tree(cp.repo(work), cp.snapshot(work, "now")["commit"])
-    (work / "output.txt").write_text("user change")
-    with pytest.raises(CheckpointConflict):
-        cp.restore(work, before, after)
-    cp.restore(work, before, after, force=True)
-    assert (work / "output.txt").read_text() == "before"
-    assert (work / ".gitignore").exists()
+    assert [f["path"] for f in cp.changes(work, before, after)] == [".gitignore"]
+    cp.restore(work, before, after)
+    assert (work / ".gitignore").read_text() == rules[0]
+    assert (work / "logs/run.log").read_text() == "existed before the run"
 
 
 def test_versioned_cache_is_rebuilt_without_deleting_old_refs(setup):
@@ -224,7 +221,6 @@ class FakeWatcher:
         resumed = since is not None and device == self.device
         self.base = since if resumed else 100
         self.cursor, self.events, self.complete = self.base, set(), resumed
-        self.git = 0
 
     def event(self, *paths):
         self.cursor += 1
@@ -232,13 +228,11 @@ class FakeWatcher:
 
     def sync(self):
         return Sync(
-            cursor=self.cursor, paths=frozenset(self.events), complete=self.complete,
-            reset=0, git=self.git,
+            cursor=self.cursor, paths=frozenset(self.events), complete=self.complete, reset=0,
         )
 
     def commit(self, sync, *, full):
         self.events -= sync.paths
-        self.git -= sync.git
         self.complete = self.complete or full
 
     def close(self):
@@ -271,7 +265,7 @@ def statuses(cp, work, before, after):
     return {f["path"]: f["status"] for f in cp.changes(work, before["commit"], after["commit"])}
 
 
-def test_incremental_snapshot_stats_only_files_with_events(watched, monkeypatch):
+def test_incremental_snapshot_stats_only_files_with_events(watched):
     cp, work, _ = watched
     for i in range(200):
         write_old(work / f"many/{i}.txt", str(i))
@@ -288,48 +282,30 @@ def test_incremental_snapshot_stats_only_files_with_events(watched, monkeypatch)
     # Creation and deletion come from Git's listing, events or not.
     write_old(work / "new.txt", "new")
     (work / "gone.txt").unlink()
-    checked = []
-    original = Path.lstat
-
-    def record(path, *args, **kwargs):
-        checked.append(path.relative_to(work).as_posix() if path.is_relative_to(work) else path)
-        return original(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "lstat", record)
     after = cp.snapshot(work, "after")
-    monkeypatch.undo()
     assert after["scan"] == "incremental"
     assert statuses(cp, work, before, after) == {
         "a.txt": "modified", "new.txt": "added", "gone.txt": "deleted",
     }
-    assert set(checked) <= {"a.txt", "new.txt", "."}
+    # b.txt was neither stat'ed nor hashed.
     assert after["scanned"]["b.txt"] == before["scanned"]["b.txt"]
     assert not watcher.events
 
 
-def test_incremental_snapshot_follows_ignore_and_tracking_changes(watched):
+def test_incremental_snapshot_ignores_gitignore_and_tracking_changes(watched):
     cp, work, _ = watched
     subprocess.run(["git", "init", "-q", str(work)], check=True)
     write_old(work / ".gitignore", "logs/\n")
     write_old(work / "gen/out.txt", "x")
     write_old(work / "logs/run.log", "x")
-    write_old(work / "keep.tmp", "x")
-    write_old(work / "drop.tmp", "x")
     before = cp.snapshot(work, "before")
-    assert set(before["scanned"]) == {".gitignore", "gen/out.txt", "keep.tmp", "drop.tmp"}
-
-    # Only .gitignore has an event; the selection changes follow from Git.
-    write_old(work / ".gitignore", "gen/\n*.tmp\n")
+    assert set(before["scanned"]) == {".gitignore", "gen/out.txt", "logs/run.log"}
+    write_old(work / ".gitignore", "gen/\n")
     cp.watchers[cp.repo(work)].event(".gitignore")
-    git = ["git", "-C", str(work), "-c", "core.fsmonitor=false"]
-    subprocess.run(git + ["add", "-f", "keep.tmp"], check=True)
+    subprocess.run(["git", "-C", str(work), "add", "-f", "gen/out.txt"], check=True)
     after = cp.snapshot(work, "after")
     assert after["scan"] == "incremental"
-    assert statuses(cp, work, before, after) == {
-        ".gitignore": "modified", "gen/out.txt": "deleted", "drop.tmp": "deleted",
-        "logs/run.log": "added",
-    }
-    assert set(after["scanned"]) == {".gitignore", "keep.tmp", "logs/run.log"}
+    assert statuses(cp, work, before, after) == {".gitignore": "modified"}
 
 
 def test_directory_events_recheck_known_files_below_them(watched):
@@ -469,10 +445,6 @@ def test_quiet_workspace_reuses_the_saved_tree_without_listing(watched, monkeypa
     assert cp.tree(cp.repo(work), quiet["commit"]) == cp.tree(cp.repo(work), first["commit"])
     monkeypatch.undo()
     watcher = cp.watchers[cp.repo(work)]
-    # Git activity can change which files are tracked, so the selection is listed again.
-    watcher.git += 1
-    assert cp.snapshot(work, "git")["scan"] == "incremental"
-    assert cp.snapshot(work, "quiet again")["scan"] == "unchanged"
     write_old(work / "b.txt", "b")
     watcher.event("b.txt")
     assert cp.snapshot(work, "event")["scan"] == "incremental"

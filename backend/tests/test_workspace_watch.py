@@ -75,16 +75,15 @@ def test_events_after_the_cursor_survive_commit(dirs, watchers):
     assert "a.txt" not in watcher.sync().paths
 
 
-def test_git_directory_events_make_a_sync_not_quiet(dirs, watchers):
+def test_git_and_excluded_directory_events_keep_a_sync_quiet(dirs, watchers):
     work, marks = dirs
     (work / ".git").mkdir()
+    (work / ".venv").mkdir()
     watcher = primed(watchers, work, marks)
     assert watcher.sync().quiet
-    # Index writes can change tracked files without events on those files.
+    # Files under these directories are never selected.
     (work / ".git/index").write_text("x")
-    sync = watcher.sync()
-    assert not sync.quiet and not sync.paths
-    watcher.commit(sync, full=False)
+    (work / ".venv/lib.py").write_text("x")
     assert watcher.sync().quiet
 
 

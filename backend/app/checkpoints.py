@@ -1,11 +1,12 @@
 """Workspace checkpoints stored in an app-managed Git repository.
 
-File selection respects .gitignore while retaining tracked files. Contents are
-hashed with ``--no-filters`` and trees are built from a private index.
+Every regular file outside EXCLUDED_DIRS is selected; symlinks are never
+followed. Contents are hashed with ``--no-filters`` and trees are built from a
+private index.
 
 Each snapshot saves the state of every selected file. With file events (see
 workspace_watch), later snapshots stat and hash only files with events; Git
-still lists the selection, so new, deleted and (un)ignored files stay exact.
+directories are still listed, so new and deleted files stay exact.
 """
 
 import hashlib
@@ -49,11 +50,11 @@ class CheckpointConflict(Exception):
         super().__init__("Files changed after the run: " + ", ".join(paths[:10]))
 
 
-def walk(root: Path, max_file_bytes: int, *, include=(), reuse=None, stale=frozenset()):
+def walk(root: Path, max_file_bytes: int, *, reuse=None, stale=frozenset()):
     """Apply checkpoint size limits to the shared workspace selection."""
     files, skipped = {}, {}
     for relative, state in scan_files(
-        root, include=include, reuse=reuse, stale=stale
+        root, reuse=reuse, stale=stale
     ).items():
         if state[0] > max_file_bytes or "\n" in relative:
             skipped[relative] = state
@@ -220,7 +221,7 @@ class Checkpoints:
             )
         return result.stdout
 
-    def snapshot(self, workspace: Path, label: str, *, include=(), rehash=(), progress=None):
+    def snapshot(self, workspace: Path, label: str, *, rehash=(), progress=None):
         """Return a commit for the workspace's current regular files.
 
         progress(done, total) is called while files are hashed, including while
@@ -229,15 +230,15 @@ class Checkpoints:
         repo = self.repo(workspace)
         lock = self.locked(repo, progress)
         try:
-            return self._snapshot(workspace, repo, label, include, rehash, progress)
+            return self._snapshot(workspace, repo, label, rehash, progress)
         finally:
             self.progress.pop(repo, None)
             lock.release()
 
-    def _snapshot(self, workspace, repo, label, include, rehash, progress):
+    def _snapshot(self, workspace, repo, label, rehash, progress):
         state = self.load_state(repo)
-        # Undo checks may include ignored paths, so they never update the state.
-        persist = not include and not rehash
+        # Undo's conflict check re-hashes paths but never updates the saved state.
+        persist = not rehash
         watcher = self.watcher(workspace, repo, state) if persist else None
         sync = watcher.sync() if watcher else None
         incremental = bool(
@@ -265,7 +266,7 @@ class Checkpoints:
             # A file modified again within the same mtime tick must be re-hashed later.
             stale = stale_paths(known, sync.paths) | set(state["recent"])
         files, skipped = walk(
-            workspace, self.max_file_bytes, include=include, reuse=reuse, stale=stale
+            workspace, self.max_file_bytes, reuse=reuse, stale=stale
         )
         previous = state["files"]
         rehash = set(rehash) | set(state["recent"])
@@ -447,7 +448,7 @@ class Checkpoints:
     def _restore(self, workspace, repo, before, after, force):
         old, new = (self.tree(repo, c) for c in (before, after))
         changed = sorted(p for p in set(old) | set(new) if old.get(p) != new.get(p))
-        current = self.snapshot(workspace, "pre-restore", include=changed, rehash=changed)["commit"]
+        current = self.snapshot(workspace, "pre-restore", rehash=changed)["commit"]
         now = self.tree(repo, current)
         conflicts = [p for p in changed if now.get(p) != new.get(p)]
         if conflicts and not force:

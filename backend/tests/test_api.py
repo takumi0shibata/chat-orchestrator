@@ -1,4 +1,3 @@
-import subprocess
 
 import pytest
 from app.agent_runner import RunManager
@@ -373,35 +372,14 @@ def test_storage_usage_and_cleanup(app_client, tmp_path):
     assert freed["usage"]["attachments"]["bytes"] == 100
 
 
-@pytest.mark.parametrize("repository", [False, True])
-def test_file_listing_marks_gitignored_entries_without_hiding_them(app_client, repository):
+def test_file_listing_has_no_gitignore_decoration(app_client):
     http, work, _ = app_client
-    if repository:
-        subprocess.run(["git", "init", "-q", str(work)], check=True)
-    (work / ".gitignore").write_text("generated/\n*.log\n!keep.log\n")
-    for name in ["debug.log", "keep.log", "tracked.log", "generated/out.log", "sub/local.log", "sub/drop.log"]:
-        path = work / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("content")
-    (work / "sub/.gitignore").write_text("!local.log\n")
-    if repository:
-        subprocess.run(["git", "-C", str(work), "add", "-f", "tracked.log"], check=True)
-        (work / ".git/info/exclude").write_text("keep.log\n")
+    (work / ".gitignore").write_text("generated/\n")
+    (work / "generated").mkdir()
+    (work / "generated/out.log").write_text("content")
     cid = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]
-
-    def listing(path=""):
-        response = http.get(f"/api/conversations/{cid}/files", params={"path": path})
-        assert response.status_code == 200
-        return {entry["name"]: entry["ignored"] for entry in response.json()}
-
-    root = listing()
-    assert root["generated"] is True
-    assert root["debug.log"] is True
-    assert root["keep.log"] is False
-    assert root["tracked.log"] is not repository
-    assert root["sub"] is False
-    assert listing("generated") == {"out.log": True}
-    assert listing("sub") == {".gitignore": False, "local.log": False, "drop.log": True}
-    # Decoration does not disable file access.
-    response = http.get(f"/api/conversations/{cid}/download", params={"path": "generated/out.log"})
-    assert response.status_code == 200 and response.content == b"content"
+    response = http.get(f"/api/conversations/{cid}/files")
+    assert response.status_code == 200
+    assert {e["name"]: set(e) for e in response.json()} == {
+        name: {"name", "path", "directory", "size"} for name in (".gitignore", "generated")
+    }

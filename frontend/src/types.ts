@@ -109,7 +109,6 @@ export interface WorkspaceFile {
   path: string;
   directory: boolean;
   size: number;
-  ignored?: boolean;
 }
 export interface Attachment {
   id: string;

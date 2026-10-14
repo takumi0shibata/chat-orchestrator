@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from fastapi import UploadFile
 
-from app.workspace_files import ignored_names, scan_files
+from app.workspace_files import scan_files
 
 
 def safe_path(root: Path, relative: str, *, directory=False):
@@ -83,9 +83,6 @@ def list_files(root: Path, relative=""):
                     size=0 if directory else info.st_size,
                 )
             )
-        ignored = ignored_names(root, relative, [entry["name"] for entry in entries])
-        for entry in entries:
-            entry["ignored"] = entry["name"] in ignored
         return sorted(entries, key=lambda e: (not e["directory"], e["name"].lower()))
     finally:
         os.close(fd)
@@ -155,5 +152,5 @@ def direct_input(attachment):
 
 
 def file_snapshot(root: Path):
-    """Use the same .gitignore-aware selection as checkpoints."""
+    """Use the same file selection as checkpoints."""
     return {path: state[:2] for path, state in scan_files(root).items()}

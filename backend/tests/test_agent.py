@@ -1334,7 +1334,7 @@ def test_checkpoints_can_be_disabled(tmp_path):
 
 
 @pytest.mark.parametrize("checkpoints", [True, False])
-def test_ignored_files_excluded_from_artifacts_and_checkpoints(tmp_path, checkpoints):
+def test_gitignored_files_are_part_of_artifacts_and_checkpoints(tmp_path, checkpoints):
     class EditingSandbox(FakeSandbox):
         async def start(self):
             (tmp_path / "work/keep.txt").write_text("after")
@@ -1353,12 +1353,13 @@ def test_ignored_files_excluded_from_artifacts_and_checkpoints(tmp_path, checkpo
         await manager.tasks[run["id"]]
         assert store.run(run["id"])["status"] == "completed"
         artifacts = next(e["data"]["files"] for e in store.events(run["id"]) if e["type"] == "artifacts")
-        assert artifacts == [{"path": "keep.txt", "change": "modified"}]
+        assert sorted(f["path"] for f in artifacts) == ["generated/out.txt", "keep.txt"]
         if checkpoints:
-            assert [f["path"] for f in (await manager.changes(run["id"]))["files"]] == ["keep.txt"]
+            changes = (await manager.changes(run["id"]))["files"]
+            assert sorted(f["path"] for f in changes) == ["generated/out.txt", "keep.txt"]
             await manager.revert(run["id"])
             assert (work / "keep.txt").read_text() == "before"
-            assert (work / "generated/out.txt").read_text() == "after"
+            assert (work / "generated/out.txt").read_text() == "before"
 
     asyncio.run(scenario())
 

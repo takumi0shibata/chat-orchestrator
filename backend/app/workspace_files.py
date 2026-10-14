@@ -2,126 +2,63 @@
 
 import os
 import stat
-import subprocess
-import tempfile
-from pathlib import Path, PurePosixPath
+import sys
+import unicodedata
+from pathlib import Path
 
 EXCLUDED_DIRS = {
     ".venv", "venv", "node_modules", ".git", "__pycache__", ".pytest_cache", ".ruff_cache",
 }
 
 
-def workspace_git(root: Path, options, *, input=None, worktree=None, timeout=600, success=(0,)):
-    """Run read-only Git queries, including in folders without a repository."""
-    # Listing must not use an inherited index/worktree or invoke a fsmonitor hook.
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", LC_ALL="C")
-    command = ["git", "-c", "core.fsmonitor=false", "-C", str(root)]
-    def run(args, data=None):
-        return subprocess.run(args, input=data, env=env, capture_output=True, timeout=timeout)
-
-    result = run(command + options, input)
-    if result.returncode not in success and b"not a git repository" in result.stderr:
-        # Plain folders can also contain .gitignore. The temporary empty index is
-        # outside the workspace; never create a .git or change the user's index.
-        with tempfile.TemporaryDirectory(prefix="workspace-scan-") as scratch:
-            init = run(["git", "init", "--bare", "--quiet", "--template=", scratch])
-            if init.returncode:
-                raise OSError(init.stderr.decode(errors="replace"))
-            result = run(command + [f"--git-dir={scratch}", f"--work-tree={worktree or root}"] + options, input)
-    if result.returncode not in success:
-        raise OSError("Could not query workspace files: " + result.stderr.decode(errors="replace")[-2000:])
-    return result.stdout
+def relative_name(name):
+    # macOS filesystems may store decomposed names; keys match Git's precomposed form.
+    if sys.platform == "darwin" and not name.isascii():
+        return unicodedata.normalize("NFC", name)
+    return name
 
 
-def git_files(root: Path):
-    """Let Git prune ignored directories, retaining tracked files and nested repos."""
-    options = ["ls-files", "-z", "--cached", "--others", "--exclude-per-directory=.gitignore"]
-    options += [f"--exclude={name}/" for name in sorted(EXCLUDED_DIRS)]
-    output = workspace_git(root, options)
-    return {os.fsdecode(p).rstrip("/") for p in output.split(b"\0") if p}
+def scan_files(root: Path, *, reuse=None, stale=frozenset()):
+    """Stat regular files, skipping EXCLUDED_DIRS and never following symlinks.
 
-
-def ignored_names(root: Path, relative: str, names):
-    """Decorate only the listed entries; never enumerate their descendants."""
-    if not names:
-        return set()
-    root = root.resolve()
-    try:
-        output = workspace_git(
-            root / relative, ["check-ignore", "--stdin", "-z", "--verbose"],
-            input=b"".join(os.fsencode(name) + b"\0" for name in names),
-            worktree=root, timeout=5, success=(0, 1),
-        )
-    except (OSError, subprocess.SubprocessError):
-        # File browsing remains usable if Git is missing or unavailable.
-        return set()
-    fields = output.split(b"\0")[:-1]
-    return {
-        os.fsdecode(path)
-        for source, pattern, path in zip(fields[::4], fields[2::4], fields[3::4], strict=True)
-        if (source == b".gitignore" or source.endswith(b"/.gitignore"))
-        and not pattern.startswith(b"!")
-    }
-
-
-def scan_files(root: Path, *, include=(), reuse=None, stale=frozenset()):
-    """Stat selected regular files only, without following directory symlinks.
-
-    Each state is (size, mtime_ns, mode, ctime_ns, dev, ino). Git still lists the
-    selection on every call, so ignore rules, tracking and new or deleted files
-    stay exact. reuse maps paths to states known to be current (from file events);
-    those are returned without lstat unless listed in stale.
-
-    include is used solely to check Undo conflicts for older snapshots, whose
-    paths may now be ignored. It never expands the normal checkpoint scope.
+    Each state is (size, mtime_ns, mode, ctime_ns, dev, ino). Directories are
+    listed on every call, so new and deleted files stay exact. reuse maps paths
+    to states known to be current (from file events); those are returned
+    without a stat unless listed in stale.
     """
     root = root.resolve()
-    if not root.exists():
+    if not root.is_dir():
         return {}
     reuse = reuse or {}
-    result, pending, visited = {}, [root], set()
-    safe_dirs = {root: True}
-
-    def safe_directory(path):
-        if path not in safe_dirs:
-            safe_dirs[path] = safe_directory(path.parent) and not path.is_symlink()
-        return safe_dirs[path]
-
+    result, pending = {}, [(str(root), "")]
     while pending:
-        folder = pending.pop()
-        if folder in visited:
+        folder, prefix = pending.pop()
+        try:
+            entries = os.scandir(folder)
+        except (FileNotFoundError, NotADirectoryError, PermissionError):
             continue
-        visited.add(folder)
-        names = git_files(folder)
-        if folder == root:
-            names.update(include)
-        prefix = "" if folder == root else folder.relative_to(root).as_posix() + "/"
-        for name in names:
-            known = reuse.get(prefix + name)
-            if known is not None and prefix + name not in stale:
-                # Checked when first seen; parent changes arrive as stale paths.
-                result[prefix + name] = known
-                continue
-            relative = PurePosixPath(name)
-            if relative.is_absolute() or ".." in relative.parts or not relative.parts:
-                raise ValueError("Unsafe workspace path")
-            path = folder / name
-            parts = path.relative_to(root).parts
-            if any(p in EXCLUDED_DIRS for p in parts[:-1]) or not safe_directory(path.parent):
-                continue
-            try:
-                info = path.lstat()
-            except (FileNotFoundError, NotADirectoryError):
-                continue
-            if stat.S_ISDIR(info.st_mode):
-                # Git lists submodules/nested repositories as a directory entry.
-                if path.name not in EXCLUDED_DIRS:
-                    pending.append(path)
-            elif stat.S_ISREG(info.st_mode) and path.name != ".git":
-                result[path.relative_to(root).as_posix()] = (
-                    info.st_size, info.st_mtime_ns,
-                    "100755" if info.st_mode & stat.S_IXUSR else "100644",
-                    info.st_ctime_ns, info.st_dev, info.st_ino,
-                )
+        with entries:
+            for entry in entries:
+                relative = prefix + relative_name(entry.name)
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name not in EXCLUDED_DIRS:
+                            pending.append((entry.path, relative + "/"))
+                        continue
+                    # Symlinks, sockets and FIFOs are never selected.
+                    if not entry.is_file(follow_symlinks=False) or entry.name == ".git":
+                        continue
+                    known = reuse.get(relative)
+                    if known is not None and relative not in stale:
+                        result[relative] = known
+                        continue
+                    info = entry.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                if stat.S_ISREG(info.st_mode):
+                    result[relative] = (
+                        info.st_size, info.st_mtime_ns,
+                        "100755" if info.st_mode & stat.S_IXUSR else "100644",
+                        info.st_ctime_ns, info.st_dev, info.st_ino,
+                    )
     return result
