@@ -597,9 +597,12 @@ class RunManager:
         ])
 
     async def checkpoint(self, rid, workspace, name):
-        """Checkpoint failures are reported but never fail the run."""
+        """Return the workspace file states, or None if no checkpoint was saved.
+
+        Checkpoint failures are reported but never fail the run.
+        """
         if not self.settings.checkpoints or not self.checkpoints.available:
-            return
+            return None
         if name == "before":
             self.store.status(rid, "preparing", "Saving a workspace checkpoint")
         try:
@@ -613,11 +616,21 @@ class RunManager:
                 name=name, files=result["files"],
                 skipped=result["skipped"][:50], skipped_count=len(result["skipped"]),
             ))
+            return result["scanned"]
         except Exception as error:
             log.warning("Checkpoint %s failed for run %s: %s", name, rid, error)
             self.store.event(rid, "checkpoint", dict(
                 name=name, error=self.redact(str(error))[:2000],
             ))
+            return None
+
+    async def workspace_files(self, rid, workspace, name):
+        """Reuse the checkpoint scan; scan separately only without a checkpoint."""
+        files = await self.checkpoint(rid, workspace, name)
+        if files is None:
+            # Scanning large workspaces must not block the event loop.
+            files = await asyncio.to_thread(file_snapshot, workspace.path)
+        return files
 
     def run_workspace(self, rid):
         run = self.store.run(rid)
@@ -759,8 +772,7 @@ class RunManager:
                 raise ValueError(
                     "Workspace is blocked after a container cleanup failure"
                 )
-            before_files = file_snapshot(workspace.path)
-            await self.checkpoint(rid, workspace, "before")
+            before_files = await self.workspace_files(rid, workspace, "before")
             async with asyncio.timeout(self.settings.run_timeout) as run_timer:
                 skills = list(self.config.skills)
                 resources = self.select(self.config.resources, request.resource_ids)
@@ -882,7 +894,7 @@ class RunManager:
                 self.store.event(rid, "sandbox_cleanup_failed", {})
         if before_files is not None:
             try:
-                after_files = file_snapshot(workspace.path)
+                after_files = await self.workspace_files(rid, workspace, "after")
                 changed = [
                     dict(
                         path=p,
@@ -907,7 +919,7 @@ class RunManager:
                     "error",
                     dict(message="Could not list file changes"),
                 )
-        if acquired:
+        elif acquired:
             await self.checkpoint(rid, workspace, "after")
         self.store.status(rid, final_status, final_label)
         if final_status != "completed":

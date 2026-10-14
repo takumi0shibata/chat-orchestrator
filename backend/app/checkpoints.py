@@ -35,13 +35,13 @@ class CheckpointConflict(Exception):
 
 def walk(root: Path, max_file_bytes: int, *, include=()):
     """Apply checkpoint size limits to the shared workspace selection."""
-    files, skipped = {}, []
+    files, skipped = {}, {}
     for relative, state in scan_files(root, include=include).items():
         if state[0] > max_file_bytes or "\n" in relative:
-            skipped.append(relative)
+            skipped[relative] = state
         else:
             files[relative] = state
-    return files, sorted(skipped)
+    return files, skipped
 
 
 def safe_relative(path: str):
@@ -127,7 +127,9 @@ class Checkpoints:
             tree = self.git(repo, "write-tree", env=index).decode().strip()
         commit = self.git(repo, "commit-tree", tree, "-m", label).decode().strip()
         cache_path.write_text(json.dumps(next_cache))
-        return dict(commit=commit, files=len(files), skipped=skipped)
+        # scanned matches file_snapshot, so callers need not scan the workspace again.
+        scanned = {p: state[:2] for p, state in (files | skipped).items()}
+        return dict(commit=commit, files=len(files), skipped=sorted(skipped), scanned=scanned)
 
     def repos(self):
         return sorted(self.root.glob("*.git")) if self.root.exists() else []

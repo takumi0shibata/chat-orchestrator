@@ -167,7 +167,7 @@ Filesでファイルをクリックすると編集画面を開けます。`.md`�
 
 UTF-8テキストの編集にはResponses APIの `apply_patch` ツールを使います。パッチはサンドボックス内で適用するため、パスは `/workspace` 内に限られ、シンボリックリンク経由の書き込みや読み取り専用領域への書き込みは失敗としてモデルに返します。Office・PDF・画像などのバイナリ、生成物、一括置換はShellで扱います。Activityには編集ごとの差分を表示します。
 
-各実行の開始前と終了時（停止・失敗を含む）に作業フォルダのチェックポイントを取り、`backend/data/agent/checkpoints/` のアプリ専用Gitリポジトリへ保存します。成果物の変更一覧とcheckpointは同じファイル選別処理を使い、`.gitignore` で無視される未追跡ファイルを除外します。Git自身に列挙させるため、無視するディレクトリの中身は走査しません。入れ子の `.gitignore`、`!` による再包含に対応し、既にGitで追跡しているファイルはignoreパターンに一致しても対象に残します。Git管理していないフォルダでも `.gitignore` を使えます。ネストしたリポジトリはそれぞれのルールで扱います。グローバルなignore設定と `.git/info/exclude` は使いません。
+各実行の開始前と終了時（停止・失敗を含む）に作業フォルダのチェックポイントを取り、`backend/data/agent/checkpoints/` のアプリ専用Gitリポジトリへ保存します。成果物の変更一覧とcheckpointは同じファイル選別処理を使い、`.gitignore` で無視される未追跡ファイルを除外します。Git自身に列挙させるため、無視するディレクトリの中身は走査しません。入れ子の `.gitignore`、`!` による再包含に対応し、既にGitで追跡しているファイルはignoreパターンに一致しても対象に残します。Git管理していないフォルダでも `.gitignore` を使えます。ネストしたリポジトリはそれぞれのルールで扱います。グローバルなignore設定と `.git/info/exclude` は使いません。成果物の変更一覧はcheckpointの走査結果を再利用し、checkpoint無効時・失敗時だけ別に走査します。走査はバックグラウンドスレッドで行い、実行中の他の画面操作を止めません。
 
 除外されたファイルは、AIが変更しても成果物の変更一覧・checkpointの差分・Undoの対象外です。`.venv`、`venv`、`node_modules`、`.git`、`__pycache__`、`.pytest_cache`、`.ruff_cache` とシンボリックリンクは引き続き常に除外します。checkpointはさらに `CHECKPOINT_MAX_FILE_BYTES`（既定50 MiB）を超えるファイルを除外し、その件数を変更パネルに表示します（ignore対象の件数は集計しません）。ファイル内容には `.gitattributes` やGit LFSなどのフィルタを適用せず、ユーザーのGit index・履歴を変更しません。ホストの `git` はファイル選別にも必要です。`CHECKPOINTS=false` はcheckpoint保存を無効にしますが、同じ除外ルールで成果物の確認は行います。以前のcheckpointは残り、現在ignoreされているファイルも当時の差分・Undoを利用できます。
 

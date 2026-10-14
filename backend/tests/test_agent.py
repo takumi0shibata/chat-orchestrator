@@ -889,7 +889,7 @@ def test_stop_during_normal_finalization_waits_and_releases_workspace(tmp_path, 
             if stage == "checkpoint" and name == "after":
                 entered.set()
                 await release.wait()
-            await original_checkpoint(rid, workspace, name)
+            return await original_checkpoint(rid, workspace, name)
 
         manager.checkpoint = checkpoint
         run = manager.start(request)
@@ -1357,6 +1357,78 @@ def test_ignored_files_excluded_from_artifacts_and_checkpoints(tmp_path, checkpo
             await manager.revert(run["id"])
             assert (work / "keep.txt").read_text() == "before"
             assert (work / "generated/out.txt").read_text() == "after"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("checkpoints", [True, False])
+def test_artifacts_scan_workspace_off_the_event_loop_once_per_stage(
+    tmp_path, monkeypatch, checkpoints,
+):
+    import threading
+
+    from app import agent_runner, checkpoints as checkpoint_module
+
+    loop_thread = threading.get_ident()
+    scans = []
+
+    def tracking(scan):
+        def wrapped(root, **kwargs):
+            # Workspace scans of large folders must never block other requests.
+            assert threading.get_ident() != loop_thread
+            scans.append(root)
+            return scan(root, **kwargs)
+        return wrapped
+
+    monkeypatch.setattr(checkpoint_module, "scan_files", tracking(checkpoint_module.scan_files))
+    monkeypatch.setattr(agent_runner, "file_snapshot", tracking(agent_runner.file_snapshot))
+
+    class EditingSandbox(FakeSandbox):
+        async def start(self):
+            (tmp_path / "work/a.txt").write_text("after")
+            (tmp_path / "work/new.txt").write_text("new")
+
+    async def scenario():
+        manager, store, _, request = setup(
+            tmp_path, [[message()]], sandbox=EditingSandbox, checkpoints=checkpoints,
+        )
+        (tmp_path / "work/a.txt").write_text("before")
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        assert store.run(run["id"])["status"] == "completed"
+        artifacts = next(e["data"]["files"] for e in store.events(run["id"]) if e["type"] == "artifacts")
+        assert sorted(artifacts, key=lambda f: f["path"]) == [
+            {"path": "a.txt", "change": "modified"},
+            {"path": "new.txt", "change": "created"},
+        ]
+        # The checkpoint scan is reused for artifacts instead of scanning twice.
+        assert len(scans) == 2
+
+    asyncio.run(scenario())
+
+
+def test_artifacts_fall_back_to_scan_when_after_checkpoint_fails(tmp_path, monkeypatch):
+    class EditingSandbox(FakeSandbox):
+        async def start(self):
+            (tmp_path / "work/a.txt").write_text("after, longer")
+
+    async def scenario():
+        manager, store, _, request = setup(tmp_path, [[message()]], sandbox=EditingSandbox)
+        (tmp_path / "work/a.txt").write_text("before")
+        original = manager.checkpoints.snapshot
+
+        def snapshot(workspace, label, **kwargs):
+            if label.endswith(" after"):
+                raise RuntimeError("git failed")
+            return original(workspace, label, **kwargs)
+
+        monkeypatch.setattr(manager.checkpoints, "snapshot", snapshot)
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        events = store.events(run["id"])
+        assert [e["data"] for e in events if e["type"] == "checkpoint"][-1]["error"]
+        artifacts = next(e["data"]["files"] for e in events if e["type"] == "artifacts")
+        assert artifacts == [{"path": "a.txt", "change": "modified"}]
 
     asyncio.run(scenario())
 
