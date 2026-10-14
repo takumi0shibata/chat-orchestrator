@@ -12,6 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]
 BUNDLED_SKILLS = Path(__file__).resolve().parent / "bundled_skills"
+BUNDLED_SKILL_LABELS = {"guild-journal": "Guild Journal", "project-audit": "Project Audit"}
 IDENTIFIER = r"^[a-zA-Z0-9_-]{1,64}$"
 
 
@@ -221,12 +222,15 @@ class Settings(BaseSettings):
     def load_runtime(self):
         data = tomllib.loads(self.runtime_config.read_text()) if self.runtime_config.exists() else {}
         config = RuntimeConfig.model_validate(data)
-        bundled = Skill(
-            id="guild-journal", label="ギルド記録", path=BUNDLED_SKILLS / "guild-journal"
-        )
+        bundled = [
+            Skill(id=sid, label=label, path=BUNDLED_SKILLS / sid)
+            for sid, label in BUNDLED_SKILL_LABELS.items()
+        ]
         # A registered replacement takes precedence without duplicate @mentions.
-        if not any(skill.id == bundled.id or skill.name == bundled.name for skill in config.skills):
-            config.skills.insert(0, bundled)
+        config.skills[:0] = [
+            skill for skill in bundled
+            if not any(s.id == skill.id or s.name == skill.name for s in config.skills)
+        ]
         return config
 
 

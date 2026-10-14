@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 import {
   ArrowUp, Check, ChevronDown, ChevronRight, Copy, File, FileArchive, FileCode, FileImage,
   FileSpreadsheet, FileText, Folder, FolderOpen, Globe, Paperclip, PanelRight, Pin, Plus,
-  Presentation, RefreshCw, Search, Settings, Shield, Sparkles, SquarePen, SquareTerminal, X,
+  Presentation, RefreshCw, Search, Settings, Shield, ShieldCheck, Sparkles, SquarePen, SquareTerminal, X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { api, events } from "./api";
@@ -41,6 +41,8 @@ import type {
 const LAST_PROJECT_KEY = "workspace-last-project";
 const HostTerminalPanel = lazy(() => import("./components/HostTerminalPanel").then((module) => ({ default: module.HostTerminalPanel })));
 const GuildBoard = lazy(() => import("./components/GuildBoard").then((module) => ({ default: module.GuildBoard })));
+const AuditView = lazy(() => import("./components/AuditView").then((module) => ({ default: module.AuditView })));
+const AUDIT_SKILL = "project-audit";
 const SIDEBAR_WIDTH_KEY = "workspace-sidebar-width";
 const MIN_SIDEBAR_WIDTH = 200;
 const MAX_SIDEBAR_WIDTH = 400;
@@ -674,7 +676,7 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
   );
 }
 
-type SettingsPage = "chat" | "guild" | "settings" | "cost" | "theme" | "defaults" | "budget" | "storage" | "chatgpt";
+type SettingsPage = "chat" | "guild" | "audit" | "settings" | "cost" | "theme" | "defaults" | "budget" | "storage" | "chatgpt";
 
 const CHECKPOINT_AGES = [
   { days: 7, label: "Older than 7 days" },
@@ -1492,6 +1494,11 @@ export function App() {
   const latestSettings = useRef(appSettings);
   latestSettings.current = appSettings;
   const [settingsPage, setSettingsPage] = useState<SettingsPage>("chat");
+  const [auditProject, setAuditProject] = useState("");
+  // Per project: the chat that receives audit decision drafts.
+  const [auditChats, setAuditChats] = useState<Record<string, string>>({});
+  // Per conversation: a Skill to select once its history has loaded.
+  const pendingSkills = useRef<Record<string, string>>({});
   const [costs, setCosts] = useState<CostSummary | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [query, setQuery] = useState("");
@@ -1595,6 +1602,7 @@ export function App() {
   const currentWorkspace = config?.workspaces.find(
     (w) => w.id === (current?.workspace_id || workspace),
   );
+  const auditWorkspace = config?.workspaces.find((w) => w.id === auditProject);
   const terminalAvailable = settingsPage === "chat" && Boolean(currentWorkspace);
   const activeRun = runs.find((r) => !terminal(r.status));
   const active = Boolean(activeRun);
@@ -1863,6 +1871,11 @@ export function App() {
           setMcps(last.mcp_ids);
           setWeb(last.web_search);
         }
+        const pendingSkill = pendingSkills.current[cid];
+        if (pendingSkill) {
+          delete pendingSkills.current[cid];
+          setSkills((old) => old.includes(pendingSkill) ? old : [...old, pendingSkill]);
+        }
         for (const run of c.runs) subscription.start(run);
       })
       .catch((e) => {
@@ -2010,6 +2023,39 @@ export function App() {
     } finally {
       setBusy(false);
     }
+  }
+  function openAudit(projectId: string) {
+    rememberProject(projectId);
+    setAuditProject(projectId);
+    setSettingsPage("audit");
+  }
+  function auditChat(projectId: string) {
+    return conversations.find((c) => c.id === auditChats[projectId] && c.workspace_id === projectId)
+      || conversations.find((c) => c.id === cid && c.workspace_id === projectId);
+  }
+  // Audit actions only draft text; the user reviews and sends it like any other message.
+  async function draftAudit(projectId: string, text: string, fresh: boolean) {
+    let target = fresh ? undefined : auditChat(projectId);
+    if (!target) {
+      target = await api<Conversation>("/conversations", {
+        method: "POST",
+        body: JSON.stringify({ workspace_id: projectId }),
+      });
+      await refreshConversations();
+    }
+    const targetId = target.id;
+    setAuditChats((old) => ({ ...old, [projectId]: targetId }));
+    setDrafts((old) => {
+      const draft = old[targetId] || emptyDraft;
+      return { ...old, [targetId]: { ...draft, input: draft.input.trim() ? `${draft.input.trimEnd()}\n\n${text}` : text } };
+    });
+    const skill = config?.skills.find((item) => item.id === AUDIT_SKILL || item.name === AUDIT_SKILL);
+    if (skill) {
+      if (targetId === cid && loadedCid === cid) setSkills((old) => old.includes(skill.id) ? old : [...old, skill.id]);
+      else pendingSkills.current[targetId] = skill.id;
+    }
+    if (fresh) selectConversation(target);
+    return target.title || "New chat";
   }
   async function saveAppSettings(changes: AppSettingsChange) {
     const previous = appSettings;
@@ -2406,6 +2452,9 @@ export function App() {
                       <Icon name={expanded ? "folder-open" : "folder"} size={18} />
                       <span>{project.label}</span>
                     </button>
+                    <button className="project-new project-audit" type="button" aria-label={`Audit ${project.label}`} title={`Audit ${project.label}`} aria-current={settingsPage === "audit" && auditProject === project.id ? "page" : undefined} onClick={() => openAudit(project.id)}>
+                      <ShieldCheck size={16} strokeWidth={1.8} />
+                    </button>
                     <button className="project-new" type="button" aria-label={`New chat in ${project.label}`} title={`New chat in ${project.label}`} disabled={busy} onClick={() => void newConversation(project.id)}>
                       <Icon name="compose" size={16} />
                     </button>
@@ -2426,7 +2475,7 @@ export function App() {
           </section>
           {query.trim() && !searching && !searchError && searchResults?.length === 0 && <p className="muted">No matching conversations</p>}
         </nav>
-        <button className="sidebar-settings" type="button" aria-current={settingsPage !== "chat" && settingsPage !== "guild" ? "page" : undefined} onClick={() => setSettingsPage("settings")}>
+        <button className="sidebar-settings" type="button" aria-current={settingsPage !== "chat" && settingsPage !== "guild" && settingsPage !== "audit" ? "page" : undefined} onClick={() => setSettingsPage("settings")}>
           <Icon name="gear" size={18} />
           <span>Settings</span>
         </button>
@@ -2470,7 +2519,15 @@ export function App() {
           const latest = sortedConversations(conversations.filter((conversation) => conversation.workspace_id === projectId))[0];
           if (latest) selectConversation(latest);
           else await newConversation(projectId);
-        }} /></Suspense> : settingsPage !== "chat" ? (
+        }} /></Suspense> : settingsPage === "audit" ? auditWorkspace ? <Suspense fallback={<p role="status">Loading the audit…</p>}><AuditView
+          project={auditWorkspace}
+          draftTarget={auditChat(auditProject)?.title || null}
+          onDraft={(text, fresh) => draftAudit(auditProject, text, fresh)}
+          onOpenDraft={() => {
+            const target = auditChat(auditProject);
+            if (target) selectConversation(target);
+          }}
+        /></Suspense> : <p className="muted" role="status">This project is no longer registered.</p> : settingsPage !== "chat" ? (
           <SettingsPanel page={settingsPage} config={config} settings={appSettings} costs={costs} onNavigate={setSettingsPage} onChange={saveAppSettings} onRefresh={refreshConfig} />
         ) : <>
         {cid && (

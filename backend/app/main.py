@@ -13,6 +13,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.agent_runner import RunManager
 from app.attachments import list_files, open_regular, save_upload
+from app.audit import read_audit
 from app.checkpoints import CheckpointConflict
 from app.config import get_settings
 from app.guild import Guild
@@ -222,6 +223,11 @@ def create_app(settings=None, manager_factory=RunManager):
     @app.post("/api/guild/sync")
     async def sync_guild():
         return await asyncio.to_thread(app.state.guild.sync)
+
+    @app.get("/api/workspaces/{wid}/audit")
+    async def project_audit(wid: str):
+        project = app.state.manager.select(app.state.config.workspaces, [wid])[0]
+        return await asyncio.to_thread(read_audit, project)
 
     @app.patch("/api/settings")
     async def update_app_settings(body: AppSettingsUpdate):

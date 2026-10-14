@@ -2535,3 +2535,5 @@ h2 {
 .storage-action button:hover:not(:disabled) { background: #fdf3f2; }
 .storage-action button:disabled { border-color: #e3e3e6; color: #a5a7ad; cursor: default; }
 @media (max-width: 700px) { .title-model-controls { grid-template-columns: 1fr; } }
+.project-row .project-audit { margin-right: 0; }
+.project-row .project-audit[aria-current="page"] { opacity: 1; pointer-events: auto; background: #dedee2; color: #292b30; }

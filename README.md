@@ -58,7 +58,9 @@ Docker Composeはイメージのビルド専用です (`docker compose --profile
 
 サイドバーの「Guild Board」では、直下に `.chat-orchestrator/` があるProjectだけをまとめて閲覧できます。SyncでMarkdownの現在地・TODO・作業記録を取り込みます。掲示板自体はフォルダの自動生成や編集、モデル呼び出し、常時監視を行いません。[記録形式とSyncの仕様](docs/guild-board.md)を参照してください。
 
-ギルド用の標準Skill [guild-journal](backend/app/bundled_skills/guild-journal/SKILL.md)を同梱しており、`runtime.toml`への登録は不要です。対象Projectのチャットで「このプロジェクトをギルドに登録して」「今回の成果をギルドに記録して」と依頼すると、記録ファイルを作成・更新できます。`@guild-journal` または＋メニューの「ギルド記録」で明示指定もできます。記録後にGuild BoardのSyncを押してください。通常の作業だけで記録を作ったり、TODOの完了・期限を推測したりしない方針です。同梱Skillを追加したバージョンへの更新後は、バックエンドを再起動すると利用できます。
+ギルド用の標準Skill [guild-journal](backend/app/bundled_skills/guild-journal/SKILL.md)を同梱しており、`runtime.toml`への登録は不要です。対象Projectのチャットで「このプロジェクトをギルドに登録して」「今回の成果をギルドに記録して」と依頼すると、記録ファイルを作成・更新できます。`@guild-journal` または＋メニューの「Guild Journal」で明示指定もできます。記録後にGuild BoardのSyncを押してください。通常の作業だけで記録を作ったり、TODOの完了・期限を推測したりしない方針です。同梱Skillを追加したバージョンへの更新後は、バックエンドを再起動すると利用できます。
+
+サイドバーのProject名にカーソルを合わせると表示される盾のアイコンから、そのProjectの「Audit」を開けます。同梱Skill [project-audit](backend/app/bundled_skills/project-audit/SKILL.md)と協業して、READMEと実態のずれ、AIに書かせた実装計画（論文形式の仕様書）の根拠のない記述や存在しないAPI、コードの誤り、論文と結果の数値の不一致などを洗い出します。初回は監査の範囲と正のデータを決めるCharterを対話で作成します。記録は `.chat-orchestrator/audit/` のMarkdownに保存され、画面は根拠の引用が実際にファイルにあるかを機械的に照合して表示します。判断・修正の操作はチャット入力欄への下書きで、送信するまで何も変更しません。[使い方と記録形式](docs/project-audit.md)を参照してください。
 
 `runtime.toml` はGit管理外です。[設定例](runtime.example.toml)を参照してください。
 

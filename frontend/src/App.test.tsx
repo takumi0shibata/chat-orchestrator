@@ -76,6 +76,56 @@ it("opens the guild from the sidebar and returns to the project's chat with its 
   expect(screen.getByRole("heading", { name: "Research chat" })).toBeInTheDocument();
 });
 
+it("drafts audit decisions into the project's chat with the audit Skill and starts audits in a new chat", async () => {
+  localStorage.setItem("workspace-conversation", "c");
+  const conversation = { id: "c", workspace_id: "w", title: "Research chat", updated_at: run.updated_at };
+  const fresh = { id: "n", workspace_id: "w", title: "New chat", updated_at: "2026-09-18T00:00:00Z" };
+  let created = false;
+  const finding = {
+    id: "F-001", title: "README と Makefile の不一致", line: 3, status: "open", severity: "major", relation: "README ↔ 実態",
+    verdict: "矛盾", verified: "", found: "", decision: "", resolved: "", options: ["READMEを直す"], evidence: [],
+  };
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = String(input);
+    if (url === "/api/config") return new Response(JSON.stringify({
+      providers: [], workspaces: [{ id: "w", label: "Research", path: "/research" }], resources: [], mcp_servers: [],
+      skills: [{ id: "project-audit", label: "Project Audit", name: "project-audit", description: "Audit" }],
+    }));
+    if (url === "/api/settings") return new Response(JSON.stringify({ title_provider: "openai", title_model: "gpt-6-luna", theme_color: "#25262A" }));
+    if (url === "/api/conversations" && init?.method === "POST") { created = true; return new Response(JSON.stringify(fresh)); }
+    if (url === "/api/conversations") return new Response(JSON.stringify(created ? [fresh, conversation] : [conversation]));
+    if (url === "/api/conversations/c") return new Response(JSON.stringify({ ...conversation, runs: [] }));
+    if (url === "/api/conversations/n") return new Response(JSON.stringify({ ...fresh, runs: [] }));
+    if (url === "/api/workspaces/w/audit") return new Response(JSON.stringify({
+      project_id: "w", exists: true, charter: { path: "charter.md", content: "# Charter", updated_at: run.updated_at },
+      findings_document: { path: "findings.md", updated_at: run.updated_at }, findings: [finding], reports: [],
+      reports_truncated: false, warnings: [], errors: [],
+    }));
+    return new Response(JSON.stringify([]));
+  });
+  render(<App />);
+  const message = await screen.findByRole("textbox", { name: "Message" });
+  fireEvent.change(message, { target: { value: "途中の依頼" } });
+  fireEvent.click(screen.getByRole("button", { name: "Audit Research" }));
+  expect(screen.getByRole("button", { name: "Audit Research" })).toHaveAttribute("aria-current", "page");
+  expect(await screen.findByText(/Decisions are drafted into “Research chat”/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Open F-001 README と Makefile の不一致" }));
+  fireEvent.click(screen.getByRole("button", { name: "READMEを直す" }));
+  fireEvent.click(await screen.findByRole("button", { name: /Open chat/ }));
+  const draft = await screen.findByRole("textbox", { name: "Message" });
+  expect(draft).toHaveValue(`途中の依頼\n\nF-001「README と Makefile の不一致」の判断:「READMEを直す」で進めます。findings.md の decision と status を更新してください。修正はまだ行わないでください。`);
+  expect(screen.getByText("Project Audit")).toBeInTheDocument();
+  expect(fetch.mock.calls.some(([url, init]) => String(url).startsWith("/api/runs") && init?.method === "POST")).toBe(false);
+
+  fireEvent.click(screen.getByRole("button", { name: "Audit Research" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Run audit" }));
+  await waitFor(() => expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue(
+    "Charterに沿ってこのProjectを監査してください。監査中は .chat-orchestrator/audit/ 以外のファイルを変更しないでください。",
+  ));
+  expect(fetch.mock.calls.filter(([url, init]) => url === "/api/conversations" && init?.method === "POST")).toHaveLength(1);
+  expect(screen.getByText("Project Audit")).toBeInTheDocument();
+});
+
 it.each([false, true])("shows Azure connection labels and filters a bound chat: %s", async (bound) => {
   localStorage.setItem("workspace-conversation", "c");
   const azureModels = [

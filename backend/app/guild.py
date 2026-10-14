@@ -42,7 +42,7 @@ def directory(path):
         os.close(fd)
 
 
-def read_document(fd, name, path):
+def read_document(fd, name, path, limit=MAX_FILE_BYTES):
     try:
         handle = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
     except FileNotFoundError:
@@ -51,11 +51,11 @@ def read_document(fd, name, path):
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode):
             raise ValueError(f"{path}: Not a regular file.")
-        if info.st_size > MAX_FILE_BYTES:
-            raise ValueError(f"{path}: Exceeds the 64 KiB limit.")
-        raw = stream.read(MAX_FILE_BYTES + 1)
-        if len(raw) > MAX_FILE_BYTES:
-            raise ValueError(f"{path}: Exceeds the 64 KiB limit.")
+        if info.st_size > limit:
+            raise ValueError(f"{path}: Exceeds the {limit // 1024} KiB limit.")
+        raw = stream.read(limit + 1)
+        if len(raw) > limit:
+            raise ValueError(f"{path}: Exceeds the {limit // 1024} KiB limit.")
         after = os.fstat(stream.fileno())
         if (info.st_mtime_ns, info.st_size) != (after.st_mtime_ns, after.st_size):
             raise ValueError(f"{path}: The file is being updated. Please Sync again.")
