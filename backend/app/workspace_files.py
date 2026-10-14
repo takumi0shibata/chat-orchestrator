@@ -65,8 +65,13 @@ def ignored_names(root: Path, relative: str, names):
     }
 
 
-def scan_files(root: Path, *, include=()):
+def scan_files(root: Path, *, include=(), reuse=None, stale=frozenset()):
     """Stat selected regular files only, without following directory symlinks.
+
+    Each state is (size, mtime_ns, mode, ctime_ns, dev, ino). Git still lists the
+    selection on every call, so ignore rules, tracking and new or deleted files
+    stay exact. reuse maps paths to states known to be current (from file events);
+    those are returned without lstat unless listed in stale.
 
     include is used solely to check Undo conflicts for older snapshots, whose
     paths may now be ignored. It never expands the normal checkpoint scope.
@@ -74,6 +79,7 @@ def scan_files(root: Path, *, include=()):
     root = root.resolve()
     if not root.exists():
         return {}
+    reuse = reuse or {}
     result, pending, visited = {}, [root], set()
     safe_dirs = {root: True}
 
@@ -90,7 +96,13 @@ def scan_files(root: Path, *, include=()):
         names = git_files(folder)
         if folder == root:
             names.update(include)
+        prefix = "" if folder == root else folder.relative_to(root).as_posix() + "/"
         for name in names:
+            known = reuse.get(prefix + name)
+            if known is not None and prefix + name not in stale:
+                # Checked when first seen; parent changes arrive as stale paths.
+                result[prefix + name] = known
+                continue
             relative = PurePosixPath(name)
             if relative.is_absolute() or ".." in relative.parts or not relative.parts:
                 raise ValueError("Unsafe workspace path")
@@ -110,5 +122,6 @@ def scan_files(root: Path, *, include=()):
                 result[path.relative_to(root).as_posix()] = (
                     info.st_size, info.st_mtime_ns,
                     "100755" if info.st_mode & stat.S_IXUSR else "100644",
+                    info.st_ctime_ns, info.st_dev, info.st_ino,
                 )
     return result

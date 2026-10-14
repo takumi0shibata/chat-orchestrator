@@ -2,6 +2,10 @@
 
 File selection respects .gitignore while retaining tracked files. Contents are
 hashed with ``--no-filters`` and trees are built from a private index.
+
+Each snapshot saves the state of every selected file. With file events (see
+workspace_watch), later snapshots stat and hash only files with events; Git
+still lists the selection, so new, deleted and (un)ignored files stay exact.
 """
 
 import hashlib
@@ -10,10 +14,13 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
+from bisect import bisect_left
 from pathlib import Path, PurePosixPath
 
 from app.workspace_files import scan_files
+from app.workspace_watch import nfc
 
 GIT_ENV = {
     "GIT_CONFIG_GLOBAL": os.devnull,
@@ -25,6 +32,9 @@ GIT_ENV = {
     "GIT_COMMITTER_EMAIL": "checkpoints@localhost",
 }
 MAX_PATCH_CHARS = 200_000
+STATE_VERSION = 2
+# Keeps the blobs of the saved state reachable when old runs are pruned.
+STATE_REF = "refs/orchestrator/state"
 
 
 class CheckpointConflict(Exception):
@@ -33,15 +43,51 @@ class CheckpointConflict(Exception):
         super().__init__("Files changed after the run: " + ", ".join(paths[:10]))
 
 
-def walk(root: Path, max_file_bytes: int, *, include=()):
+def walk(root: Path, max_file_bytes: int, *, include=(), reuse=None, stale=frozenset()):
     """Apply checkpoint size limits to the shared workspace selection."""
     files, skipped = {}, {}
-    for relative, state in scan_files(root, include=include).items():
+    for relative, state in scan_files(
+        root, include=include, reuse=reuse, stale=stale
+    ).items():
         if state[0] > max_file_bytes or "\n" in relative:
             skipped[relative] = state
         else:
             files[relative] = state
     return files, skipped
+
+
+def stale_paths(known, events):
+    """Known paths with an event on themselves or on an ancestor directory."""
+    if not events:
+        return set()
+    index = sorted((nfc(path), path) for path in known)
+    keys = [key for key, _ in index]
+    result = set()
+    for event in events:
+        position = bisect_left(keys, event)
+        if position < len(keys) and keys[position] == event:
+            result.add(index[position][1])
+        # Renamed or replaced directories report only the directory itself.
+        position = bisect_left(keys, event + "/")
+        while position < len(keys) and keys[position].startswith(event + "/"):
+            result.add(index[position][1])
+            position += 1
+    return result
+
+
+def index_checksum(path):
+    """Git's trailing index checksum, tying a saved index to the saved state."""
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(-20, os.SEEK_END)
+            return handle.read().hex()
+    except OSError:
+        return None
+
+
+def same_file(entry, state):
+    # Include identity and ctime: writes can preserve both size and mtime.
+    return entry is not None and entry[:2] == list(state[:2]) and entry[3:6] == list(state[3:6])
 
 
 def safe_relative(path: str):
@@ -52,10 +98,76 @@ def safe_relative(path: str):
 
 
 class Checkpoints:
-    def __init__(self, root: Path, max_file_bytes: int):
+    def __init__(self, root: Path, max_file_bytes: int, watcher_factory=None):
         self.root = root
         self.max_file_bytes = max_file_bytes
         self.available = shutil.which("git") is not None
+        self.watcher_factory = watcher_factory
+        self.watchers = {}
+        self.watch_lock = threading.Lock()
+
+    def watcher(self, workspace, repo, state):
+        """Start watching lazily, resuming from the saved state's event cursor."""
+        if not self.watcher_factory:
+            return None
+        with self.watch_lock:
+            if repo not in self.watchers:
+                self.watchers[repo] = self.watcher_factory(
+                    workspace, repo / "watch-marks", state["cursor"], state["device"]
+                )
+            return self.watchers[repo]
+
+    def close(self):
+        with self.watch_lock:
+            for watcher in self.watchers.values():
+                if watcher:
+                    watcher.close()
+            self.watchers.clear()
+
+    def load_state(self, repo):
+        try:
+            state = json.loads((repo / "snapshot-state.json").read_text())
+        except (OSError, ValueError):
+            state = None
+        if not isinstance(state, dict) or state.get("version") != STATE_VERSION:
+            # Older releases kept a hash cache: {path: [size, mtime, ctime, dev, ino, sha]}.
+            # A versioned cache came from a reverted optimization and is discarded.
+            try:
+                cache = json.loads((repo / "snapshot-cache.json").read_text())
+            except (OSError, ValueError):
+                cache = {}
+            if not isinstance(cache, dict) or isinstance(cache.get("version"), int):
+                cache = {}
+            files = {
+                path: [e[0], e[1], None, *e[2:6]]
+                for path, e in cache.items() if isinstance(e, list) and len(e) == 6
+            }
+            state = dict(version=STATE_VERSION, device=None, cursor=None,
+                         files=files, skipped={}, recent=[])
+        if state["files"] and not self.has_ref(repo, STATE_REF):
+            # Pruning may have removed blobs that no ref protected.
+            shas = sorted({e[6] for e in state["files"].values()})
+            output = self.git(
+                repo, "cat-file", "--batch-check=%(objectname) %(objecttype)",
+                input="".join(sha + "\n" for sha in shas).encode(),
+            ).decode().split("\n")
+            present = {line.split()[0] for line in output if line.endswith(" blob")}
+            state["files"] = {p: e for p, e in state["files"].items() if e[6] in present}
+        return state
+
+    def has_ref(self, repo, ref):
+        try:
+            return bool(self.git(repo, "rev-parse", "--verify", "--quiet", ref).strip())
+        except RuntimeError:
+            return False
+
+    def save_state(self, repo, state, commit):
+        self.git(repo, "update-ref", STATE_REF, commit)
+        path = repo / "snapshot-state.json"
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(state, separators=(",", ":")))
+        os.replace(temporary, path)
+        (repo / "snapshot-cache.json").unlink(missing_ok=True)
 
     def repo(self, workspace: Path):
         key = hashlib.sha256(str(workspace.resolve()).encode()).hexdigest()[:16]
@@ -82,27 +194,28 @@ class Checkpoints:
     def snapshot(self, workspace: Path, label: str, *, include=(), rehash=()):
         """Return a commit for the workspace's current regular files."""
         repo = self.repo(workspace)
-        files, skipped = walk(workspace, self.max_file_bytes, include=include)
-        cache_path = repo / "snapshot-cache.json"
-        try:
-            cache = json.loads(cache_path.read_text())
-        except (OSError, ValueError):
-            cache = {}
-        # The reverted optimization used a different, versioned cache layout.
-        # Rebuild that metadata without touching existing commits or run refs.
-        if not isinstance(cache, dict) or isinstance(cache.get("version"), int):
-            cache = {}
-        # Include identity and ctime: writes can preserve both size and mtime.
-        states = {}
-        for path, (size, mtime, _) in files.items():
-            info = (workspace / path).lstat()
-            states[path] = [size, mtime, info.st_ctime_ns, info.st_dev, info.st_ino]
-        rehash = set(rehash)
-        # A file modified again within the same mtime tick must be re-hashed later.
-        recent = time.time_ns() - 2_000_000_000
+        state = self.load_state(repo)
+        # Undo checks may include ignored paths, so they never update the state.
+        persist = not include and not rehash
+        watcher = self.watcher(workspace, repo, state) if persist else None
+        sync = watcher.sync() if watcher else None
+        incremental = bool(
+            sync and sync.complete and state["cursor"] is not None
+            and state["device"] == watcher.device and watcher.base <= state["cursor"]
+        )
+        reuse, stale = None, frozenset()
+        if incremental:
+            known = state["files"] | state["skipped"]
+            reuse = {path: tuple(entry[:6]) for path, entry in known.items()}
+            # A file modified again within the same mtime tick must be re-hashed later.
+            stale = stale_paths(known, sync.paths) | set(state["recent"])
+        files, skipped = walk(
+            workspace, self.max_file_bytes, include=include, reuse=reuse, stale=stale
+        )
+        previous = state["files"]
+        rehash = set(rehash) | set(state["recent"])
         pending = [
-            p for p in files
-            if p in rehash or cache.get(p, [])[:5] != states[p]
+            p for p in files if p in rehash or not same_file(previous.get(p), files[p])
         ]
         hashed = {}
         if pending:
@@ -111,25 +224,60 @@ class Checkpoints:
                 input=b"".join(os.fsencode(workspace / p) + b"\n" for p in pending),
             ).decode().split()
             hashed = dict(zip(pending, output, strict=True))
-        entries, next_cache = [], {}
-        for path, (size, mtime, mode) in sorted(files.items()):
-            sha = hashed.get(path) or cache[path][5]
-            entries.append(f"{mode} {sha}\t".encode() + os.fsencode(path) + b"\0")
-            if mtime < recent:
-                next_cache[path] = [*states[path], sha]
+        recent_ns = time.time_ns() - 2_000_000_000
+        saved, recent = {}, []
+        for path, file in files.items():
+            saved[path] = [*file, hashed.get(path) or previous[path][6]]
+            if file[1] >= recent_ns:
+                recent.append(path)
+        saved_index = repo / "snapshot-index"
+        # The saved index matches the saved state, so only changed entries are
+        # updated and write-tree reuses cached trees of unchanged directories.
+        base = state.get("index") is not None and index_checksum(saved_index) == state["index"]
+        if base:
+            removed = [
+                b"0 " + b"0" * 40 + b"\t" + os.fsencode(p) + b"\0"
+                for p in previous.keys() - saved.keys()
+            ]
+            changed = sorted(
+                p for p, e in saved.items()
+                if previous.get(p) is None or previous[p][2] != e[2] or previous[p][6] != e[6]
+            )
+        else:
+            removed, changed = [], sorted(saved)
+        entries = removed + [
+            f"{saved[p][2]} {saved[p][6]}\t".encode() + os.fsencode(p) + b"\0" for p in changed
+        ]
         with tempfile.TemporaryDirectory(dir=repo) as scratch:
-            index = {"GIT_INDEX_FILE": str(Path(scratch) / "index")}
+            scratch_index = Path(scratch) / "index"
+            if base:
+                shutil.copyfile(saved_index, scratch_index)
+            index = {"GIT_INDEX_FILE": str(scratch_index)}
             if entries:
                 self.git(
-                    repo, "update-index", "-z", "--index-info",
+                    repo, "update-index", "-z", "--replace", "--index-info",
                     input=b"".join(entries), env=index,
                 )
             tree = self.git(repo, "write-tree", env=index).decode().strip()
+            if persist and scratch_index.exists():
+                os.replace(scratch_index, saved_index)
         commit = self.git(repo, "commit-tree", tree, "-m", label).decode().strip()
-        cache_path.write_text(json.dumps(next_cache))
+        if persist:
+            self.save_state(repo, dict(
+                version=STATE_VERSION,
+                device=watcher.device if sync else None,
+                cursor=sync.cursor if sync else None,
+                index=index_checksum(saved_index) if entries or base else None,
+                files=saved, skipped={p: list(s) for p, s in skipped.items()}, recent=recent,
+            ), commit)
+            if sync:
+                watcher.commit(sync, full=not incremental)
         # scanned matches file_snapshot, so callers need not scan the workspace again.
-        scanned = {p: state[:2] for p, state in (files | skipped).items()}
-        return dict(commit=commit, files=len(files), skipped=sorted(skipped), scanned=scanned)
+        scanned = {p: info[:2] for p, info in (files | skipped).items()}
+        return dict(
+            commit=commit, files=len(files), skipped=sorted(skipped), scanned=scanned,
+            scan="incremental" if incremental else "full",
+        )
 
     def repos(self):
         return sorted(self.root.glob("*.git")) if self.root.exists() else []

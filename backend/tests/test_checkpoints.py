@@ -2,10 +2,12 @@ import subprocess
 import json
 import os
 import time
+from pathlib import Path
 
 import pytest
 
-from app.checkpoints import CheckpointConflict, Checkpoints
+from app.checkpoints import STATE_REF, CheckpointConflict, Checkpoints, stale_paths
+from app.workspace_watch import Sync
 
 
 @pytest.fixture
@@ -144,6 +146,7 @@ def test_versioned_cache_is_rebuilt_without_deleting_old_refs(setup):
     (work / "version").write_text("one")
     before = cp.snapshot(work, "before")["commit"]
     cp.set_ref(work, "old", "before", before)
+    (cp.repo(work) / "snapshot-state.json").unlink()
     (cp.repo(work) / "snapshot-cache.json").write_text('{"version":2,"files":{},"tree":"unused"}')
     after = cp.snapshot(work, "after")["commit"]
     assert cp.changes(work, before, after) == []
@@ -178,9 +181,12 @@ def test_undo_rehashes_changed_files_even_when_cache_claims_no_change(setup):
     # verify the actual bytes regardless of what the cache says.
     info = path.stat()
     sha = cp.tree(cp.repo(work), after)["a.txt"][1]
-    (cp.repo(work) / "snapshot-cache.json").write_text(json.dumps({
-        "a.txt": [info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_dev, info.st_ino, sha],
-    }))
+    state_path = cp.repo(work) / "snapshot-state.json"
+    state = json.loads(state_path.read_text())
+    state["files"]["a.txt"] = [
+        info.st_size, info.st_mtime_ns, "100644", info.st_ctime_ns, info.st_dev, info.st_ino, sha,
+    ]
+    state_path.write_text(json.dumps(state))
     with pytest.raises(CheckpointConflict) as error:
         cp.restore(work, before, after)
     assert error.value.paths == ["a.txt"]
@@ -195,6 +201,7 @@ def test_old_unversioned_cache_is_rehashed_without_changing_refs(setup):
     cp.set_ref(work, "old", "before", before)
     info = path.stat()
     sha = cp.tree(cp.repo(work), before)["a.txt"][1]
+    (cp.repo(work) / "snapshot-state.json").unlink()
     (cp.repo(work) / "snapshot-cache.json").write_text(json.dumps({
         "a.txt": [info.st_size, info.st_mtime_ns, sha],
     }))
@@ -203,3 +210,241 @@ def test_old_unversioned_cache_is_rehashed_without_changing_refs(setup):
     after = cp.snapshot(work, "after")["commit"]
     assert cp.changes(work, before, after)
     assert cp.get_ref(work, "old", "before") == before
+
+
+class FakeWatcher:
+    """Reports exactly the events a test declares, like FSEventsWatcher."""
+
+    device = "volume"
+
+    def __init__(self, since=None, device=None):
+        resumed = since is not None and device == self.device
+        self.base = since if resumed else 100
+        self.cursor, self.events, self.complete = self.base, set(), resumed
+
+    def event(self, *paths):
+        self.cursor += 1
+        self.events.update(paths)
+
+    def sync(self):
+        return Sync(cursor=self.cursor, paths=frozenset(self.events), complete=self.complete, reset=0)
+
+    def commit(self, sync, *, full):
+        self.events -= sync.paths
+        self.complete = self.complete or full
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def watched(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    started = []
+
+    def factory(root, marks, since, device):
+        started.append((since, device))
+        return FakeWatcher(since, device)
+
+    cp = Checkpoints(tmp_path / "data", max_file_bytes=1024, watcher_factory=factory)
+    return cp, work, started
+
+
+def write_old(path, text):
+    """Write a file whose mtime is outside the same-tick re-hash window."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    old = time.time_ns() - 10_000_000_000
+    os.utime(path, ns=(old, old))
+
+
+def statuses(cp, work, before, after):
+    return {f["path"]: f["status"] for f in cp.changes(work, before["commit"], after["commit"])}
+
+
+def test_incremental_snapshot_stats_only_files_with_events(watched, monkeypatch):
+    cp, work, _ = watched
+    for i in range(200):
+        write_old(work / f"many/{i}.txt", str(i))
+    for name in ("a.txt", "b.txt", "gone.txt"):
+        write_old(work / name, "before")
+    before = cp.snapshot(work, "before")
+    assert before["scan"] == "full"
+    watcher = cp.watchers[cp.repo(work)]
+
+    write_old(work / "a.txt", "AFTER!")
+    watcher.event("a.txt")
+    # Without an event, unchanged state is trusted (the watcher reports all writes).
+    write_old(work / "b.txt", "AFTER!")
+    # Creation and deletion come from Git's listing, events or not.
+    write_old(work / "new.txt", "new")
+    (work / "gone.txt").unlink()
+    checked = []
+    original = Path.lstat
+
+    def record(path, *args, **kwargs):
+        checked.append(path.relative_to(work).as_posix() if path.is_relative_to(work) else path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", record)
+    after = cp.snapshot(work, "after")
+    monkeypatch.undo()
+    assert after["scan"] == "incremental"
+    assert statuses(cp, work, before, after) == {
+        "a.txt": "modified", "new.txt": "added", "gone.txt": "deleted",
+    }
+    assert set(checked) <= {"a.txt", "new.txt", "."}
+    assert after["scanned"]["b.txt"] == before["scanned"]["b.txt"]
+    assert not watcher.events
+
+
+def test_incremental_snapshot_follows_ignore_and_tracking_changes(watched):
+    cp, work, _ = watched
+    subprocess.run(["git", "init", "-q", str(work)], check=True)
+    write_old(work / ".gitignore", "logs/\n")
+    write_old(work / "gen/out.txt", "x")
+    write_old(work / "logs/run.log", "x")
+    write_old(work / "keep.tmp", "x")
+    write_old(work / "drop.tmp", "x")
+    before = cp.snapshot(work, "before")
+    assert set(before["scanned"]) == {".gitignore", "gen/out.txt", "keep.tmp", "drop.tmp"}
+
+    # Only .gitignore has an event; the selection changes follow from Git.
+    write_old(work / ".gitignore", "gen/\n*.tmp\n")
+    cp.watchers[cp.repo(work)].event(".gitignore")
+    git = ["git", "-C", str(work), "-c", "core.fsmonitor=false"]
+    subprocess.run(git + ["add", "-f", "keep.tmp"], check=True)
+    after = cp.snapshot(work, "after")
+    assert after["scan"] == "incremental"
+    assert statuses(cp, work, before, after) == {
+        ".gitignore": "modified", "gen/out.txt": "deleted", "drop.tmp": "deleted",
+        "logs/run.log": "added",
+    }
+    assert set(after["scanned"]) == {".gitignore", "keep.tmp", "logs/run.log"}
+
+
+def test_directory_events_recheck_known_files_below_them(watched):
+    cp, work, _ = watched
+    write_old(work / "dir/a.txt", "one")
+    write_old(work / "other/a.txt", "two")
+    before = cp.snapshot(work, "before")
+    (work / "dir").rename(work / "old")
+    (work / "other").rename(work / "dir")
+    # Renaming a directory reports the directory, not each file inside it.
+    cp.watchers[cp.repo(work)].event("dir", "other", "old")
+    after = cp.snapshot(work, "after")
+    assert after["scan"] == "incremental"
+    assert statuses(cp, work, before, after) == {
+        "dir/a.txt": "modified", "other/a.txt": "deleted", "old/a.txt": "added",
+    }
+
+
+def test_lost_events_fall_back_to_a_full_scan(watched):
+    cp, work, _ = watched
+    write_old(work / "a.txt", "before")
+    before = cp.snapshot(work, "before")
+    watcher = cp.watchers[cp.repo(work)]
+    watcher.complete = False
+    write_old(work / "a.txt", "AFTER!")
+    after = cp.snapshot(work, "after")
+    assert after["scan"] == "full"
+    assert statuses(cp, work, before, after) == {"a.txt": "modified"}
+    assert cp.snapshot(work, "again")["scan"] == "incremental"
+
+
+def test_watcher_resumes_from_the_saved_cursor(watched, tmp_path):
+    cp, work, started = watched
+    write_old(work / "a.txt", "x")
+    cp.snapshot(work, "first")
+    cp.watchers[cp.repo(work)].event("a.txt")
+    cp.snapshot(work, "second")
+    assert started == [(None, None)]
+    restarted = []
+    cp2 = Checkpoints(
+        tmp_path / "data", max_file_bytes=1024,
+        watcher_factory=lambda root, marks, since, device: restarted.append((since, device))
+        or FakeWatcher(since, device),
+    )
+    assert cp2.snapshot(work, "third")["scan"] == "incremental"
+    assert restarted == [(101, "volume")]
+
+
+def test_undo_snapshots_never_replace_the_saved_state(watched):
+    cp, work, _ = watched
+    write_old(work / "a.txt", "before")
+    before = cp.snapshot(work, "before")
+    write_old(work / "a.txt", "AFTER!")
+    cp.watchers[cp.repo(work)].event("a.txt")
+    after = cp.snapshot(work, "after")
+    state = (cp.repo(work) / "snapshot-state.json").read_text()
+    cp.restore(work, before["commit"], after["commit"])
+    assert (work / "a.txt").read_text() == "before"
+    assert (cp.repo(work) / "snapshot-state.json").read_text() == state
+
+
+def test_stale_paths_match_unicode_forms_and_descendants():
+    import unicodedata
+
+    nfd = unicodedata.normalize("NFD", "ガイド/資料.txt")
+    known = {nfd, "dir/a.txt", "dir/sub/b.txt", "dirt.txt", "x.txt"}
+    events = {unicodedata.normalize("NFC", "ガイド"), "dir"}
+    assert stale_paths(known, events) == {nfd, "dir/a.txt", "dir/sub/b.txt"}
+
+
+def test_pruning_runs_keeps_blobs_of_the_saved_state(setup):
+    cp, work = setup
+    write_old(work / "a.txt", "content")
+    commit = cp.snapshot(work, "run")["commit"]
+    cp.set_ref(work, "r1", "before", commit)
+    repo = cp.repo(work)
+    assert cp.delete_runs(repo, {"r1"}) == 1
+    # The saved state still references its blobs, so no file needs re-hashing.
+    assert cp.snapshot(work, "next")["files"] == 1
+    # Without the state ref (older releases), missing blobs are re-hashed.
+    cp.git(repo, "update-ref", "-d", STATE_REF)
+    cp.git(repo, "gc", "--prune=now", "--quiet")
+    commit = cp.snapshot(work, "after prune")["commit"]
+    assert cp.git(repo, "cat-file", "-p", cp.tree(repo, commit)["a.txt"][1]) == b"content"
+
+
+def test_saved_index_deltas_build_the_same_tree_as_a_full_rebuild(watched, tmp_path):
+    cp, work, _ = watched
+    write_old(work / "x", "file that becomes a directory")
+    write_old(work / "dir/y.txt", "directory that becomes a file")
+    write_old(work / "keep/a.txt", "a")
+    write_old(work / "tool.sh", "#!/bin/sh\n")
+    cp.snapshot(work, "first")
+    watcher = cp.watchers[cp.repo(work)]
+    (work / "x").unlink()
+    write_old(work / "x/inner.txt", "now a directory")
+    (work / "dir/y.txt").unlink()
+    (work / "dir").rmdir()
+    write_old(work / "dir", "now a file")
+    write_old(work / "keep/b.txt", "b")
+    (work / "tool.sh").chmod(0o755)
+    watcher.event("x", "dir", "tool.sh")
+    result = cp.snapshot(work, "second")
+    assert result["scan"] == "incremental"
+    fresh = Checkpoints(tmp_path / "fresh", max_file_bytes=1024).snapshot(work, "fresh")
+    repo = cp.repo(work)
+    tree = cp.git(repo, "rev-parse", result["commit"] + "^{tree}")
+    fresh_repo = Checkpoints(tmp_path / "fresh", 1024).repo(work)
+    assert tree == cp.git(fresh_repo, "rev-parse", fresh["commit"] + "^{tree}")
+    assert cp.tree(repo, result["commit"])["tool.sh"][0] == "100755"
+
+
+def test_a_mismatched_saved_index_is_rebuilt(watched):
+    cp, work, _ = watched
+    write_old(work / "a.txt", "a")
+    first = cp.snapshot(work, "first")
+    repo = cp.repo(work)
+    # Simulate a crash between saving the index and saving the state.
+    write_old(work / "b.txt", "b")
+    other = Checkpoints(repo.parent.parent / "other", 1024)
+    other_repo = other.repo(work)
+    other.snapshot(work, "other")
+    (repo / "snapshot-index").write_bytes((other_repo / "snapshot-index").read_bytes())
+    (work / "b.txt").unlink()
+    second = cp.snapshot(work, "second")
+    assert cp.tree(repo, second["commit"]) == cp.tree(repo, first["commit"])

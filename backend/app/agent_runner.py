@@ -12,6 +12,7 @@ from time import monotonic
 
 from app.attachments import direct_input, file_snapshot
 from app.checkpoints import Checkpoints
+from app.workspace_watch import FSEventsWatcher
 from app.model_catalog import pricing_for, validate_model
 from app.openai_client import build_openai_client
 from app.chatgpt_auth import ChatGPTAuth
@@ -112,7 +113,8 @@ class RunManager:
         self.client_factory = client_factory
         self.sandbox_factory = sandbox_factory
         self.checkpoints = Checkpoints(
-            settings.data_dir / "checkpoints", settings.checkpoint_max_file_bytes
+            settings.data_dir / "checkpoints", settings.checkpoint_max_file_bytes,
+            FSEventsWatcher.create if settings.workspace_watch else None,
         )
         self.chatgpt_auth = ChatGPTAuth(settings)
         self.routes = ProviderRoutes(settings, config, allow_unconfigured=bool(client_factory), chatgpt_auth=self.chatgpt_auth)
@@ -613,7 +615,7 @@ class RunManager:
                 self.checkpoints.set_ref, workspace.path, rid, name, result["commit"]
             )
             self.store.event(rid, "checkpoint", dict(
-                name=name, files=result["files"],
+                name=name, files=result["files"], scan=result["scan"],
                 skipped=result["skipped"][:50], skipped_count=len(result["skipped"]),
             ))
             return result["scanned"]
@@ -738,6 +740,7 @@ class RunManager:
         for client in self.clients.values():
             await client.close()
         await self.chatgpt_auth.close()
+        self.checkpoints.close()
 
     def redact(self, text):
         for secret in [

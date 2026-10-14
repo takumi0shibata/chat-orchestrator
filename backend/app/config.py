@@ -184,6 +184,8 @@ class Settings(BaseSettings):
     compact_token_threshold: int = Field(default=258_000, ge=1000)
     reasoning_summary: Literal["auto", "concise", "detailed", "off"] = "auto"
     checkpoints: bool = True
+    # File events (macOS) let checkpoints skip files without changes.
+    workspace_watch: bool = True
     apply_patch_tool: bool = True
     checkpoint_max_file_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
     max_upload_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
