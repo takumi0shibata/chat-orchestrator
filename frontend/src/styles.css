@@ -2077,10 +2077,10 @@ h2 {
 }
 
 /* Application settings. */
+/* The scroll area spans the main column so its scrollbar sits at the window edge. */
 .settings-page {
-  width: min(720px, calc(100% - 48px));
-  margin: 0 auto;
-  padding: 54px 0 80px;
+  width: 100%;
+  padding: 54px max(24px, calc((100% - 720px) / 2)) 80px;
   overflow-y: auto;
 }
 .settings-page h1 { margin: 12px 0 26px; font-size: 30px; letter-spacing: -.6px; }
@@ -2117,7 +2117,7 @@ h2 {
 .theme-preview .user-message { flex: 1; margin-left: 0; }
 .theme-preview .send { margin-left: 0; }
 @media (max-width: 700px) {
-  .settings-page { width: min(100% - 28px, 720px); padding: 28px 0 56px; }
+  .settings-page { padding: 28px 14px 56px; }
   .title-model-controls { grid-template-columns: 1fr; }
 }
 .sidebar-resizer::after {
