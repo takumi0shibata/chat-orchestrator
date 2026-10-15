@@ -199,6 +199,27 @@ Settingsでは次を変更できます。保存はアプリのSQLite（`app_sett
 
 タイムアウト時はコマンドの上限（`Command time limit reached`）と実行全体の上限（`Run time limit reached`）を区別し、実際に適用した秒数を表示します。Docker起動などの個別処理のタイムアウトも全体上限の到達として扱いません。モデルにはテキスト検索で `rg` と対象パス・拡張子の絞り込みを使い、通常は `.venv`、`node_modules` などの生成ディレクトリを除外するよう指示します。`grep -R` はシンボリックリンクや仮想環境内も探索するため避け、必要な場合は `grep -rI --devices=skip` と `--exclude-dir` を使います。
 
+Gitの状態確認にはコンテナ内で `GIT_OPTIONAL_LOCKS=0` を適用し、`git status` による共有インデックスの書き換えを抑止します。コンテナ内の `core.fsmonitor=false` により、ホスト用の監視プログラムも起動しません。ファイル共有で所有者が異なる場合に備え、コンテナ内の `safe.directory` に `/workspace` だけを追加します。ホストのGit設定は変更せず、明示的な `git add`・commitは利用できます。モデルには必要なパスに絞ったGit確認を指示し、未追跡ファイルが不要なら `--untracked-files=no` を使わせます。Git確認とファイル閲覧・検索は別コマンドにして、Activityで停止箇所を確認できるようにします。
+
+Shellはコマンドごとのプロセスグループで実行します。停止・タイムアウト時はグループへSIGTERMを送り、後始末を最大2秒待ってからコンテナを強制削除します。SIGTERMで終了しない子プロセスもコンテナごと回収します。Dockerへの停止要求が失敗した場合も強制削除を試み、削除の成功を確認できなければワークスペースをブロックします。OSやDocker自体の強制終了、SIGTERMで後始末できない処理では、Gitロックが残る場合があります。アプリが既存ロックを自動削除することはありません。
+
+**残留したGitロックの復旧**
+
+`Unable to create ... index.lock: File exists` が出た場合は、対象フォルダでのエージェント実行を終了し、IDE・ターミナルを含むGit操作もすべて終了してください。ホストの対象リポジトリで次を実行してロックの場所と利用中のプロセスを確認します（macOS）。
+
+```sh
+lock_path="$(git rev-parse --path-format=absolute --git-path index.lock)"
+lsof "$lock_path"
+ps -axo pid,ppid,command | rg '[g]it|[c]hat-agent'
+```
+
+`lsof`に何も表示されないことだけでは、Git処理の終了は保証できません。別のターミナルやIDE、エージェントを含め、このリポジトリを操作するGitプロセスが残っていないことを確認してください。終了を確認できた残留ロックだけを削除し、その後にGit操作を再実行します。
+
+```sh
+rm -- "$lock_path"
+git status --short
+```
+
 新しい保存先は `backend/data/agent/agent.db`。会話、実行、連番付きイベント、Responsesの完全な入出力（暗号化reasoningを含む）を保存します。旧 `backend/data/chat.db` は読み込み・移行・削除しません。
 
 Activityには推論サマリー（Thought）を表示します。`REASONING_SUMMARY` で `auto`（既定）・`concise`・`detailed`・`off` を選べます。推論の深さが `none` の場合は要求しません。サマリーの言語はモデル側で決まり、英語になることがあります。チャット応答には会話IDを `prompt_cache_key` として渡します。システム指示とツール定義は実行ごとに変えず、Web検索・Skillの明示指定・リソースなど実行ごとの設定は、変更があった場合だけ会話履歴にdeveloperメッセージとして追記します。これにより設定を変えても、それまでの指示と履歴はキャッシュから再利用されます。ただしWeb検索やRemote MCPの有無を切り替えるとツール定義が変わり、モデルや推論の深さを変えた場合も含めて、その実行の最初のラウンドはキャッシュが効きません。履歴圧縮の直後も同様です。

@@ -1,3 +1,7 @@
+import asyncio
+
+import pytest
+
 from app.attachments import file_snapshot
 from app.config import Folder, Settings, Skill
 from app.sandbox import Sandbox, command_time_limit
@@ -38,3 +42,32 @@ def test_skill_mounts_are_read_only_and_network_remains_disabled(tmp_path):
         assert f"type=bind,src={skill.path},dst=/skills/{skill.id},readonly" in mounts
     assert args[args.index("--network") + 1] == "none"
     assert "--read-only" in args
+
+@pytest.mark.parametrize("grace_error", [RuntimeError("exec failed"), TimeoutError("exec timed out")])
+def test_close_forces_removal_when_graceful_stop_fails(tmp_path, monkeypatch, grace_error):
+    sandbox = Sandbox(Settings(_env_file=None), Folder(id="w", label="w", path=tmp_path),
+                      "test", [], [], tmp_path / "input")
+    sandbox.commands.add("/tmp/test-command")
+    calls = []
+
+    async def fake_docker(*args, **kwargs):
+        calls.append(args[0])
+        if args[0] == "exec":
+            raise grace_error
+        return ""
+
+    monkeypatch.setattr("app.sandbox.docker", fake_docker)
+    asyncio.run(sandbox.close())
+    assert calls == ["exec", "rm"]
+
+
+def test_close_reports_unconfirmed_container_removal(tmp_path, monkeypatch):
+    sandbox = Sandbox(Settings(_env_file=None), Folder(id="w", label="w", path=tmp_path),
+                      "test", [], [], tmp_path / "input")
+
+    async def fake_docker(*args, **kwargs):
+        raise RuntimeError("Docker unavailable")
+
+    monkeypatch.setattr("app.sandbox.docker", fake_docker)
+    with pytest.raises(RuntimeError, match="Docker unavailable"):
+        asyncio.run(sandbox.close())

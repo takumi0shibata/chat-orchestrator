@@ -1,5 +1,8 @@
 import asyncio
 import os
+import shlex
+import subprocess
+from time import monotonic
 from uuid import uuid4
 
 import pytest
@@ -57,6 +60,104 @@ printf 'Git local operations OK\\n'
             assert (work / ".git").is_dir()
             assert (work / "tracked.txt").read_text() == "updated\n"
         finally:
+            await sandbox.close()
+
+    asyncio.run(scenario())
+
+
+def test_git_status_does_not_refresh_host_index_or_run_host_fsmonitor(tmp_path):
+    async def scenario():
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        (tmp_path / "tracked.txt").write_text("original\n")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "tracked.txt"], check=True)
+        monitor = tmp_path / "host-monitor"
+        monitor.write_text("#!/bin/sh\ntouch /workspace/monitor-invoked\nsleep 60\n")
+        monitor.chmod(0o755)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "core.fsmonitor",
+                        "/workspace/host-monitor"], check=True)
+        index, config = tmp_path / ".git/index", tmp_path / ".git/config"
+        before = (index.read_bytes(), index.stat().st_mtime_ns, config.read_bytes())
+        (tmp_path / "tracked.txt").write_text("changed\n")
+        sandbox = Sandbox(Settings(_env_file=None, command_timeout=5),
+                          Folder(id="w", label="w", path=tmp_path),
+                          uuid4().hex, [], [], tmp_path / "input")
+        await sandbox.start()
+        try:
+            # Time each operation separately, as recommended to the agent.
+            for command in ["git status --short --untracked-files=no", "git diff --stat -- tracked.txt"]:
+                started = monotonic()
+                result = await sandbox.execute(command, emit)
+                print(f"{command}: {monotonic() - started:.3f}s")
+                assert result["outcome"]["exit_code"] == 0, result
+                assert "tracked.txt" in result["stdout"]
+            assert before == (index.read_bytes(), index.stat().st_mtime_ns, config.read_bytes())
+            assert not (tmp_path / "monitor-invoked").exists()
+            lock = tmp_path / ".git/index.lock"
+            lock.write_text("existing lock")
+            result = await sandbox.execute("git status --short --untracked-files=no", emit)
+            assert result["outcome"]["exit_code"] == 0, result
+            await sandbox.close()
+            assert lock.read_text() == "existing lock"
+        finally:
+            await sandbox.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mode", ["command_timeout", "stop", "run_timeout"])
+def test_interrupted_git_releases_lock_before_container_removal(tmp_path, mode):
+    async def scenario():
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        (tmp_path / "tracked.txt").write_text("contents\n")
+        (tmp_path / ".gitattributes").write_text("*.txt filter=slow\n")
+        source = (
+            "import pathlib,signal,sys,time; "
+            "signal.signal(signal.SIGTERM, lambda *a: "
+            "(pathlib.Path('terminated').touch(), sys.exit(1))); "
+            "pathlib.Path('filter-started').touch(); time.sleep(60)"
+        )
+        command = shlex.join([
+            "git", "-c", "filter.slow.clean=" + shlex.join(["python", "-c", source]),
+            "add", "tracked.txt",
+        ])
+        sandbox = Sandbox(Settings(_env_file=None, command_timeout=2 if mode == "command_timeout" else 30),
+                          Folder(id="w", label="w", path=tmp_path),
+                          uuid4().hex, [], [], tmp_path / "input")
+        await sandbox.start()
+
+        async def execute():
+            if mode == "run_timeout":
+                async with asyncio.timeout(2):
+                    await sandbox.execute(command, emit)
+            else:
+                await sandbox.execute(command, emit)
+
+        task = asyncio.create_task(execute())
+        try:
+            async with asyncio.timeout(5):
+                while not (tmp_path / "filter-started").exists():
+                    if task.done():
+                        await task
+                        pytest.fail("Git filter did not start")
+                    await asyncio.sleep(0.02)
+            assert (tmp_path / ".git/index.lock").exists()
+            if mode == "stop":
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                with pytest.raises(TimeoutError) as error:
+                    await task
+                assert isinstance(error.value, CommandTimeoutError) == (mode == "command_timeout")
+            assert (tmp_path / "terminated").exists()
+            assert not (tmp_path / ".git/index.lock").exists()
+            subprocess.run(["git", "-C", str(tmp_path), "add", "tracked.txt"], check=True)
+            with pytest.raises(RuntimeError, match="(?i)no such"):
+                await docker("inspect", sandbox.name)
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
             await sandbox.close()
 
     asyncio.run(scenario())
@@ -159,7 +260,8 @@ print('200 mixed files + direct edit + Office/PDF + CPU ML + Japanese plot + iso
     asyncio.run(scenario())
 
 
-def test_timeout_removes_container_and_descendants(tmp_path):
+@pytest.mark.parametrize("command", ["sleep 100 & wait", "trap '' TERM; sleep 100 & wait"])
+def test_timeout_removes_container_and_descendants(tmp_path, command):
     async def scenario():
         s = Settings(_env_file=None, command_timeout=1)
         sandbox = Sandbox(
@@ -172,7 +274,7 @@ def test_timeout_removes_container_and_descendants(tmp_path):
         )
         await sandbox.start()
         with pytest.raises(CommandTimeoutError) as error:
-            await sandbox.execute("sleep 100 & wait", emit)
+            await sandbox.execute(command, emit)
         assert error.value.timeout_seconds == 1
         with pytest.raises(RuntimeError):
             await docker("inspect", sandbox.name)

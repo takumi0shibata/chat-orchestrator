@@ -3,9 +3,11 @@ import codecs
 import json
 import os
 from pathlib import Path
+from uuid import uuid4
 
 PATCH_TOOL = (Path(__file__).parent / "patch_tool.py").read_text()
 IMAGE_TOOL = (Path(__file__).parent / "image_tool.py").read_text()
+SHELL_PROCESS = (Path(__file__).parent / "shell_process.py").read_text()
 
 
 class CommandTimeoutError(TimeoutError):
@@ -47,6 +49,7 @@ class Sandbox:
         self.name = "chat-agent-" + rid
         self.workspace = workspace
         self.skills, self.resources, self.input_dir = skills, resources, input_dir
+        self.commands = set()
 
     def arguments(self):
         s = self.settings
@@ -90,6 +93,13 @@ class Sandbox:
             "--env", "UV_NO_SYNC=1",
             "--env", "UV_FROZEN=1",
             "--env", "UV_OFFLINE=1",
+            "--env", "GIT_OPTIONAL_LOCKS=0",
+            "--env", "GIT_CONFIG_COUNT=2",
+            "--env", "GIT_CONFIG_KEY_0=core.fsmonitor",
+            "--env", "GIT_CONFIG_VALUE_0=false",
+            # File sharing can present host-owned repos with a different uid.
+            "--env", "GIT_CONFIG_KEY_1=safe.directory",
+            "--env", "GIT_CONFIG_VALUE_1=/workspace",
             "--workdir",
             "/workspace",
             "--mount",
@@ -114,6 +124,15 @@ class Sandbox:
         await docker(*self.arguments(), timeout=60)
 
     async def close(self):
+        if self.commands:
+            try:
+                await docker(
+                    "exec", self.name, "python", "-I", "-c", SHELL_PROCESS,
+                    "stop", *sorted(self.commands), timeout=5,
+                )
+            except (RuntimeError, TimeoutError):
+                # Graceful shutdown is best effort; rm must still confirm shutdown.
+                pass
         try:
             await docker("rm", "-f", self.name)
         except RuntimeError as e:
@@ -122,16 +141,16 @@ class Sandbox:
 
     async def execute(self, command, emit, timeout=None):
         limit = command_time_limit(self.settings, timeout)
+        registry = "/tmp/chat-orchestrator-command-" + uuid4().hex
         process = await asyncio.create_subprocess_exec(
             "docker",
             "exec",
             self.name,
-            "bash",
-            "-c",
-            command,
+            "python", "-I", "-c", SHELL_PROCESS, "run", registry, command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        self.commands.add(registry)
         captured = {"stdout": "", "stderr": ""}
         truncated = set()
 
@@ -164,12 +183,19 @@ class Sandbox:
                 await asyncio.gather(*readers)
             outcome = dict(type="exit", exit_code=process.returncode)
         except (TimeoutError, asyncio.CancelledError) as error:
-            # Killing only docker exec leaves descendants running; remove the container.
-            await asyncio.shield(self.close())
-            if process.returncode is None:
-                process.kill()
-            await process.wait()
-            await asyncio.gather(*readers, return_exceptions=True)
+            # Give Git a chance to release locks before forcing container removal.
+            try:
+                await asyncio.shield(self.close())
+            finally:
+                if process.returncode is None:
+                    process.kill()
+                # The timeout may already have cancelled the stream readers.
+                # Drain remaining pipe data so asyncio can finish reaping exec.
+                for reader in readers:
+                    if not reader.done():
+                        reader.cancel()
+                await asyncio.gather(*readers, return_exceptions=True)
+                await process.communicate()
             if isinstance(error, TimeoutError) and command_timer.expired():
                 raise CommandTimeoutError(limit) from error
             raise
@@ -178,6 +204,7 @@ class Sandbox:
                 if not reader.done():
                     reader.cancel()
             await asyncio.gather(*readers, return_exceptions=True)
+            self.commands.discard(registry)
         for channel in truncated:
             captured[channel] += "\n[output truncated]"
         return {**captured, "outcome": outcome}
