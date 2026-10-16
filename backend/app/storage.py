@@ -83,7 +83,17 @@ class Store:
                   created_at TEXT NOT NULL);
             """)
 
+            c.execute("BEGIN IMMEDIATE")
             columns = {row[1] for row in c.execute("PRAGMA table_info(conversations)")}
+            if "last_finished_run_id" not in columns:
+                c.execute("ALTER TABLE conversations ADD COLUMN last_finished_run_id TEXT")
+                c.execute("ALTER TABLE conversations ADD COLUMN last_read_run_id TEXT")
+                # Existing results predate notifications and start as read.
+                c.execute("""UPDATE conversations SET last_finished_run_id=(
+                    SELECT id FROM runs WHERE conversation_id=conversations.id
+                    AND status IN ('completed','failed','stopped')
+                    ORDER BY created_at DESC,id DESC LIMIT 1)""")
+                c.execute("UPDATE conversations SET last_read_run_id=last_finished_run_id")
             if "pinned" not in columns:
                 c.execute(
                     "ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
@@ -168,7 +178,39 @@ class Store:
                     r for r in rows
                     if all(any(term in text for text in texts[r["id"]]) for term in terms)
                 ]
-        return [{**r, "pinned": bool(r["pinned"])} for r in rows]
+            activity = self._conversation_activity(c)
+        return [{**r, "pinned": bool(r["pinned"]), **activity[r["id"]]} for r in rows]
+
+    def _conversation_activity(self, c, cid=None):
+        rows = c.execute("""SELECT c.id,c.last_read_run_id,
+            a.id AS active_id,a.status AS active_status,
+            (SELECT json_extract(e.data,'$.label') FROM events e
+             WHERE e.run_id=a.id AND e.type='status' ORDER BY e.seq DESC LIMIT 1) AS active_label,
+            f.id AS finished_id,f.status AS finished_status
+            FROM conversations c
+            LEFT JOIN runs a ON a.conversation_id=c.id
+                AND a.status NOT IN ('completed','failed','stopped')
+            LEFT JOIN runs f ON f.id=c.last_finished_run_id
+            """ + ("WHERE c.id=?" if cid is not None else ""), (cid,) if cid is not None else ())
+        return {r["id"]: {
+            "active_run": {"id": r["active_id"], "status": r["active_status"],
+                           "label": r["active_label"]} if r["active_id"] else None,
+            "latest_finished_run": {"id": r["finished_id"], "status": r["finished_status"]}
+                if r["finished_id"] else None,
+            "has_unread": bool(r["finished_id"] and r["finished_id"] != r["last_read_run_id"]),
+        } for r in rows}
+
+    def mark_conversation_read(self, cid, rid):
+        with self.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            if not c.execute("SELECT 1 FROM conversations WHERE id=?", (cid,)).fetchone():
+                raise KeyError("Conversation not found")
+            run = c.execute("SELECT status FROM runs WHERE id=? AND conversation_id=?", (rid, cid)).fetchone()
+            if not run or run["status"] not in TERMINAL:
+                raise ValueError("Expected a finished run belonging to this conversation")
+            c.execute("UPDATE conversations SET last_read_run_id=? WHERE id=? AND last_finished_run_id=?",
+                      (rid, cid, rid))
+            return self._conversation_activity(c, cid)[cid]
 
     def guild_snapshot(self):
         with self.connect() as c:
@@ -193,11 +235,13 @@ class Store:
     def conversation(self, cid):
         with self.connect() as c:
             row = c.execute("SELECT * FROM conversations WHERE id=?", (cid,)).fetchone()
+            activity = self._conversation_activity(c, cid)
         if not row:
             raise KeyError("Conversation not found")
         result = dict(row)
         result["context"] = json.loads(result["context"])
         result["pinned"] = bool(result["pinned"])
+        result.update(activity[cid])
         return result
 
     def create_conversation(self, workspace_id):
@@ -495,9 +539,13 @@ class Store:
         # Status and its event commit atomically so reconnect never misses a terminal event.
         with self.connect() as c:
             c.execute("BEGIN IMMEDIATE")
+            previous = c.execute("SELECT conversation_id,status FROM runs WHERE id=?", (rid,)).fetchone()
             c.execute(
                 "UPDATE runs SET status=?,updated_at=? WHERE id=?", (status, now(), rid)
             )
+            if previous and previous["status"] not in TERMINAL and status in TERMINAL:
+                c.execute("UPDATE conversations SET last_finished_run_id=? WHERE id=?",
+                          (rid, previous["conversation_id"]))
             seq = c.execute(
                 "SELECT COALESCE(MAX(seq),0)+1 FROM events WHERE run_id=?", (rid,)
             ).fetchone()[0]

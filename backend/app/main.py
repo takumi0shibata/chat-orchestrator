@@ -23,6 +23,7 @@ from app.schemas import (
     Approval,
     CheckpointPrune,
     ConversationCreate,
+    ConversationRead,
     ConversationUpdate,
     Revert,
     RunCreate,
@@ -297,6 +298,10 @@ def create_app(settings=None, manager_factory=RunManager):
     async def update_conversation(cid: str, body: ConversationUpdate):
         c = app.state.store.pin_conversation(cid, body.pinned)
         return {k: v for k, v in c.items() if k not in {"context", "azure_endpoint"}}
+
+    @app.post("/api/conversations/{cid}/read")
+    async def read_conversation(cid: str, body: ConversationRead):
+        return app.state.store.mark_conversation_read(cid, body.run_id)
 
     @app.delete("/api/conversations/{cid}")
     async def delete_conversation(cid: str):

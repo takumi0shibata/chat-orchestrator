@@ -1866,10 +1866,22 @@ h2 {
 .conversation.selected { background: #e4e4e7; }
 .conversation button { padding-top: 6px; padding-bottom: 6px; }
 .conversation > .history-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 13px;
   line-height: 1.35;
   padding: 6px 8px;
 }
+.history-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-indicator { display: inline-block; flex: 0 0 auto; color: var(--theme-color, #25262a); }
+.conversation-indicator.is-running {
+  width: 12px; height: 12px; border: 2px solid currentColor;
+  border-right-color: transparent; border-radius: 50%; animation: file-spin .8s linear infinite;
+}
+.conversation-indicator.is-unread { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.project-toggle .project-indicators { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; overflow: visible; }
+@media (prefers-reduced-motion: reduce) { .conversation-indicator.is-running { animation: none; } }
 .conversation { align-items: center; }
 .conversation .history-action {
   display: grid;

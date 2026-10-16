@@ -58,7 +58,12 @@ export interface CostSummary {
   exclusions: string[];
   months: MonthlyCost[];
 }
-export interface Conversation {
+export interface ConversationActivity {
+  active_run: { id: string; status: string; label: string | null } | null;
+  latest_finished_run: { id: string; status: string } | null;
+  has_unread: boolean;
+}
+export interface Conversation extends Partial<ConversationActivity> {
   pinned?: boolean;
   id: string;
   title: string;

@@ -55,6 +55,29 @@ def test_config_no_credentials_and_origins(app_client):
     assert http.get("/api/skills").status_code == 404
 
 
+def test_conversation_read_api_validates_and_preserves_new_results(app_client):
+    http, _, _ = app_client
+    store = http.app.state.store
+    cid = store.create_conversation("work")["id"]
+    other = store.create_conversation("work")["id"]
+    first = store.create_run({"conversation_id": cid})["id"]
+    path = f"/api/conversations/{cid}/read"
+    assert http.post(path, json={"run_id": first}).status_code == 400
+    assert http.post(path, json={}).status_code == 422
+    store.status(first, "failed", "Failed")
+    assert http.get(f"/api/conversations/{cid}").json()["has_unread"]
+    assert http.get("/api/conversations").json()[0]["has_unread"]
+    assert http.post(f"/api/conversations/{other}/read", json={"run_id": first}).status_code == 400
+    assert http.post("/api/conversations/missing/read", json={"run_id": first}).status_code == 404
+    assert not http.post(path, json={"run_id": first}).json()["has_unread"]
+    second = store.create_run({"conversation_id": cid})["id"]
+    store.status(second, "stopped", "Stopped")
+    stale = http.post(path, json={"run_id": first}).json()
+    assert stale["has_unread"]
+    assert stale["latest_finished_run"]["id"] == second
+    assert not http.post(path, json={"run_id": second}).json()["has_unread"]
+
+
 def test_chatgpt_debug_probe_is_not_a_product_endpoint(app_client):
     http, _, _ = app_client
     assert http.post("/api/auth/chatgpt/test", json={"model": "gpt-6-luna"}).status_code == 404

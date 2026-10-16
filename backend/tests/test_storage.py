@@ -10,6 +10,54 @@ import pytest
 from app.storage import Store, search_terms
 
 
+@pytest.mark.parametrize("status", ["completed", "failed", "stopped"])
+def test_conversation_activity_persists_and_acknowledges_only_latest_result(tmp_path, status):
+    store = Store(tmp_path)
+    cid = store.create_conversation("work")["id"]
+    first = store.create_run({"conversation_id": cid, "input": "first"})["id"]
+    store.status(first, "approval_wait", "Waiting for approval")
+    activity = store.conversations()[0]
+    assert activity["active_run"] == {"id": first, "status": "approval_wait", "label": "Waiting for approval"}
+    assert activity["latest_finished_run"] is None
+    assert not activity["has_unread"]
+    assert "request" not in activity["active_run"]
+
+    store.status(first, status, "Finished")
+    store = Store(tmp_path)
+    assert store.conversation(cid)["has_unread"]
+    assert store.conversations("first")[0]["latest_finished_run"] == {"id": first, "status": status}
+    assert store.conversations()[0]["active_run"] is None
+    assert not store.mark_conversation_read(cid, first)["has_unread"]
+    # Duplicate terminal events must not resurrect an acknowledged notification.
+    store.status(first, status, "Finished again")
+    assert not Store(tmp_path).conversation(cid)["has_unread"]
+
+    second = store.create_run({"conversation_id": cid, "input": "second"})["id"]
+    store.status(second, "completed", "Finished")
+    assert store.mark_conversation_read(cid, first)["has_unread"]
+    # Late status updates for older finished runs cannot replace the latest result.
+    store.status(first, status, "Old result")
+    assert store.conversation(cid)["latest_finished_run"]["id"] == second
+    assert not store.mark_conversation_read(cid, second)["has_unread"]
+
+
+def test_activity_migration_baselines_old_results_once(tmp_path):
+    store = Store(tmp_path)
+    cid = store.create_conversation("work")["id"]
+    old = store.create_run({"conversation_id": cid})["id"]
+    store.status(old, "completed", "Old result")
+    active = store.create_run({"conversation_id": cid})["id"]
+    with store.connect() as c:
+        c.execute("ALTER TABLE conversations DROP COLUMN last_finished_run_id")
+        c.execute("ALTER TABLE conversations DROP COLUMN last_read_run_id")
+    migrated = Store(tmp_path)
+    assert not migrated.conversation(cid)["has_unread"]
+    assert migrated.conversation(cid)["latest_finished_run"]["id"] == old
+    assert migrated.conversation(cid)["active_run"]["id"] == active
+    migrated.status(active, "failed", "Interrupted by restart")
+    assert Store(tmp_path).conversation(cid)["has_unread"]
+
+
 def test_connection_commits_and_closes(tmp_path):
     store = Store(tmp_path)
     with store.connect() as connection:

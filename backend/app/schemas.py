@@ -15,6 +15,10 @@ class ConversationUpdate(Request):
     pinned: bool
 
 
+class ConversationRead(Request):
+    run_id: str
+
+
 class TextFileUpdate(Request):
     content: str = Field(max_length=1024 * 1024)
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")

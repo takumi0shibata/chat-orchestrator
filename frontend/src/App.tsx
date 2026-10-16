@@ -10,6 +10,7 @@ import { api, events } from "./api";
 import { MarkdownContent } from "./components/MarkdownContent";
 import { TextFileEditor } from "./components/TextFileEditor";
 import { ChatGPTConnection } from "./ChatGPTConnection";
+import { ConversationIndicator, ProjectIndicators } from "./components/ConversationIndicator";
 import {
   exactSkillMatch,
   findSkillMention,
@@ -31,6 +32,7 @@ import type {
   Attachment,
   Config,
   Conversation,
+  ConversationActivity,
   CostSummary,
   Model,
   Named,
@@ -1499,6 +1501,9 @@ export function App() {
   const pendingSkills = useRef<Record<string, string>>({});
   const [costs, setCosts] = useState<CostSummary | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const conversationRefresh = useRef<{ controller: AbortController; promise: Promise<void> } | null>(null);
+  const readRequests = useRef(new Map<string, AbortController>());
+  const [foreground, setForeground] = useState(() => document.visibilityState === "visible" && document.hasFocus());
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Conversation[] | null>(null);
   // IME composition (Japanese input) must not search unconverted kana or romaji.
@@ -1667,10 +1672,74 @@ export function App() {
     setCid(conversation.id);
   }
 
-  async function refreshConversations() {
-    setConversations(await api<Conversation[]>("/conversations"));
-    setHistoryRevision((value) => value + 1);
+  async function refreshConversations(refreshHistory = true, periodic = false) {
+    if (periodic && conversationRefresh.current) return conversationRefresh.current.promise;
+    conversationRefresh.current?.controller.abort();
+    const controller = new AbortController();
+    const promise = api<Conversation[]>("/conversations", { signal: controller.signal }).then((items) => {
+      if (controller.signal.aborted) return;
+      setConversations(items);
+      if (refreshHistory) setHistoryRevision((value) => value + 1);
+    }).catch((error) => {
+      if (!controller.signal.aborted) throw error;
+    }).finally(() => {
+      if (conversationRefresh.current?.controller === controller) conversationRefresh.current = null;
+    });
+    conversationRefresh.current = { controller, promise };
+    return promise;
   }
+  useEffect(() => {
+    if (!configReady) return;
+    setForeground(document.visibilityState === "visible" && document.hasFocus());
+    const refresh = () => {
+      if (document.visibilityState === "visible" && !pinPending.length && !busy)
+        void refreshConversations(false, true).catch(() => {});
+    };
+    const visibility = () => {
+      setForeground(document.visibilityState === "visible" && document.hasFocus());
+      refresh();
+    };
+    const timer = window.setInterval(refresh, 2000);
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("focus", visibility);
+    window.addEventListener("blur", visibility);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("focus", visibility);
+      window.removeEventListener("blur", visibility);
+    };
+  }, [configReady, pinPending.length, busy]);
+  useEffect(() => () => {
+    conversationRefresh.current?.controller.abort();
+    for (const controller of readRequests.current.values()) controller.abort();
+    readRequests.current.clear();
+  }, []);
+
+  // Only acknowledge a result after its terminal event has actually been rendered.
+  useEffect(() => {
+    const finished = current?.latest_finished_run;
+    if (!foreground || settingsPage !== "chat" || loadedCid !== cid || !current?.has_unread || !finished) return;
+    const rendered = runs.some((run) => run.id === finished.id && terminal(run.status)) &&
+      timelines[finished.id]?.some((event) => event.type === "status" && terminal(text(event.data.status)));
+    const key = `${cid}:${finished.id}`;
+    if (!rendered || readRequests.current.has(key)) return;
+    const controller = new AbortController();
+    readRequests.current.set(key, controller);
+    void api<ConversationActivity>(`/conversations/${cid}/read`, {
+      method: "POST", body: JSON.stringify({ run_id: finished.id }), signal: controller.signal,
+    }).then((activity) => {
+      if (controller.signal.aborted) return;
+      // Invalidate any list snapshot taken before the acknowledgement.
+      conversationRefresh.current?.controller.abort();
+      setConversations((items) => items.map((item) => item.id === cid &&
+        item.latest_finished_run?.id === activity.latest_finished_run?.id
+        ? { ...item, has_unread: activity.has_unread } : item));
+      void refreshConversations(false).catch(() => {});
+    }).catch(() => {
+      // The next successful poll retries without hiding the unread marker.
+    }).finally(() => { readRequests.current.delete(key); });
+  }, [foreground, settingsPage, loadedCid, cid, current, runs, timelines]);
   useEffect(() => {
     if (searchComposing) return;
     const abort = new AbortController();
@@ -1708,6 +1777,7 @@ export function App() {
   }, [input, cid]);
 
   async function togglePin(conversation: Conversation) {
+    conversationRefresh.current?.controller.abort();
     const pinned = !conversation.pinned;
     const update = (items: Conversation[] | null, value: boolean) => items?.map((item) => item.id === conversation.id ? { ...item, pinned: value } : item) ?? null;
     setPinPending((ids) => [...ids, conversation.id]);
@@ -1799,10 +1869,13 @@ export function App() {
                     : r,
                 ),
               );
-              if (terminal(text(event.data.status)))
+              if (terminal(text(event.data.status))) {
                 setFileRevision((v) => v + 1);
+                if (!terminal(run.status)) void refreshConversations(false).catch(() => {});
+              }
             }
             if (event.type === "conversation_title") {
+              conversationRefresh.current?.controller.abort();
               const title = text(event.data.title);
               setConversations((old) => old.map((item) => item.id === run.conversation_id ? { ...item, title } : item));
               setSearchResults((old) => old?.map((item) => item.id === run.conversation_id ? { ...item, title } : item) || null);
@@ -2320,11 +2393,15 @@ export function App() {
   }
 
   function conversationRow(conversation: Conversation, nested = false) {
+    // Search owns membership; the canonical list owns live titles and activity.
+    conversation = conversations.find((item) => item.id === conversation.id) || conversation;
     return (
       <div className={`conversation ${nested ? "nested" : ""} ${conversation.id === cid ? "selected" : ""}`} key={conversation.id}>
-        <button className="history-title" disabled={busy} onClick={() => selectConversation(conversation)}>{conversation.title}</button>
+        <button className="history-title" disabled={busy} onClick={() => selectConversation(conversation)} aria-label={conversation.title}>
+          <span className="history-title-text">{conversation.title}</span><ConversationIndicator conversation={conversation} />
+        </button>
         <button className="history-action pin" title={conversation.pinned ? "Unpin chat" : "Pin chat"} aria-label={`${conversation.pinned ? "Unpin" : "Pin"} ${conversation.title}`} aria-pressed={Boolean(conversation.pinned)} disabled={pinPending.includes(conversation.id)} onClick={() => void togglePin(conversation)}><Icon name="pin" size={14} /></button>
-        <button className="history-action delete" title="Delete chat" aria-label={`Delete ${conversation.title}`} disabled={busy || pinPending.includes(conversation.id) || (conversation.id === cid && active)} onClick={() => void removeConversation(conversation.id)}><Icon name="close" size={14} /></button>
+        <button className="history-action delete" title="Delete chat" aria-label={`Delete ${conversation.title}`} disabled={busy || pinPending.includes(conversation.id) || Boolean(conversation.active_run) || (conversation.id === cid && active)} onClick={() => void removeConversation(conversation.id)}><Icon name="close" size={14} /></button>
       </div>
     );
   }
@@ -2449,6 +2526,7 @@ export function App() {
                     <button className="project-toggle" type="button" aria-expanded={expanded} aria-label={`${expanded ? "Collapse" : "Expand"} ${project.label}`} onClick={() => toggleProject(project.id)}>
                       <Icon name={expanded ? "folder-open" : "folder"} size={18} />
                       <span>{project.label}</span>
+                      {!expanded && <ProjectIndicators conversations={conversations.filter((c) => c.workspace_id === project.id)} />}
                     </button>
                     <button className="project-new project-audit" type="button" aria-label={`Audit ${project.label}`} title={`Audit ${project.label}`} aria-current={settingsPage === "audit" && auditProject === project.id ? "page" : undefined} onClick={() => openAudit(project.id)}>
                       <ShieldCheck size={16} strokeWidth={1.8} />
