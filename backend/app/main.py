@@ -16,6 +16,7 @@ from app.attachments import list_files, open_regular, save_upload
 from app.audit import read_audit
 from app.checkpoints import CheckpointConflict
 from app.config import get_settings
+from app.conversation_updates import conversation_snapshots
 from app.guild import Guild
 from app.model_catalog import models_for
 from app.schemas import (
@@ -285,6 +286,14 @@ def create_app(settings=None, manager_factory=RunManager):
         app.state.manager.select(app.state.config.workspaces, [body.workspace_id])
         c = app.state.store.create_conversation(body.workspace_id)
         return {k: v for k, v in c.items() if k not in {"context", "azure_endpoint"}}
+
+    @app.get("/api/conversations/events")
+    async def conversation_events():
+        return StreamingResponse(
+            conversation_snapshots(app.state.store),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/api/conversations/{cid}")
     async def conversation(cid: str):

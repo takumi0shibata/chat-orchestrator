@@ -1501,8 +1501,11 @@ export function App() {
   const pendingSkills = useRef<Record<string, string>>({});
   const [costs, setCosts] = useState<CostSummary | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const conversationRefresh = useRef<{ controller: AbortController; promise: Promise<void> } | null>(null);
+  const conversationRefresh = useRef<AbortController | null>(null);
   const readRequests = useRef(new Map<string, AbortController>());
+  const pendingPins = useRef(new Map<string, boolean>());
+  const readRetryTimer = useRef<ReturnType<typeof setTimeout>>();
+  const [readRetry, setReadRetry] = useState(0);
   const [foreground, setForeground] = useState(() => document.visibilityState === "visible" && document.hasFocus());
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Conversation[] | null>(null);
@@ -1672,46 +1675,62 @@ export function App() {
     setCid(conversation.id);
   }
 
-  async function refreshConversations(refreshHistory = true, periodic = false) {
-    if (periodic && conversationRefresh.current) return conversationRefresh.current.promise;
-    conversationRefresh.current?.controller.abort();
+  async function refreshConversations() {
+    // Callers have committed a mutation; refresh search even if SSE supersedes this GET.
+    setHistoryRevision((value) => value + 1);
+    conversationRefresh.current?.abort();
     const controller = new AbortController();
-    const promise = api<Conversation[]>("/conversations", { signal: controller.signal }).then((items) => {
-      if (controller.signal.aborted) return;
-      setConversations(items);
-      if (refreshHistory) setHistoryRevision((value) => value + 1);
-    }).catch((error) => {
+    conversationRefresh.current = controller;
+    try {
+      const items = await api<Conversation[]>("/conversations", { signal: controller.signal });
+      if (!controller.signal.aborted) setConversations(items);
+    } catch (error) {
       if (!controller.signal.aborted) throw error;
-    }).finally(() => {
-      if (conversationRefresh.current?.controller === controller) conversationRefresh.current = null;
-    });
-    conversationRefresh.current = { controller, promise };
-    return promise;
+    } finally {
+      if (conversationRefresh.current === controller) conversationRefresh.current = null;
+    }
   }
   useEffect(() => {
     if (!configReady) return;
-    setForeground(document.visibilityState === "visible" && document.hasFocus());
-    const refresh = () => {
-      if (document.visibilityState === "visible" && !pinPending.length && !busy)
-        void refreshConversations(false, true).catch(() => {});
-    };
+    let source: EventSource | null = null;
     const visibility = () => {
       setForeground(document.visibilityState === "visible" && document.hasFocus());
-      refresh();
+      if (document.visibilityState !== "visible") {
+        source?.close();
+        source = null;
+      } else if (!source) {
+        const connection = new EventSource("/api/conversations/events");
+        source = connection;
+        connection.addEventListener("snapshot", (event) => {
+          if (source !== connection) return;
+          try {
+            const items: Conversation[] = JSON.parse((event as MessageEvent).data);
+            if (!Array.isArray(items)) return;
+            // A slower GET cannot overwrite this newer committed snapshot.
+            conversationRefresh.current?.abort();
+            setConversations(items.map((item) => pendingPins.current.has(item.id)
+              ? { ...item, pinned: pendingPins.current.get(item.id) } : item));
+          } catch {
+            // Retain the last valid snapshot. EventSource reconnects on network errors.
+          }
+        });
+      }
     };
-    const timer = window.setInterval(refresh, 2000);
+    visibility();
     document.addEventListener("visibilitychange", visibility);
     window.addEventListener("focus", visibility);
     window.addEventListener("blur", visibility);
     return () => {
-      clearInterval(timer);
+      source?.close();
+      source = null;
       document.removeEventListener("visibilitychange", visibility);
       window.removeEventListener("focus", visibility);
       window.removeEventListener("blur", visibility);
     };
-  }, [configReady, pinPending.length, busy]);
+  }, [configReady]);
   useEffect(() => () => {
-    conversationRefresh.current?.controller.abort();
+    clearTimeout(readRetryTimer.current);
+    conversationRefresh.current?.abort();
     for (const controller of readRequests.current.values()) controller.abort();
     readRequests.current.clear();
   }, []);
@@ -1730,16 +1749,19 @@ export function App() {
       method: "POST", body: JSON.stringify({ run_id: finished.id }), signal: controller.signal,
     }).then((activity) => {
       if (controller.signal.aborted) return;
+      clearTimeout(readRetryTimer.current);
       // Invalidate any list snapshot taken before the acknowledgement.
-      conversationRefresh.current?.controller.abort();
+      conversationRefresh.current?.abort();
       setConversations((items) => items.map((item) => item.id === cid &&
         item.latest_finished_run?.id === activity.latest_finished_run?.id
         ? { ...item, has_unread: activity.has_unread } : item));
-      void refreshConversations(false).catch(() => {});
     }).catch(() => {
-      // The next successful poll retries without hiding the unread marker.
+      if (controller.signal.aborted) return;
+      // Retry a failed write only; idle sidebar updates never poll.
+      clearTimeout(readRetryTimer.current);
+      readRetryTimer.current = setTimeout(() => setReadRetry((value) => value + 1), 3000);
     }).finally(() => { readRequests.current.delete(key); });
-  }, [foreground, settingsPage, loadedCid, cid, current, runs, timelines]);
+  }, [foreground, settingsPage, loadedCid, cid, current, runs, timelines, readRetry]);
   useEffect(() => {
     if (searchComposing) return;
     const abort = new AbortController();
@@ -1777,8 +1799,9 @@ export function App() {
   }, [input, cid]);
 
   async function togglePin(conversation: Conversation) {
-    conversationRefresh.current?.controller.abort();
+    conversationRefresh.current?.abort();
     const pinned = !conversation.pinned;
+    pendingPins.current.set(conversation.id, pinned);
     const update = (items: Conversation[] | null, value: boolean) => items?.map((item) => item.id === conversation.id ? { ...item, pinned: value } : item) ?? null;
     setPinPending((ids) => [...ids, conversation.id]);
     setConversations((items) => update(items, pinned) || []);
@@ -1791,6 +1814,7 @@ export function App() {
       setSearchResults((items) => update(items, !pinned));
       setError(String(e));
     } finally {
+      pendingPins.current.delete(conversation.id);
       setPinPending((ids) => ids.filter((id) => id !== conversation.id));
     }
   }
@@ -1871,11 +1895,10 @@ export function App() {
               );
               if (terminal(text(event.data.status))) {
                 setFileRevision((v) => v + 1);
-                if (!terminal(run.status)) void refreshConversations(false).catch(() => {});
               }
             }
             if (event.type === "conversation_title") {
-              conversationRefresh.current?.controller.abort();
+              conversationRefresh.current?.abort();
               const title = text(event.data.title);
               setConversations((old) => old.map((item) => item.id === run.conversation_id ? { ...item, title } : item));
               setSearchResults((old) => old?.map((item) => item.id === run.conversation_id ? { ...item, title } : item) || null);

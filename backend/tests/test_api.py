@@ -78,6 +78,32 @@ def test_conversation_read_api_validates_and_preserves_new_results(app_client):
     assert not http.post(path, json={"run_id": second}).json()["has_unread"]
 
 
+def test_sidebar_sse_route_headers_and_initial_snapshot(app_client, monkeypatch):
+    import json
+    import app.main as main
+    from app.conversation_updates import conversation_snapshots
+
+    # TestClient buffers responses; bound the stream after its first real frame.
+    async def first_frame(store):
+        stream = conversation_snapshots(store)
+        try:
+            yield await anext(stream)
+        finally:
+            await stream.aclose()
+
+    monkeypatch.setattr(main, "conversation_snapshots", first_frame)
+    http, _, _ = app_client
+    cid = http.app.state.store.create_conversation("work")["id"]
+    response = http.get("/api/conversations/events")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+    assert json.loads(response.text.split("data: ", 1)[1])[0]["id"] == cid
+    assert not http.app.state.store.conversation_updates._listeners
+    assert http.get("/api/conversations/events", headers={"Origin": "https://evil.example"}).status_code == 403
+
+
 def test_chatgpt_debug_probe_is_not_a_product_endpoint(app_client):
     http, _, _ = app_client
     assert http.post("/api/auth/chatgpt/test", json={"model": "gpt-6-luna"}).status_code == 404

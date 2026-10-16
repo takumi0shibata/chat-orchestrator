@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from app.conversation_updates import ConversationUpdates
+
 TERMINAL = {"completed", "failed", "stopped"}
 
 
@@ -44,6 +46,7 @@ def search_terms(query):
 
 class Store:
     def __init__(self, root: Path):
+        self.conversation_updates = ConversationUpdates()
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.db = self.root / "agent.db"
@@ -208,9 +211,12 @@ class Store:
             run = c.execute("SELECT status FROM runs WHERE id=? AND conversation_id=?", (rid, cid)).fetchone()
             if not run or run["status"] not in TERMINAL:
                 raise ValueError("Expected a finished run belonging to this conversation")
-            c.execute("UPDATE conversations SET last_read_run_id=? WHERE id=? AND last_finished_run_id=?",
-                      (rid, cid, rid))
-            return self._conversation_activity(c, cid)[cid]
+            updated = c.execute("UPDATE conversations SET last_read_run_id=? WHERE id=? AND last_finished_run_id=? "
+                                "AND last_read_run_id IS NOT ?", (rid, cid, rid, rid))
+            activity = self._conversation_activity(c, cid)[cid]
+        if updated.rowcount:
+            self.conversation_updates.publish()
+        return activity
 
     def guild_snapshot(self):
         with self.connect() as c:
@@ -230,6 +236,7 @@ class Store:
             result = c.execute("UPDATE conversations SET pinned=? WHERE id=?", (pinned, cid))
             if not result.rowcount:
                 raise KeyError("Conversation not found")
+        self.conversation_updates.publish()
         return self.conversation(cid)
 
     def conversation(self, cid):
@@ -251,6 +258,7 @@ class Store:
                 "INSERT INTO conversations(id,workspace_id,title,created_at,updated_at,title_status) VALUES(?,?,?,?,?,?)",
                 (cid, workspace_id, "新しい作業", now(), now(), "pending"),
             )
+        self.conversation_updates.publish()
         return self.conversation(cid)
 
     def save_context(self, cid, context, provider, model, *, rid=None):
@@ -265,6 +273,8 @@ class Store:
                     "UPDATE run_context_state SET checkpoint_seq=(SELECT COALESCE(MAX(seq),0) FROM events WHERE run_id=?) WHERE run_id=?",
                     (rid, rid),
                 )
+
+        self.conversation_updates.publish()
 
     def context_tokens(self, cid):
         """Last model-reported context size, across runs and process restarts."""
@@ -331,6 +341,7 @@ class Store:
             c.execute("UPDATE conversations SET context=?,provider=?,model=?,updated_at=? WHERE id=?",
                       (json.dumps(context), request["provider"], request["model"], now(), cid))
             c.execute("UPDATE run_context_state SET recovered=1 WHERE run_id=?", (rid,))
+        self.conversation_updates.publish()
 
     def bind_legacy_azure(self, endpoint):
         with self.connect() as c:
@@ -371,6 +382,7 @@ class Store:
         self.event(
             rid, "status", {"status": "preparing", "label": "実行を準備しています"}
         )
+        self.conversation_updates.publish()
         return self.run(rid)
 
     def claim_title(self, cid):
@@ -387,6 +399,8 @@ class Store:
                 "UPDATE conversations SET title=?,title_status='complete',updated_at=? WHERE id=?",
                 (title, now(), cid),
             )
+        if result.rowcount:
+            self.conversation_updates.publish()
         return bool(result.rowcount)
 
     def settings(self):
@@ -560,6 +574,8 @@ class Store:
                 ),
             )
 
+        self.conversation_updates.publish()
+
     def attachment(self, aid, cid):
         with self.connect() as c:
             row = c.execute(
@@ -589,3 +605,4 @@ class Store:
             c.execute("DELETE FROM runs WHERE conversation_id=?", (cid,))
             c.execute("DELETE FROM attachments WHERE conversation_id=?", (cid,))
             c.execute("DELETE FROM conversations WHERE id=?", (cid,))
+        self.conversation_updates.publish()
