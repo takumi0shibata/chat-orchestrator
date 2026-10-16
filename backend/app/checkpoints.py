@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 from bisect import bisect_left
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
 from app.workspace_files import scan_files
@@ -127,6 +128,15 @@ class Checkpoints:
                 progress(*self.progress[repo])
         return lock
 
+    @contextmanager
+    def transaction(self, repo, progress=None):
+        """Keep checkpoint objects reachable throughout a multi-step operation."""
+        lock = self.locked(repo, progress)
+        try:
+            yield
+        finally:
+            lock.release()
+
     def watcher(self, workspace, repo, state):
         """Start watching lazily, resuming from the saved state's event cursor."""
         if not self.watcher_factory:
@@ -234,6 +244,28 @@ class Checkpoints:
         finally:
             self.progress.pop(repo, None)
             lock.release()
+
+    def snapshot_run(self, workspace, rid, name, *, progress=None):
+        # GC must not run between creating a commit and publishing its run ref.
+        with self.transaction(self.repo(workspace), progress):
+            result = self.snapshot(workspace, f"{rid} {name}", progress=progress)
+            self.set_ref(workspace, rid, name, result["commit"])
+            return result
+
+    def restore_run(self, workspace, rid, force=False):
+        # Read refs, restore every file, and record completion under one lock.
+        with self.transaction(self.repo(workspace)):
+            before, after, reverted = (
+                self.get_ref(workspace, rid, name)
+                for name in ("before", "after", "reverted")
+            )
+            if not before or not after:
+                raise KeyError("Checkpoint not found")
+            if reverted:
+                raise ValueError("This run has already been reverted")
+            result = self.restore(workspace, before, after, force)
+            self.set_ref(workspace, rid, "reverted", before)
+            return result
 
     def _snapshot(self, workspace, repo, label, rehash, progress):
         state = self.load_state(repo)
@@ -351,6 +383,10 @@ class Checkpoints:
 
     def delete_runs(self, repo, rids):
         """Drop every checkpoint ref of these runs, then discard unreachable objects."""
+        with self.transaction(repo):
+            return self._delete_runs(repo, rids)
+
+    def _delete_runs(self, repo, rids):
         refs = [
             line for line in self.git(
                 repo, "for-each-ref", "--format=%(refname)", "refs/checkpoints/"

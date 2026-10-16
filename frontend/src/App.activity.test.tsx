@@ -28,8 +28,11 @@ function setup({ completed = false, focused = true, delayEvents = false } = {}) 
   let releaseEvents: () => void = () => {};
   let listOverride: (() => Promise<Response>) | undefined;
   let readOverride: (() => Promise<Response>) | undefined;
+  let requestOverride: ((url: string, options?: RequestInit) => Response | Promise<Response> | undefined) | undefined;
   const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
     const url = String(input);
+    const override = requestOverride?.(url, options);
+    if (override) return override;
     const json = (body: unknown) => new Response(JSON.stringify(body));
     if (url === "/api/config") return json({
       providers: [{ id: "openai", label: "OpenAI", enabled: true, models: [{ id: "gpt-6.1-sol", model: "gpt-6.1-sol", label: "Sol", efforts: ["medium"] }] }],
@@ -78,6 +81,7 @@ function setup({ completed = false, focused = true, delayEvents = false } = {}) 
     releaseEvents: () => act(async () => { releaseEvents(); }),
     setListOverride: (value?: () => Promise<Response>) => { listOverride = value; },
     setReadOverride: (value?: () => Promise<Response>) => { readOverride = value; },
+    setRequestOverride: (value: typeof requestOverride) => { requestOverride = value; },
     readCalls: () => fetch.mock.calls.filter(([url]) => String(url).endsWith("/read")),
   };
 }
@@ -102,6 +106,125 @@ it("tracks two projects, aggregates collapsed state, and acknowledges only the o
   fireEvent.click(screen.getByRole("button", { name: "Second chat" }));
   await waitFor(() => expect(state.readCalls()).toHaveLength(1));
   await waitFor(() => expect(screen.queryByRole("img", { name: "Unread result" })).not.toBeInTheDocument());
+});
+
+function remoteRun(id: string, status = "command_running"): Run {
+  return { id, conversation_id: "a", status, created_at: `2026-10-16T00:00:0${id === "ra2" ? 1 : 2}Z`,
+    updated_at: "2026-10-16T00:00:03Z",
+    request: { conversation_id: "a", provider: "openai", model: "gpt-6.1-sol", reasoning_effort: "medium",
+      input: `Remote instruction ${id}`, attachment_ids: [], direct_attachment_ids: [], skill_ids: [],
+      resource_ids: [], mcp_ids: [], web_search: false } };
+}
+
+function frame(run: Run, seq: number, type: string, data: Record<string, unknown>) {
+  return new TextEncoder().encode(JSON.stringify({ run_id: run.id, seq, type, data, created_at: run.updated_at }) + "\n");
+}
+
+it("merges another window's run, preserves existing DOM and draft, and can stop and acknowledge it", async () => {
+  const state = setup({ completed: true, focused: false });
+  render(<App />);
+  await screen.findByRole("heading", { name: "First chat" });
+  const originalMessage = await screen.findByText("Work");
+  const message = screen.getByRole("textbox", { name: "Message" });
+  fireEvent.change(message, { target: { value: "Keep my draft" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+  const remote = remoteRun("ra2");
+  let resolveHistory!: (response: Response) => void;
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  state.setRequestOverride((url) => {
+    if (url === "/api/conversations/a") return new Promise((resolve) => { resolveHistory = resolve; });
+    if (url === "/api/runs/ra2/events?after=0") return new Response(new ReadableStream({ start(controller) {
+      stream = controller;
+      controller.enqueue(frame(remote, 1, "message_phase", { item_id: "remote", phase: "final_answer" }));
+      controller.enqueue(frame(remote, 2, "text_delta", { item_id: "remote", text: "Remote partial answer" }));
+    } }));
+    if (url === "/api/runs/ra2/stop") {
+      remote.status = "stopped";
+      stream.enqueue(frame(remote, 3, "status", { status: "stopped" }));
+      stream.close();
+      return new Response(JSON.stringify(remote));
+    }
+    if (url === "/api/runs/ra2") return new Response(JSON.stringify(remote));
+  });
+  state.conversations[0].active_run = { id: remote.id, status: remote.status, label: "Remote command" };
+  await state.notify();
+  expect(message).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+  await act(async () => { resolveHistory(new Response(JSON.stringify({ ...state.conversations[0], runs: [remote] }))); });
+  await screen.findByText("Remote partial answer");
+  expect(screen.getByText("Work")).toBe(originalMessage);
+  expect(message).toHaveValue("Keep my draft");
+  await state.notify();
+  expect(state.fetch.mock.calls.filter(([url]) => url === "/api/runs/ra2/events?after=0")).toHaveLength(1);
+  expect(state.fetch.mock.calls.filter(([url]) => url === "/api/runs/ra/events?after=0")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+  await waitFor(() => expect(message).toBeEnabled());
+  state.conversations[0].active_run = null;
+  state.conversations[0].latest_finished_run = { id: remote.id, status: "stopped" };
+  state.conversations[0].has_unread = true;
+  await state.notify();
+  expect(state.readCalls()).toHaveLength(0);
+  state.focus.mockReturnValue(true);
+  fireEvent.focus(window);
+  await waitFor(() => expect(state.readCalls()).toHaveLength(1));
+  expect(JSON.parse(String(state.readCalls()[0][1]?.body))).toEqual({ run_id: "ra2" });
+  expect(message).toHaveValue("Keep my draft");
+});
+
+it("loads all missed completed runs and retries a failed history request without resetting the chat", async () => {
+  const state = setup({ completed: true, focused: false });
+  render(<App />);
+  await screen.findByRole("heading", { name: "First chat" });
+  const originalMessage = await screen.findByText("Work");
+  const missed = [remoteRun("ra2", "completed"), remoteRun("ra3", "completed")];
+  let attempts = 0;
+  state.setRequestOverride((url) => {
+    if (url === "/api/conversations/a") {
+      if (++attempts === 1) return new Response(JSON.stringify({ detail: "offline" }), { status: 503 });
+      return new Response(JSON.stringify({ ...state.conversations[0], runs: missed }));
+    }
+    const run = missed.find((run) => url.startsWith(`/api/runs/${run.id}/events`));
+    if (run) return new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(frame(run, 1, "text_delta", { text: `Answer ${run.id}` }));
+      controller.enqueue(frame(run, 2, "status", { status: "completed" }));
+      controller.close();
+    } }));
+    const finished = missed.find((run) => url === `/api/runs/${run.id}`);
+    if (finished) return new Response(JSON.stringify(finished));
+  });
+  state.conversations[0].latest_finished_run = { id: "ra3", status: "completed" };
+  state.conversations[0].has_unread = true;
+  await state.notify();
+  await screen.findByText("Answer ra3", {}, { timeout: 3000 });
+  expect(screen.getByText("Answer ra2")).toBeInTheDocument();
+  expect(screen.getByText("Work")).toBe(originalMessage);
+  expect(attempts).toBe(2);
+  state.focus.mockReturnValue(true);
+  fireEvent.focus(window);
+  await waitFor(() => expect(state.readCalls()).toHaveLength(1));
+  expect(JSON.parse(String(state.readCalls()[0][1]?.body))).toEqual({ run_id: "ra3" });
+});
+
+it("ignores delayed other-window history after switching conversations", async () => {
+  const state = setup({ completed: true, focused: false });
+  render(<App />);
+  await screen.findByRole("heading", { name: "First chat" });
+  let resolveHistory!: (response: Response) => void;
+  let historySignal: AbortSignal | undefined;
+  state.setRequestOverride((url, options) => {
+    if (url === "/api/conversations/a") {
+      historySignal = options?.signal as AbortSignal;
+      return new Promise((resolve) => { resolveHistory = resolve; });
+    }
+  });
+  state.conversations[0].active_run = { id: "ra2", status: "command_running", label: "Remote command" };
+  await state.notify();
+  fireEvent.click(screen.getByRole("button", { name: "Second chat" }));
+  await screen.findByRole("heading", { name: "Second chat" });
+  expect(historySignal?.aborted).toBe(true);
+  await act(async () => { resolveHistory(new Response(JSON.stringify({ ...state.conversations[0], runs: [remoteRun("ra2")] }))); });
+  expect(screen.queryByText("Remote instruction ra2")).not.toBeInTheDocument();
+  expect(state.fetch.mock.calls.some(([url]) => String(url).includes("/runs/ra2"))).toBe(false);
 });
 
 it("waits for rendered events, keeps settings unread, and requires a visible focused window", async () => {

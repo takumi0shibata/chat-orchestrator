@@ -1610,7 +1610,12 @@ export function App() {
   );
   const auditWorkspace = config?.workspaces.find((w) => w.id === auditProject);
   const terminalAvailable = settingsPage === "chat" && Boolean(currentWorkspace);
-  const activeRun = runs.find((r) => !terminal(r.status));
+  const activeRun = runs.find((r) => !terminal(r.status)) || (
+    current?.active_run && !runs.some((run) => run.id === current.active_run?.id)
+      ? current.active_run : undefined
+  );
+  const missingRunIds = [current?.active_run?.id, current?.latest_finished_run?.id]
+    .filter((id) => id && !runs.some((run) => run.id === id)).join(",");
   const active = Boolean(activeRun);
   const selectedProvider = config?.providers.find((p) => p.id === provider);
   const configReady = Boolean(config);
@@ -1980,6 +1985,35 @@ export function App() {
       if (runSubscription.current === subscription) runSubscription.current = null;
     };
   }, [cid, configReady]);
+
+  useEffect(() => {
+    if (!cid || loadedCid !== cid || !missingRunIds) return;
+    const subscription = runSubscription.current;
+    if (subscription?.conversationId !== cid) return;
+    const controller = new AbortController();
+    let retry: ReturnType<typeof setTimeout>;
+    async function reconcile() {
+      try {
+        const conversation = await api<Conversation & { runs: Run[] }>(`/conversations/${cid}`, {
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted || runSubscription.current !== subscription) return;
+        // Merge unseen runs without resetting existing messages, events or drafts.
+        setRuns((old) => {
+          const known = new Set(old.map((run) => run.id));
+          const added = conversation.runs.filter((run) => !known.has(run.id));
+          return added.length
+            ? [...old, ...added].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
+            : old;
+        });
+        for (const run of conversation.runs) subscription?.start(run);
+      } catch {
+        if (!controller.signal.aborted) retry = setTimeout(() => void reconcile(), 1500);
+      }
+    }
+    void reconcile();
+    return () => { controller.abort(); clearTimeout(retry); };
+  }, [cid, loadedCid, missingRunIds]);
 
   useEffect(() => {
     setFilesByPath({});

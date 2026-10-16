@@ -1436,6 +1436,78 @@ def test_artifacts_fall_back_to_scan_when_after_checkpoint_fails(tmp_path, monke
     asyncio.run(scenario())
 
 
+def test_prune_cannot_interrupt_undo_or_its_completion_ref(tmp_path, monkeypatch):
+    import threading
+
+    class EditingSandbox(FakeSandbox):
+        async def start(self):
+            for name in ("a.txt", "b.txt"):
+                (self.workspace / name).write_text("after-" + name)
+
+    async def scenario():
+        manager, store, _, request = setup(tmp_path, [[message()]], sandbox=EditingSandbox)
+        work = manager.config.workspaces[0].path
+        for name in ("a.txt", "b.txt"):
+            (work / name).write_text("before-" + name)
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        cp = manager.checkpoints
+        before = cp.get_ref(work, run["id"], "before")
+        old_blob = cp.tree(cp.repo(work), before)["b.txt"][1]
+        reading, release_read, recording, release_ref, pruning, collected = (
+            threading.Event() for _ in range(6)
+        )
+        original_git, original_ref, original_delete = cp.git, cp.set_ref, cp._delete_runs
+
+        def git(repo, *args, **kwargs):
+            if args == ("cat-file", "blob", old_blob):
+                reading.set()
+                assert release_read.wait(5)
+            return original_git(repo, *args, **kwargs)
+
+        def set_ref(workspace, rid, name, commit):
+            if name == "reverted":
+                recording.set()
+                assert release_ref.wait(5)
+            return original_ref(workspace, rid, name, commit)
+
+        def delete(repo, rids):
+            collected.set()
+            assert cp.get_ref(work, run["id"], "reverted") == before
+            return original_delete(repo, rids)
+
+        def prune():
+            pruning.set()
+            return manager.prune_checkpoints(0)
+
+        monkeypatch.setattr(cp, "git", git)
+        monkeypatch.setattr(cp, "set_ref", set_ref)
+        monkeypatch.setattr(cp, "_delete_runs", delete)
+        undo = asyncio.create_task(manager.revert(run["id"]))
+        cleanup = None
+        try:
+            assert await asyncio.to_thread(reading.wait, 5)
+            assert (work / "a.txt").read_text() == "before-a.txt"
+            assert (work / "b.txt").read_text() == "after-b.txt"
+            cleanup = asyncio.create_task(asyncio.to_thread(prune))
+            assert await asyncio.to_thread(pruning.wait, 5)
+            assert not await asyncio.to_thread(collected.wait, 0.1)
+            release_read.set()
+            assert await asyncio.to_thread(recording.wait, 5)
+            assert not await asyncio.to_thread(collected.wait, 0.1)
+        finally:
+            release_read.set()
+            release_ref.set()
+            await asyncio.wait_for(undo, 5)
+            if cleanup:
+                assert (await asyncio.wait_for(cleanup, 5))["removed_runs"] == 1
+            await manager.shutdown()
+        assert [(work / name).read_text() for name in ("a.txt", "b.txt")] == ["before-a.txt", "before-b.txt"]
+        assert store.events(run["id"])[-1]["type"] == "reverted"
+
+    asyncio.run(scenario())
+
+
 def test_warm_up_hashes_workspaces_before_the_first_run(tmp_path, monkeypatch):
     async def scenario():
         manager, store, _, request = setup(tmp_path, [[message()]])

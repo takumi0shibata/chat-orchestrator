@@ -2,6 +2,8 @@ import subprocess
 import json
 import os
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -507,3 +509,43 @@ def test_hashing_reports_progress_and_stops_when_closed(setup, monkeypatch):
     with pytest.raises(CheckpointCancelled):
         cp.snapshot(work, "cancelled", progress=close_after_first_batch)
     assert (cp.repo(work) / "snapshot-state.json").read_text() == state
+
+
+def test_prune_waits_until_snapshot_has_published_its_run_ref(setup, monkeypatch):
+    cp, work = setup
+    (work / "a.txt").write_text("before")
+    cp.snapshot_run(work, "old", "before")
+    (work / "a.txt").write_text("after")
+    entered, release, pruning, collected = (threading.Event() for _ in range(4))
+    original_ref, original_delete = cp.set_ref, cp._delete_runs
+
+    def set_ref(workspace, rid, name, commit):
+        if rid == "new":
+            entered.set()
+            assert release.wait(5)
+        return original_ref(workspace, rid, name, commit)
+
+    def delete(repo, rids):
+        collected.set()
+        assert cp.get_ref(work, "new", "before")
+        return original_delete(repo, rids)
+
+    def prune():
+        pruning.set()
+        return cp.delete_runs(cp.repo(work), {"old"})
+
+    monkeypatch.setattr(cp, "set_ref", set_ref)
+    monkeypatch.setattr(cp, "_delete_runs", delete)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        snapshot = pool.submit(cp.snapshot_run, work, "new", "before")
+        try:
+            assert entered.wait(5)
+            cleanup = pool.submit(prune)
+            assert pruning.wait(5)
+            assert not collected.wait(0.1)
+        finally:
+            release.set()
+        result = snapshot.result(5)
+        assert cleanup.result(5) == 1
+    assert cp.get_ref(work, "new", "before") == result["commit"]
+    assert cp.tree(cp.repo(work), result["commit"])["a.txt"]

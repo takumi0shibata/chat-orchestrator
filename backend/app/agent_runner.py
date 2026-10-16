@@ -639,11 +639,8 @@ class RunManager:
                     )
         try:
             result = await asyncio.to_thread(
-                self.checkpoints.snapshot, workspace.path, f"{rid} {name}",
+                self.checkpoints.snapshot_run, workspace.path, rid, name,
                 progress=progress,
-            )
-            await asyncio.to_thread(
-                self.checkpoints.set_ref, workspace.path, rid, name, result["commit"]
             )
             self.store.event(rid, "checkpoint", dict(
                 name=name, files=result["files"], scan=result["scan"],
@@ -707,16 +704,8 @@ class RunManager:
         if lock.locked():
             raise ValueError("The workspace is busy. Wait for the current run to finish.")
         async with lock:
-            before, after, reverted = await asyncio.to_thread(self.run_refs, rid, workspace)
-            if not before or not after:
-                raise KeyError("Checkpoint not found")
-            if reverted:
-                raise ValueError("This run has already been reverted")
             result = await asyncio.to_thread(
-                self.checkpoints.restore, workspace.path, before, after, force
-            )
-            await asyncio.to_thread(
-                self.checkpoints.set_ref, workspace.path, rid, "reverted", before
+                self.checkpoints.restore_run, workspace.path, rid, force
             )
         self.store.event(rid, "reverted", dict(
             files=result["restored"], overwritten=result["overwritten"],
