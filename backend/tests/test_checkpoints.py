@@ -9,7 +9,8 @@ import pytest
 
 from app import checkpoints as checkpoint_module
 from app.checkpoints import (
-    STATE_REF, CheckpointCancelled, CheckpointConflict, Checkpoints, stale_paths,
+    EXCLUSIONS_MARKER, STATE_REF, CheckpointCancelled, CheckpointConflict, Checkpoints,
+    IncompleteCheckpoint, stale_paths,
 )
 from app.workspace_watch import Sync
 
@@ -549,3 +550,71 @@ def test_prune_waits_until_snapshot_has_published_its_run_ref(setup, monkeypatch
         assert cleanup.result(5) == 1
     assert cp.get_ref(work, "new", "before") == result["commit"]
     assert cp.tree(cp.repo(work), result["commit"])["a.txt"]
+
+
+@pytest.mark.parametrize("before,after,later", [
+    ("B" * 64, "short", "user edit"),
+    ("before", "A" * 64, "USER" * 20),
+    ("B" * 64, "A" * 64, "user edit"),
+])
+def test_size_exclusions_survive_restart_and_never_delete_or_overwrite_later_edits(setup, before, after, later):
+    cp, work = setup
+    cp.max_file_bytes = 32
+    large, normal = work / "report.txt", work / "normal.txt"
+    large.write_text(before)
+    normal.write_text("before")
+    first = cp.snapshot_run(work, "run", "before")["commit"]
+    large.write_text(after)
+    normal.write_text("after")
+    last = cp.snapshot_run(work, "run", "after")["commit"]
+    large.write_text(later)
+    reopened = Checkpoints(cp.root, 32)
+    assert reopened.exclusions(work, first, last) == {"report.txt"}
+    assert [f["path"] for f in reopened.changes(work, first, last)] == ["normal.txt"]
+    with pytest.raises(ValueError, match="not fully saved"):
+        reopened.patch(work, first, last, "report.txt")
+    # Force only resolves conflicts on reversible files, never on exclusions.
+    assert reopened.restore_run(work, "run", force=True)["restored"] == ["normal.txt"]
+    assert large.read_text() == later
+    assert normal.read_text() == "before"
+
+
+def test_snapshot_keeps_all_exclusions_beyond_the_event_preview_limit(setup):
+    cp, work = setup
+    for i in range(55):
+        (work / f"large-{i}.txt").write_text("x" * 2048)
+    first = cp.snapshot_run(work, "run", "before")["commit"]
+    for i in range(55):
+        (work / f"large-{i}.txt").write_text("small")
+    last = cp.snapshot_run(work, "run", "after")["commit"]
+    cp = Checkpoints(cp.root, 1024)
+    assert len(cp.exclusions(work, first, last)) == 55
+    assert cp.changes(work, first, last) == []
+    assert cp.restore_run(work, "run")["restored"] == []
+    assert all((work / f"large-{i}.txt").read_text() == "small" for i in range(55))
+
+
+def test_quiet_snapshot_retains_exclusions(watched):
+    cp, work, _ = watched
+    (work / "large.txt").write_text("x" * 2048)
+    before = cp.snapshot(work, "before")
+    quiet = cp.snapshot(work, "quiet")
+    assert quiet["scan"] == "unchanged"
+    assert cp.exclusions(work, before["commit"], quiet["commit"]) == {"large.txt"}
+
+
+@pytest.mark.parametrize("metadata", [None, "not-json", '{}', '["../escape"]'])
+def test_missing_or_invalid_exclusions_block_undo_even_with_force(setup, metadata):
+    cp, work = setup
+    target = work / "a.txt"
+    target.write_text("before")
+    before = cp.snapshot(work, "before")["commit"]
+    target.write_text("after")
+    after = cp.snapshot(work, "after")["commit"]
+    repo = cp.repo(work)
+    tree = cp.git(repo, "rev-parse", f"{before}^{{tree}}").decode().strip()
+    message = "old checkpoint\n" if metadata is None else f"checkpoint\n\n{EXCLUSIONS_MARKER}{metadata}\n"
+    unsafe = cp.git(repo, "commit-tree", tree, input=message.encode()).decode().strip()
+    with pytest.raises(IncompleteCheckpoint):
+        cp.restore(work, unsafe, after, force=True)
+    assert target.read_text() == "after"

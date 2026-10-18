@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from time import monotonic
 
 from app.attachments import direct_input, file_snapshot
-from app.checkpoints import CheckpointCancelled, Checkpoints
+from app.checkpoints import CheckpointCancelled, Checkpoints, IncompleteCheckpoint
 from app.workspace_watch import FSEventsWatcher
 from app.model_catalog import pricing_for, validate_model
 from app.openai_client import build_openai_client
@@ -672,6 +672,23 @@ class RunManager:
         return (get(workspace.path, rid, "before"), get(workspace.path, rid, "after"),
                 get(workspace.path, rid, "reverted"))
 
+    def legacy_checkpoint_exclusions(self, rid):
+        """Old events kept at most 50 paths; incomplete lists cannot authorize Undo."""
+        records = {
+            e["data"].get("name"): e["data"]
+            for e in self.store.events(rid, limit=100000)
+            if e["type"] == "checkpoint" and not e["data"].get("error")
+        }
+        skipped = set()
+        for name in ("before", "after"):
+            record = records.get(name, {})
+            paths, count = record.get("skipped"), record.get("skipped_count")
+            if (not isinstance(paths, list) or not all(isinstance(p, str) for p in paths)
+                    or type(count) is not int or len(set(paths)) != count):
+                return None
+            skipped.update(paths)
+        return skipped
+
     async def changes(self, rid):
         run, workspace = self.run_workspace(rid)
         if run["status"] not in TERMINAL or not self.checkpoints.available:
@@ -679,12 +696,17 @@ class RunManager:
         before, after, reverted = await asyncio.to_thread(self.run_refs, rid, workspace)
         if not before or not after:
             return dict(available=False, files=[])
-        files = await asyncio.to_thread(self.checkpoints.changes, workspace.path, before, after)
-        skipped = next((
-            e["data"] for e in reversed(self.store.events(rid, limit=100000))
-            if e["type"] == "checkpoint" and e["data"].get("name") == "after"
-        ), {}).get("skipped_count", 0)
-        return dict(available=True, reverted=bool(reverted), files=files, skipped_count=skipped)
+        try:
+            skipped = await asyncio.to_thread(
+                self.checkpoints.exclusions, workspace.path, before, after,
+                legacy_skipped=self.legacy_checkpoint_exclusions(rid),
+            )
+        except IncompleteCheckpoint as error:
+            return dict(available=True, reverted=bool(reverted), files=[],
+                        undo_available=False, undo_warning=str(error))
+        files = await asyncio.to_thread(self.checkpoints.changes, workspace.path, before, after, skipped=skipped)
+        return dict(available=True, reverted=bool(reverted), files=files, skipped_count=len(skipped),
+                    undo_available=bool(files) and not reverted)
 
     async def diff(self, rid, path):
         _, workspace = self.run_workspace(rid)
@@ -692,7 +714,8 @@ class RunManager:
         if not before or not after:
             raise KeyError("Checkpoint not found")
         text, truncated = await asyncio.to_thread(
-            self.checkpoints.patch, workspace.path, before, after, path
+            self.checkpoints.patch, workspace.path, before, after, path,
+            legacy_skipped=self.legacy_checkpoint_exclusions(rid),
         )
         return dict(path=path, diff=text, truncated=truncated)
 
@@ -705,7 +728,8 @@ class RunManager:
             raise ValueError("The workspace is busy. Wait for the current run to finish.")
         async with lock:
             result = await asyncio.to_thread(
-                self.checkpoints.restore_run, workspace.path, rid, force
+                self.checkpoints.restore_run, workspace.path, rid, force,
+                legacy_skipped=self.legacy_checkpoint_exclusions(rid),
             )
         self.store.event(rid, "reverted", dict(
             files=result["restored"], overwritten=result["overwritten"],

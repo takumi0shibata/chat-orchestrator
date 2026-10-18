@@ -334,6 +334,32 @@ def test_changes_diff_and_revert_conflict_api(app_client):
     assert target.read_text() == "user\n"
 
 
+def test_size_excluded_file_has_no_diff_and_is_untouched_by_forced_undo(app_client):
+    http, work, _ = app_client
+    manager, store = http.app.state.manager, http.app.state.store
+    manager.checkpoints.max_file_bytes = 4
+    cp = manager.checkpoints
+    cid = store.create_conversation("work")["id"]
+    rid = store.create_run({"conversation_id": cid})["id"]
+    report, normal = work / "report.txt", work / "normal.txt"
+    report.write_text("too large")
+    normal.write_text("old")
+    cp.snapshot_run(work, rid, "before")
+    report.write_text("new")
+    normal.write_text("new")
+    cp.snapshot_run(work, rid, "after")
+    store.status(rid, "completed", "Finished")
+    changes = http.get(f"/api/runs/{rid}/changes").json()
+    assert changes["skipped_count"] == 1 and changes["undo_available"]
+    assert [f["path"] for f in changes["files"]] == ["normal.txt"]
+    assert http.get(f"/api/runs/{rid}/diff", params={"path": "report.txt"}).status_code == 400
+    report.write_text("later user edit")
+    response = http.post(f"/api/runs/{rid}/revert", json={"force": True})
+    assert response.status_code == 200 and response.json()["restored"] == ["normal.txt"]
+    assert report.read_text() == "later user edit"
+    assert normal.read_text() == "old"
+
+
 def test_runs_include_attachment_names_and_files(app_client):
     http, _, _ = app_client
     cid = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]

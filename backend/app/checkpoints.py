@@ -39,6 +39,11 @@ HASH_BATCH = 2000
 STATE_VERSION = 2
 # Keeps the blobs of the saved state reachable when old runs are pruned.
 STATE_REF = "refs/orchestrator/state"
+EXCLUSIONS_MARKER = "orchestrator-exclusions-v1: "
+
+
+class IncompleteCheckpoint(ValueError):
+    pass
 
 
 class CheckpointCancelled(Exception):
@@ -252,7 +257,7 @@ class Checkpoints:
             self.set_ref(workspace, rid, name, result["commit"])
             return result
 
-    def restore_run(self, workspace, rid, force=False):
+    def restore_run(self, workspace, rid, force=False, *, legacy_skipped=None):
         # Read refs, restore every file, and record completion under one lock.
         with self.transaction(self.repo(workspace)):
             before, after, reverted = (
@@ -263,9 +268,42 @@ class Checkpoints:
                 raise KeyError("Checkpoint not found")
             if reverted:
                 raise ValueError("This run has already been reverted")
-            result = self.restore(workspace, before, after, force)
+            result = self.restore(workspace, before, after, force, legacy_skipped=legacy_skipped)
             self.set_ref(workspace, rid, "reverted", before)
             return result
+
+    def commit_snapshot(self, repo, tree, label, skipped):
+        # Commit metadata is immutable, survives restarts and is pruned together
+        # with its snapshot. Use stdin so large exclusion lists fit safely.
+        metadata = EXCLUSIONS_MARKER + json.dumps(sorted(skipped), ensure_ascii=True)
+        return self.git(repo, "commit-tree", tree, input=f"{label}\n\n{metadata}\n".encode()).decode().strip()
+
+    def exclusions(self, workspace, before, after, *, legacy_skipped=None):
+        skipped = set()
+        for commit in (before, after):
+            message = self.git(self.repo(workspace), "show", "-s", "--format=%B", commit).decode()
+            metadata = next((line[len(EXCLUSIONS_MARKER):] for line in message.splitlines()
+                             if line.startswith(EXCLUSIONS_MARKER)), None)
+            if metadata is None:
+                if legacy_skipped is None:
+                    raise IncompleteCheckpoint("Undo is unavailable because this older checkpoint has incomplete exclusion records. Files have not been changed.")
+                skipped.update(legacy_skipped)
+                continue
+            try:
+                paths = json.loads(metadata)
+                if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+                    raise ValueError("Invalid exclusions")
+                for path in paths:
+                    safe_relative(path)
+            except (ValueError, TypeError):
+                raise IncompleteCheckpoint("Undo is unavailable because checkpoint exclusion records are invalid. Files have not been changed.") from None
+            skipped.update(paths)
+        return skipped
+
+    @staticmethod
+    def covered(path, skipped):
+        # A size-excluded file may have become a directory (or vice versa).
+        return not any(path == p or path.startswith(p + "/") or p.startswith(path + "/") for p in skipped)
 
     def _snapshot(self, workspace, repo, label, rehash, progress):
         state = self.load_state(repo)
@@ -284,7 +322,7 @@ class Checkpoints:
             # Nothing could have changed: reuse the saved tree without listing files.
             # Recently written files need no re-hash here: any write after the
             # saved snapshot's barrier is a later event, so the sync is not quiet.
-            commit = self.git(repo, "commit-tree", state["tree"], "-m", label).decode().strip()
+            commit = self.commit_snapshot(repo, state["tree"], label, state["skipped"])
             watcher.commit(sync, full=False)
             known = state["files"] | state["skipped"]
             return dict(
@@ -356,7 +394,7 @@ class Checkpoints:
             tree = self.git(repo, "write-tree", env=index).decode().strip()
             if persist and scratch_index.exists():
                 os.replace(scratch_index, saved_index)
-        commit = self.git(repo, "commit-tree", tree, "-m", label).decode().strip()
+        commit = self.commit_snapshot(repo, tree, label, skipped)
         if persist:
             self.save_state(repo, dict(
                 version=STATE_VERSION,
@@ -421,7 +459,9 @@ class Checkpoints:
                 result[os.fsdecode(path)] = (mode, sha)
         return result
 
-    def changes(self, workspace, before, after):
+    def changes(self, workspace, before, after, *, skipped=None):
+        if skipped is None:
+            skipped = self.exclusions(workspace, before, after)
         repo = self.repo(workspace)
         status = self.git(
             repo, "diff-tree", "-r", "-z", "--no-renames", "--name-status", before, after
@@ -439,6 +479,8 @@ class Checkpoints:
             if not code:
                 continue
             path = os.fsdecode(path)
+            if not self.covered(path, skipped):
+                continue
             added, removed = counts.get(path, ("0", "0"))
             files.append(dict(
                 path=path,
@@ -449,8 +491,10 @@ class Checkpoints:
             ))
         return files
 
-    def patch(self, workspace, before, after, path):
+    def patch(self, workspace, before, after, path, *, legacy_skipped=None):
         safe_relative(path)
+        if not self.covered(path, self.exclusions(workspace, before, after, legacy_skipped=legacy_skipped)):
+            raise ValueError("This file was not fully saved in both checkpoints and cannot be undone.")
         text = self.git(
             self.repo(workspace), "diff-tree", "-p", "--no-renames", "--no-color",
             "--no-ext-diff", "--no-textconv", before, after, "--", f":(literal){path}",
@@ -472,18 +516,19 @@ class Checkpoints:
                 return
             directory = directory.parent
 
-    def restore(self, workspace: Path, before, after, force=False):
+    def restore(self, workspace: Path, before, after, force=False, *, legacy_skipped=None):
         """Return files changed between before and after to their before state."""
         repo = self.repo(workspace)
         lock = self.locked(repo)
         try:
-            return self._restore(workspace, repo, before, after, force)
+            return self._restore(workspace, repo, before, after, force, legacy_skipped)
         finally:
             lock.release()
 
-    def _restore(self, workspace, repo, before, after, force):
+    def _restore(self, workspace, repo, before, after, force, legacy_skipped):
+        skipped = self.exclusions(workspace, before, after, legacy_skipped=legacy_skipped)
         old, new = (self.tree(repo, c) for c in (before, after))
-        changed = sorted(p for p in set(old) | set(new) if old.get(p) != new.get(p))
+        changed = sorted(p for p in set(old) | set(new) if old.get(p) != new.get(p) and self.covered(p, skipped))
         current = self.snapshot(workspace, "pre-restore", rehash=changed)["commit"]
         now = self.tree(repo, current)
         conflicts = [p for p in changed if now.get(p) != new.get(p)]

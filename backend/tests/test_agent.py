@@ -1508,6 +1508,69 @@ def test_prune_cannot_interrupt_undo_or_its_completion_ref(tmp_path, monkeypatch
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("legacy_count", [0, 1, 55])
+def test_legacy_runs_only_allow_undo_when_both_exclusion_lists_are_complete(tmp_path, monkeypatch, legacy_count):
+    class EditingSandbox(FakeSandbox):
+        async def start(self):
+            (self.workspace / "normal.txt").write_text("after")
+            for i in range(legacy_count):
+                (self.workspace / f"report-{i}.txt").write_text("short")
+
+    async def scenario():
+        manager, store, _, request = setup(tmp_path, [[message()]], sandbox=EditingSandbox,
+                                            checkpoint_max_file_bytes=32)
+        cp = manager.checkpoints
+        # Reproduce the v0.2.3 format: only event previews record exclusions.
+        def old_commit(repo, tree, label, skipped):
+            return cp.git(repo, "commit-tree", tree, "-m", label).decode().strip()
+        monkeypatch.setattr(cp, "commit_snapshot", old_commit)
+        work = manager.config.workspaces[0].path
+        (work / "normal.txt").write_text("before")
+        for i in range(legacy_count):
+            (work / f"report-{i}.txt").write_text("B" * 64)
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        changes = await manager.changes(run["id"])
+        if legacy_count > 50:
+            assert changes["undo_available"] is False
+            assert "incomplete exclusion" in changes["undo_warning"]
+            with pytest.raises(ValueError, match="incomplete exclusion"):
+                await manager.revert(run["id"], force=True)
+            assert (work / "normal.txt").read_text() == "after"
+        else:
+            assert changes["skipped_count"] == legacy_count
+            assert [f["path"] for f in changes["files"]] == ["normal.txt"]
+            assert (await manager.revert(run["id"]))["restored"] == ["normal.txt"]
+            assert (work / "normal.txt").read_text() == "before"
+        for i in range(legacy_count):
+            assert (work / f"report-{i}.txt").read_text() == "short"
+        await manager.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_default_size_limit_shrink_is_excluded_and_warns_without_deleting(tmp_path):
+    class Shrink(FakeSandbox):
+        async def start(self):
+            (self.workspace / "report.bin").write_bytes(b"short")
+
+    async def scenario():
+        manager, store, _, request = setup(tmp_path, [[message()]], sandbox=Shrink)
+        target = manager.config.workspaces[0].path / "report.bin"
+        with target.open("wb") as stream:
+            stream.truncate(manager.settings.checkpoint_max_file_bytes + 1)
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        changes = await manager.changes(run["id"])
+        assert changes["files"] == [] and changes["skipped_count"] == 1
+        assert changes["undo_available"] is False
+        assert (await manager.revert(run["id"], force=True))["restored"] == []
+        assert target.read_bytes() == b"short"
+        await manager.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_warm_up_hashes_workspaces_before_the_first_run(tmp_path, monkeypatch):
     async def scenario():
         manager, store, _, request = setup(tmp_path, [[message()]])

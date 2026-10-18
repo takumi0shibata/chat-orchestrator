@@ -1718,7 +1718,7 @@ describe("file edits and checkpoints", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const { container } = render(<RunView run={run} timeline={[event(1, "checkpoint", { name: "after", files: 2 })]} onApproval={vi.fn()} />);
     expect(await screen.findByText("2 files changed")).toBeInTheDocument();
-    expect(screen.getByText("1 large files are not covered by checkpoints.")).toBeInTheDocument();
+    expect(screen.getByText("1 file was not fully saved in both checkpoints. Undo will leave it unchanged.")).toBeInTheDocument();
     const details = container.querySelector(".run-changes li details") as HTMLDetailsElement;
     details.open = true;
     fireEvent(details, new Event("toggle"));
@@ -1734,6 +1734,24 @@ describe("file edits and checkpoints", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     render(<RunView run={run} timeline={[event(1, "checkpoint", { name: "after", error: "git missing" })]} onApproval={vi.fn()} />);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("shows exclusions even when there are no reversible files and offers no Undo", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(json({
+      available: true, files: [], skipped_count: 2, undo_available: false,
+    }));
+    render(<RunView run={run} timeline={[event(1, "checkpoint", { name: "after" })]} onApproval={vi.fn()} />);
+    expect(await screen.findByRole("status")).toHaveTextContent("2 files were not fully saved");
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
+
+  it("explains why older incomplete checkpoints cannot be undone", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(json({
+      available: true, files: [], undo_available: false, undo_warning: "Undo is unavailable because this older checkpoint has incomplete exclusion records.",
+    }));
+    render(<RunView run={run} timeline={[event(1, "checkpoint", { name: "after" })]} onApproval={vi.fn()} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("incomplete exclusion records");
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
   });
 });
 
