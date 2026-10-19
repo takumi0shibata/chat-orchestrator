@@ -6,6 +6,7 @@ import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
@@ -275,6 +276,22 @@ def create_app(settings=None, manager_factory=RunManager):
             timezone="UTC",
             exclusions=["tool_fees", "chatgpt_plan_usage"],
             months=app.state.store.monthly_costs(),
+        )
+
+    @app.get("/api/usage/dashboard")
+    async def usage_dashboard(tz: str = "UTC"):
+        try:
+            zone = ZoneInfo(tz or "UTC")
+        except (ValueError, ZoneInfoNotFoundError):
+            raise HTTPException(400, "Unknown time zone")
+        summary = await asyncio.to_thread(app.state.store.usage_dashboard, zone)
+        return dict(
+            currency="USD",
+            estimated=True,
+            timezone=zone.key,
+            month_timezone="UTC",
+            exclusions=["tool_fees", "chatgpt_plan_usage"],
+            **summary,
         )
 
     @app.get("/api/conversations")

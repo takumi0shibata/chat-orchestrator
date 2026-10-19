@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { Conversation, Run } from "./types";
 import { MockEventSource } from "./test/MockEventSource";
+import { usageDashboard } from "./test/usageDashboard";
 
 beforeEach(() => localStorage.clear());
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
@@ -40,6 +41,7 @@ function setup({ completed = false, focused = true, delayEvents = false } = {}) 
       skills: [], resources: [], mcp_servers: [],
     });
     if (url === "/api/settings") return json({ title_provider: "openai", title_model: "gpt-6-luna", theme_color: "#315C47" });
+    if (url.startsWith("/api/usage/dashboard")) return json(usageDashboard("2026-10-19"));
     if (url === "/api/conversations") return listOverride ? listOverride() : json(conversations);
     if (url.startsWith("/api/conversations?q=")) return json(conversations);
     const conversation = conversations.find((c) => url === `/api/conversations/${c.id}`);

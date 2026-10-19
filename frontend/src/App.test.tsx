@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { App, ContextRing, RunView, budgetStatus, newChatSelection } from "./App";
 import type { AgentEvent, Run } from "./types";
+import { usageDashboard } from "./test/usageDashboard";
 
 vi.mock("./components/HostTerminalPanel", () => ({
   HostTerminalPanel: ({ currentWorkspacePath, visible }: { currentWorkspacePath: string; visible: boolean }) =>
@@ -163,6 +164,7 @@ it.each([false, true])("shows Azure connection labels and filters a bound chat: 
   else expect(screen.queryByText("別接続先のモデルは新規チャットで選択してください。")).not.toBeInTheDocument();
   fireEvent.keyDown(screen.getByRole("listbox", { name: "Model" }), { key: "Escape" });
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("button", { name: "General" }));
   const titles = screen.getByRole("combobox", { name: "Title model" }) as HTMLSelectElement;
   expect(titles).toHaveValue("new-luna");
   expect(Array.from(titles.options, (option) => option.value)).toEqual(["old-astra", "new-sol", "new-luna", "old-luna"]);
@@ -1193,6 +1195,7 @@ it("navigates settings, saves the title model and theme, and shows monthly cost"
   const { container } = render(<App />);
   fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
   expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "General" }));
   fireEvent.change(screen.getByRole("combobox", { name: "Title model" }), { target: { value: "gpt-5.6-sol" } });
   await waitFor(() => expect(patches).toContainEqual({ title_provider: "openai", title_model: "gpt-5.6-sol" }));
 
@@ -1317,6 +1320,7 @@ it("starts new conversations with GPT-6.1 Sol and offers registered Azure GPT-6 
   expect(screen.queryByRole("dialog", { name: "Reasoning effort" })).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("button", { name: "General" }));
   const titleModelSelect = screen.getByRole("combobox", { name: "Title model" });
   expect(titleModelSelect).toHaveValue("gpt-6-luna");
   expect(Array.from((titleModelSelect as HTMLSelectElement).options, (option) => option.value)).toEqual(expectedOrder);
@@ -1895,6 +1899,19 @@ describe("new chat defaults, budget and storage settings", () => {
       } else if (url === "/api/settings") response = saved;
       else if (url === "/api/costs/monthly") response = { currency: "USD", estimated: true, timezone: "UTC", exclusions: [], months: [{ month, usd: spent }] };
       else if (url === "/api/storage") response = usage;
+      else if (url.startsWith("/api/usage/dashboard")) {
+        const totals = { responses: 42, input_tokens: 1_500_000, cached_input_tokens: 600_000, cache_write_tokens: 0, output_tokens: 82_000, usd: spent, runs: 30 };
+        response = usageDashboard("2026-10-19", {
+          month,
+          totals,
+          current_month: { ...totals, input_tokens: 200_000, cached_input_tokens: 150_000, output_tokens: 9_000 },
+          models: [{ provider: "openai", model: "gpt-6-luna", ...totals }, { provider: "openai", model: "retired-model", ...totals, usd: 0 }],
+          days: [
+            { date: "2026-10-18", runs: 4, input_tokens: 1000, cached_input_tokens: 0, output_tokens: 500, usd: 1 },
+            { date: "2026-10-19", runs: 1, input_tokens: 9000, cached_input_tokens: 0, output_tokens: 0, usd: 3 },
+          ],
+        });
+      }
       else if (url === "/api/storage/checkpoints/prune") {
         usage = { ...usage, checkpoints: { ...usage.checkpoints, runs: 1, bytes: 1024 } };
         response = { removed_runs: 3, usage };
@@ -1924,6 +1941,7 @@ describe("new chat defaults, budget and storage settings", () => {
     const notice = await screen.findByText(/of your \$30\.00 monthly budget used \(83%\)/);
     expect(notice).toHaveClass("budget-near");
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
     expect(screen.getByRole("button", { name: /New chat defaults GPT-6.1 Sol · Medium/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Monthly budget \$30\.00 per month/ })).toBeInTheDocument();
 
@@ -1955,6 +1973,55 @@ describe("new chat defaults, budget and storage settings", () => {
     await waitFor(() => expect(calls[calls.length - 1]?.body).toEqual({ monthly_budget_usd: 0 }));
   });
 
+  it("opens Settings on the usage dashboard", async () => {
+    localStorage.setItem("workspace-conversation", "c");
+    const { calls } = mockServer({ monthly_budget_usd: 30 }, 25);
+    render(<App />);
+    await screen.findByRole("button", { name: "Model" });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("button", { name: "Dashboard" })).toHaveAttribute("aria-current", "page");
+    expect(await screen.findByRole("meter", { name: "Monthly budget used" })).toHaveAttribute("aria-valuenow", "83");
+    expect(screen.getByText("of $30.00 monthly budget")).toBeInTheDocument();
+    expect(screen.getByText("$5.00 remaining")).toBeInTheDocument();
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    expect(calls.some((call) => call.url === `/api/usage/dashboard?tz=${encodeURIComponent(zone)}`)).toBe(true);
+
+    const stat = (label: string) => screen.getByText(label, { selector: ".dashboard-stat span" }).parentElement!;
+    expect(stat("Input tokens")).toHaveTextContent("1.5M200K this month");
+    expect(stat("Output tokens")).toHaveTextContent("82K9K this month");
+    expect(stat("Cache hit rate")).toHaveTextContent("40%75% this month");
+
+    expect(screen.getByRole("img", { name: "5 runs across 2 active days in the last year" })).toBeInTheDocument();
+    expect(screen.getByText("2 active days · Current streak 2 · Longest 2")).toBeInTheDocument();
+    expect(document.querySelector('[data-date="2026-10-18"]')).toHaveClass("level-4");
+    expect(document.querySelector('[data-date="2026-10-19"]')).toHaveClass("level-1");
+    fireEvent.click(screen.getByRole("button", { name: "Tokens" }));
+    expect(screen.getByText("10.5K tokens in the last year")).toBeInTheDocument();
+    expect(document.querySelector('[data-date="2026-10-19"]')).toHaveClass("level-4");
+    fireEvent.mouseEnter(document.querySelector('[data-date="2026-10-18"]')!);
+    expect(screen.getByText("Oct 18, 2026 · 1.5K tokens")).toBeInTheDocument();
+
+    const rows = screen.getAllByRole("row").slice(1).map((row) => row.textContent);
+    expect(rows).toEqual(["GPT-6 Luna · OpenAI421.5M82K40%$25.00", "retired-model · OpenAI421.5M82K40%$0.00"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    expect(screen.getByRole("button", { name: /Monthly budget \$30\.00 per month/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Dashboard" }));
+    expect(await screen.findByRole("meter", { name: "Monthly budget used" })).toBeInTheDocument();
+  });
+
+  it("offers to set a budget from the dashboard", async () => {
+    localStorage.setItem("workspace-conversation", "c");
+    mockServer({}, 2);
+    render(<App />);
+    await screen.findByRole("button", { name: "Model" });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(await screen.findByText("spent this month")).toBeInTheDocument();
+    expect(screen.queryByRole("meter")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Set a budget" }));
+    expect(screen.getByRole("heading", { name: "Monthly budget" })).toBeInTheDocument();
+  });
+
   it("shows storage usage and cleans up after confirmation", async () => {
     localStorage.setItem("workspace-conversation", "c");
     const { calls } = mockServer({});
@@ -1962,6 +2029,7 @@ describe("new chat defaults, budget and storage settings", () => {
     render(<App />);
     await screen.findByRole("button", { name: "Model" });
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
     fireEvent.click(screen.getByRole("button", { name: /Storage/ }));
     expect(await screen.findByText("4 runs · oldest 2026-08-01")).toBeInTheDocument();
     // Total and checkpoints both round to 5.0 MB here.

@@ -235,3 +235,58 @@ def test_existing_title_model_setting_is_preserved(tmp_path):
     store = Store(tmp_path)
     store.update_settings(title_provider="azure_openai", title_model="azure-old-luna")
     assert Store(tmp_path).settings()["title_model"] == "azure-old-luna"
+
+
+def test_usage_dashboard_buckets_days_in_the_requested_zone(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    from zoneinfo import ZoneInfo
+
+    store = Store(tmp_path)
+    current = datetime.now(timezone.utc)
+    # 20:00 UTC is already the next day in Tokyo (UTC+9).
+    evening = (current - timedelta(days=3)).replace(hour=20, minute=0, second=0, microsecond=0)
+    old = current - timedelta(days=400)
+
+    def cost(response_id, created_at, model, input_tokens, cached, output, nano):
+        store.record_cost(dict(
+            response_id=response_id, provider="openai", model=model, kind="response",
+            input_tokens=input_tokens, cached_input_tokens=cached, cache_write_tokens=0,
+            output_tokens=output, input_rate_nano=0, cached_rate_nano=0,
+            cache_write_rate_nano=0, output_rate_nano=0, cost_nano_usd=nano,
+            created_at=created_at.isoformat(),
+        ))
+
+    cost("now", current, "gpt-6-sol", 1_000, 400, 100, 2_000_000_000)
+    cost("evening", evening, "gpt-6-luna", 500, 100, 50, 500_000_000)
+    cost("old", old, "gpt-6-sol", 10, 0, 1, 1)
+    cid = store.create_conversation("work")["id"]
+    run_ids = []
+    for i in range(3):
+        run_ids.append(store.create_run({"conversation_id": cid, "input": str(i)})["id"])
+        store.status(run_ids[-1], "completed", "Done")
+    with store.connect() as c:
+        c.execute("UPDATE runs SET created_at=? WHERE id=?", (evening.isoformat(), run_ids[1]))
+        c.execute("UPDATE runs SET created_at=? WHERE id=?", (old.isoformat(), run_ids[2]))
+
+    summary = store.usage_dashboard(ZoneInfo("Asia/Tokyo"))
+    tokyo_today = current.astimezone(ZoneInfo("Asia/Tokyo")).date()
+    assert summary["today"] == tokyo_today.isoformat()
+    assert summary["first_run_at"] == old.isoformat()
+    assert summary["totals"] == dict(
+        responses=3, input_tokens=1_510, cached_input_tokens=500, cache_write_tokens=0,
+        output_tokens=151, usd=2.500000001, runs=3,
+    )
+    assert summary["month"] == current.strftime("%Y-%m")
+    in_month = evening.strftime("%Y-%m") == summary["month"]
+    assert summary["current_month"]["input_tokens"] == 1_000 + (500 if in_month else 0)
+    assert summary["current_month"]["runs"] == 1 + (1 if in_month else 0)
+    assert [(m["model"], m["responses"]) for m in summary["models"]] == [("gpt-6-sol", 2), ("gpt-6-luna", 1)]
+    # The 400-day-old activity is outside the heatmap window but still in the totals.
+    evening_day = (evening.date() + timedelta(days=1)).isoformat()
+    by_day = {d["date"]: d for d in summary["days"]}
+    assert sorted(by_day) == sorted({evening_day, tokyo_today.isoformat()})
+    assert by_day[evening_day] == dict(
+        date=evening_day, runs=1, input_tokens=500, cached_input_tokens=100, output_tokens=50, usd=0.5,
+    )
+    assert by_day[tokyo_today.isoformat()]["runs"] == 1
+    assert store.usage_dashboard(ZoneInfo("UTC"))["days"][0]["date"] == evening.date().isoformat()

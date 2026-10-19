@@ -301,6 +301,13 @@ def test_settings_and_monthly_cost_api(app_client):
     assert costs["currency"] == "USD" and costs["estimated"] is True
     assert costs["exclusions"] == ["tool_fees", "chatgpt_plan_usage"]
     assert costs["months"][0]["usd"] == 0
+    dashboard = http.get("/api/usage/dashboard", params={"tz": "Asia/Tokyo"}).json()
+    assert dashboard["timezone"] == "Asia/Tokyo" and dashboard["month_timezone"] == "UTC"
+    assert dashboard["exclusions"] == ["tool_fees", "chatgpt_plan_usage"]
+    assert dashboard["totals"]["input_tokens"] == 0 and dashboard["days"] == []
+    assert http.get("/api/usage/dashboard").json()["timezone"] == "UTC"
+    for zone in ["Mars/Olympus", "../etc/passwd"]:
+        assert http.get("/api/usage/dashboard", params={"tz": zone}).status_code == 400
 
 
 @pytest.mark.parametrize("filename", ["結果.docx", "結果.md", "結果 (最終).docx"])
