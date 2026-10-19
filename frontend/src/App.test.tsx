@@ -1947,6 +1947,8 @@ describe("new chat defaults, budget and storage settings", () => {
     // An empty chat centers the composer under a greeting.
     expect(screen.getByRole("heading", { name: "What should we work on?" })).toBeInTheDocument();
     expect(document.querySelector("main")).toHaveClass("is-new-chat");
+    // The context ring is there from the start, before any response reports usage.
+    expect(screen.getByRole("img", { name: /^Context 0% used · 0 \/ 258K tokens/ })).toHaveTextContent("0%");
     // Backspace in the empty message removes the last selected tool token, but not on key repeat.
     const message = screen.getByRole("textbox", { name: "Message" });
     fireEvent.keyDown(message, { key: "Backspace", repeat: true });

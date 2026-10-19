@@ -2967,6 +2967,15 @@ export function App() {
                 />
                 <div className="composer-selection">
                   {(() => {
+                    // Shown from the start (0% before the first response), left of the model.
+                    const usage = contextUsage(runs.map((run) => timelines[run.id] || []))
+                      ?? { tokens: 0, compacted: false, compacting: false };
+                    return config?.compact_token_threshold ? (
+                      <ContextRing tokens={usage.tokens} compacted={usage.compacted} compacting={usage.compacting}
+                        threshold={config.compact_token_threshold} modelLimit={selectedModel?.max_input_tokens} />
+                    ) : null;
+                  })()}
+                  {(() => {
                     const { primary, more } = splitModelsByFamily(models);
                     const toOption = (m: Model) => ({ value: m.id, label: modelDisplayLabel(m) });
                     const levels = selectedModel?.efforts || [];
@@ -2988,13 +2997,6 @@ export function App() {
                     );
                   })()}
                 </div>
-                {(() => {
-                  const usage = contextUsage(runs.map((run) => timelines[run.id] || []));
-                  return usage && config?.compact_token_threshold ? (
-                    <ContextRing tokens={usage.tokens} compacted={usage.compacted} compacting={usage.compacting}
-                      threshold={config.compact_token_threshold} modelLimit={selectedModel?.max_input_tokens} />
-                  ) : null;
-                })()}
                 {activeRun ? (
                   <button
                     className="send stop-send"
