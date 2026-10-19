@@ -2105,7 +2105,7 @@ export function App() {
   function followLatest() {
     const element = scroll.current;
     if (!element) return;
-    if (follow.current) element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+    if (cid && follow.current) element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
     scrollSnapshot.current = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
   }
   useLayoutEffect(() => {
@@ -2540,17 +2540,17 @@ export function App() {
         <a className="brand" href="/">
           <img className="brand-icon" src="/app-icon.png" alt="" />
           <span>
-            Orchestrator<span className="brand-sub">RESPONSES AGENT</span>
+            Orchestrator<span className="brand-sub">Your workspace, connected</span>
           </span>
         </a>
         <div className="sidebar-commands">
+          <button className="sidebar-command new-chat-command" disabled={!workspace || busy} onClick={() => void newConversation()}>
+            <Icon name="compose" size={19} />
+            <span>New chat</span>
+          </button>
           <button className="sidebar-command guild-nav" aria-current={settingsPage === "guild" ? "page" : undefined} onClick={() => setSettingsPage("guild")}>
             <Shield size={19} strokeWidth={1.7} />
             <span>Guild Board</span>
-          </button>
-          <button className="sidebar-command" disabled={!workspace || busy} onClick={() => void newConversation()}>
-            <Icon name="compose" size={19} />
-            <span>New chat</span>
           </button>
           {searchOpen ? (
             <div className="sidebar-search-field" id="sidebar-search" role="search">
@@ -2675,7 +2675,7 @@ export function App() {
         />
       </aside>
       <main
-        className={`main ${draggingFiles ? "is-file-dragging" : ""}`}
+        className={`main ${settingsPage === "chat" && cid && runs.length === 0 ? "is-new-chat" : ""} ${draggingFiles ? "is-file-dragging" : ""}`}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -2699,7 +2699,10 @@ export function App() {
         {cid && (
           <header className="chat-header">
             <Icon name="folder" size={17} />
-            <h1 title={current?.title || "New chat"}>{current?.title || "New chat"}</h1>
+            <div className="chat-heading">
+              <span className="chat-project">{currentWorkspace?.label || "Workspace"}</span>
+              <h1 title={current?.title || "New chat"}>{current?.title || "New chat"}</h1>
+            </div>
           </header>
         )}
         {draggingFiles && (
@@ -2725,7 +2728,8 @@ export function App() {
         >
           {!cid ? (
             <div className="welcome">
-              <img className="welcome-icon" src="/app-icon.png" alt="" />
+              <div className="welcome-mark"><img className="welcome-icon" src="/app-icon.png" alt="" /></div>
+              <span className="welcome-eyebrow">A place to do your best work</span>
               <h2>Explore, analyze, create.</h2>
               <p>
                 Choose a project or start a new chat in your most recent project.
@@ -2739,15 +2743,17 @@ export function App() {
                 </p>
               )}
               <div className="examples">
-                <span>Compare papers in a research folder</span>
-                <span>Analyze a CSV and save a chart</span>
-                <span>Review and edit a Word or Excel file</span>
+                <div><FileText size={20} strokeWidth={1.5} /><strong>Explore ideas</strong><span>Compare papers in a research folder</span></div>
+                <div><FileSpreadsheet size={20} strokeWidth={1.5} /><strong>Find the signal</strong><span>Analyze a CSV and save a chart</span></div>
+                <div><SquarePen size={20} strokeWidth={1.5} /><strong>Make it happen</strong><span>Review and edit a Word or Excel file</span></div>
               </div>
             </div>
           ) : (
             <div className="chat-column" ref={chatContent}>
               {runs.length === 0 && (
                 <div className="welcome compact">
+                  <div className="welcome-mark"><img className="welcome-icon" src="/app-icon.png" alt="" /></div>
+                  <span className="welcome-eyebrow">Let’s make room for good ideas</span>
                   <h2>What would you like to work on?</h2>
                   <p>Describe the files and the result you want.</p>
                 </div>
@@ -3037,7 +3043,7 @@ export function App() {
               </div>
             </div>
             {hasOtherConnections && <p className="composer-note">別接続先のモデルは新規チャットで選択してください。</p>}
-            <p className="composer-note">Sandboxed: network access is disabled; only files in the mounted workspace can be modified.</p>
+            <p className="composer-note"><ShieldCheck size={12} aria-hidden="true" />Sandboxed: network access is disabled; only files in the mounted workspace can be modified.</p>
           </form>
         )}
         </>}

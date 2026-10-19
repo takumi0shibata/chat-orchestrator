@@ -921,6 +921,14 @@ it("opens and closes Files from the same panel icon even before selecting a chat
   fireEvent.click(toggle);
   expect(container.querySelector("#files-panel")).not.toHaveClass("is-open");
   await waitFor(() => expect(screen.getByText("Explore, analyze, create.")).toBeInTheDocument());
+  // On small screens the welcome cards overflow; opening Files must not hide the greeting.
+  const welcomeScroll = container.querySelector(".chat-scroll") as HTMLElement;
+  Object.defineProperties(welcomeScroll, {
+    scrollHeight: { configurable: true, value: 900 },
+    clientHeight: { configurable: true, value: 300 },
+  });
+  fireEvent.click(toggle);
+  expect(welcomeScroll.scrollTop).toBe(0);
 });
 
 it("keeps the terminal mounted when the chat changes", async () => {
