@@ -3,7 +3,7 @@ import re
 import sqlite3
 import unicodedata
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -469,6 +469,76 @@ class Store:
             {"month": row["month"], "usd": row["cost_nano_usd"] / 1_000_000_000}
             for row in rows
         ]
+
+    def usage_dashboard(self, zone, days=371):
+        """Ledger token totals plus per-day activity in `zone` for the last `days` local days.
+
+        Runs cover every provider; token and cost figures cover only the cost
+        ledger, which excludes ChatGPT plan usage.
+        """
+        current = datetime.now(timezone.utc)
+        today = current.astimezone(zone).date()
+        start = datetime.combine(today - timedelta(days=days - 1), time(), zone)
+        since = start.astimezone(timezone.utc).isoformat()
+        sums = (
+            "COUNT(*) AS responses,COALESCE(SUM(input_tokens),0) AS input_tokens,"
+            "COALESCE(SUM(cached_input_tokens),0) AS cached_input_tokens,"
+            "COALESCE(SUM(cache_write_tokens),0) AS cache_write_tokens,"
+            "COALESCE(SUM(output_tokens),0) AS output_tokens,"
+            "COALESCE(SUM(cost_nano_usd),0) AS cost_nano_usd"
+        )
+
+        def usage(row):
+            row = dict(row)
+            row["usd"] = row.pop("cost_nano_usd") / 1_000_000_000
+            return row
+
+        with self.connect() as c:
+            totals = usage(c.execute(f"SELECT {sums} FROM llm_costs").fetchone())
+            month = usage(c.execute(
+                f"SELECT {sums} FROM llm_costs WHERE substr(created_at,1,7)=?",
+                (current.strftime("%Y-%m"),),
+            ).fetchone())
+            models = [usage(r) for r in c.execute(
+                f"SELECT provider,model,{sums} FROM llm_costs GROUP BY provider,model "
+                "ORDER BY cost_nano_usd DESC,input_tokens+output_tokens DESC"
+            )]
+            costs = c.execute(
+                "SELECT created_at,input_tokens,cached_input_tokens,output_tokens,cost_nano_usd "
+                "FROM llm_costs WHERE created_at>=?", (since,)
+            ).fetchall()
+            runs = c.execute("SELECT created_at FROM runs WHERE created_at>=?", (since,)).fetchall()
+            first = c.execute("SELECT MIN(created_at) FROM runs").fetchone()[0]
+            totals["runs"] = c.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+            month["runs"] = c.execute(
+                "SELECT COUNT(*) FROM runs WHERE substr(created_at,1,7)=?",
+                (current.strftime("%Y-%m"),),
+            ).fetchone()[0]
+
+        daily = {}
+
+        def day(created_at):
+            date = datetime.fromisoformat(created_at).astimezone(zone).date().isoformat()
+            return daily.setdefault(date, dict(
+                date=date, runs=0, input_tokens=0, cached_input_tokens=0,
+                output_tokens=0, cost_nano_usd=0,
+            ))
+
+        for row in runs:
+            day(row["created_at"])["runs"] += 1
+        for row in costs:
+            item = day(row["created_at"])
+            for key in ("input_tokens", "cached_input_tokens", "output_tokens", "cost_nano_usd"):
+                item[key] += row[key]
+        return dict(
+            today=today.isoformat(),
+            month=current.strftime("%Y-%m"),
+            first_run_at=first,
+            totals=totals,
+            current_month=month,
+            models=models,
+            days=[usage(daily[key]) for key in sorted(daily)],
+        )
 
     def run(self, rid):
         with self.connect() as c:

@@ -58,6 +58,42 @@ export interface CostSummary {
   exclusions: string[];
   months: MonthlyCost[];
 }
+export interface UsageTotals {
+  responses: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+  cache_write_tokens: number;
+  output_tokens: number;
+  usd: number;
+  runs?: number;
+}
+export interface UsageModel extends UsageTotals {
+  provider: string;
+  model: string;
+}
+export interface UsageDay {
+  date: string;
+  runs: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  usd: number;
+}
+export interface UsageDashboard {
+  currency: "USD";
+  estimated: boolean;
+  /** Time zone for `today` and `days`; the month and budget use UTC. */
+  timezone: string;
+  month_timezone: "UTC";
+  exclusions: string[];
+  today: string;
+  month: string;
+  first_run_at: string | null;
+  totals: UsageTotals;
+  current_month: UsageTotals;
+  models: UsageModel[];
+  days: UsageDay[];
+}
 export interface ConversationActivity {
   active_run: { id: string; status: string; label: string | null } | null;
   latest_finished_run: { id: string; status: string } | null;

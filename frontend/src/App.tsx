@@ -11,6 +11,7 @@ import { MarkdownContent } from "./components/MarkdownContent";
 import { TextFileEditor } from "./components/TextFileEditor";
 import { ChatGPTConnection } from "./ChatGPTConnection";
 import { ConversationIndicator, ProjectIndicators } from "./components/ConversationIndicator";
+import { UsageDashboard } from "./components/UsageDashboard";
 import {
   exactSkillMatch,
   findSkillMention,
@@ -676,7 +677,7 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
   );
 }
 
-type SettingsPage = "chat" | "guild" | "audit" | "settings" | "cost" | "theme" | "defaults" | "budget" | "storage" | "chatgpt";
+type SettingsPage = "chat" | "guild" | "audit" | "dashboard" | "settings" | "cost" | "theme" | "defaults" | "budget" | "storage" | "chatgpt";
 
 const CHECKPOINT_AGES = [
   { days: 7, label: "Older than 7 days" },
@@ -872,11 +873,26 @@ function StoragePage({ onNavigate }: { onNavigate: (page: SettingsPage) => void 
   );
 }
 
+/** Shared heading of the two Settings landing tabs. */
+function SettingsHeader({ page, onNavigate }: { page: SettingsPage; onNavigate: (page: SettingsPage) => void }) {
+  return (
+    <>
+      <button className="settings-back" type="button" onClick={() => onNavigate("chat")}>← Back to chat</button>
+      <h1>Settings</h1>
+      <nav className="settings-tabs" aria-label="Settings sections">
+        <button type="button" aria-current={page === "dashboard" ? "page" : undefined} onClick={() => onNavigate("dashboard")}>Dashboard</button>
+        <button type="button" aria-current={page === "settings" ? "page" : undefined} onClick={() => onNavigate("settings")}>General</button>
+      </nav>
+    </>
+  );
+}
+
 function SettingsPanel({
   page,
   config,
   settings,
   costs,
+  refreshKey,
   onNavigate,
   onChange,
   onRefresh,
@@ -885,10 +901,27 @@ function SettingsPanel({
   config: Config | null;
   settings: AppSettings;
   costs: CostSummary | null;
+  /** Changes when a run finishes, so the dashboard reloads its totals. */
+  refreshKey: number;
   onNavigate: (page: SettingsPage) => void;
   onChange: (changes: AppSettingsChange) => Promise<void>;
   onRefresh: () => Promise<void>;
 }) {
+  if (page === "dashboard") return (
+    <section className="settings-page">
+      <SettingsHeader page={page} onNavigate={onNavigate} />
+      <UsageDashboard
+        budget={budgetStatus(costs, settings.monthly_budget_usd)}
+        refreshKey={refreshKey}
+        labelFor={(providerId, modelId) => {
+          const provider = config?.providers.find((item) => item.id === providerId);
+          const model = provider?.models.find((item) => item.id === modelId);
+          return `${model ? modelDisplayLabel(model) : modelId}${provider ? ` · ${provider.label}` : ""}`;
+        }}
+        onSetBudget={() => onNavigate("budget")}
+      />
+    </section>
+  );
   if (page === "chatgpt") return <ChatGPTConnection onRefresh={onRefresh} onBack={() => onNavigate("settings")} />;
   if (page === "defaults") return <DefaultsPage config={config} settings={settings} onNavigate={onNavigate} onChange={onChange} />;
   if (page === "budget") return <BudgetPage settings={settings} costs={costs} onNavigate={onNavigate} onChange={onChange} />;
@@ -924,8 +957,7 @@ function SettingsPanel({
   );
   return (
     <section className="settings-page">
-      <button className="settings-back" type="button" onClick={() => onNavigate("chat")}>← Back to chat</button>
-      <h1>Settings</h1>
+      <SettingsHeader page={page} onNavigate={onNavigate} />
       <div className="title-model-setting">
         <h2>Title model</h2>
         <p className="settings-description">Generates a concise title from the first message.</p>
@@ -2115,7 +2147,7 @@ export function App() {
   // Costs back the budget notice, so refresh them on load, on the cost pages and after each run.
   const finishedRuns = runs.filter((item) => terminal(item.status)).length;
   useEffect(() => {
-    if (settingsPage !== "chat" && settingsPage !== "cost" && settingsPage !== "budget") return;
+    if (settingsPage !== "chat" && settingsPage !== "cost" && settingsPage !== "budget" && settingsPage !== "dashboard") return;
     api<CostSummary>("/costs/monthly").then(setCosts).catch((e) => {
       // The chat page only uses costs for the optional budget notice.
       if (settingsPage !== "chat") setError(String(e));
@@ -2609,7 +2641,7 @@ export function App() {
           </section>
           {query.trim() && !searching && !searchError && searchResults?.length === 0 && <p className="muted">No matching conversations</p>}
         </nav>
-        <button className="sidebar-settings" type="button" aria-current={settingsPage !== "chat" && settingsPage !== "guild" && settingsPage !== "audit" ? "page" : undefined} onClick={() => setSettingsPage("settings")}>
+        <button className="sidebar-settings" type="button" aria-current={settingsPage !== "chat" && settingsPage !== "guild" && settingsPage !== "audit" ? "page" : undefined} onClick={() => setSettingsPage("dashboard")}>
           <Icon name="gear" size={18} />
           <span>Settings</span>
         </button>
@@ -2662,7 +2694,7 @@ export function App() {
             if (target) selectConversation(target);
           }}
         /></Suspense> : <p className="muted" role="status">This project is no longer registered.</p> : settingsPage !== "chat" ? (
-          <SettingsPanel page={settingsPage} config={config} settings={appSettings} costs={costs} onNavigate={setSettingsPage} onChange={saveAppSettings} onRefresh={refreshConfig} />
+          <SettingsPanel page={settingsPage} config={config} settings={appSettings} costs={costs} refreshKey={finishedRuns} onNavigate={setSettingsPage} onChange={saveAppSettings} onRefresh={refreshConfig} />
         ) : <>
         {cid && (
           <header className="chat-header">
