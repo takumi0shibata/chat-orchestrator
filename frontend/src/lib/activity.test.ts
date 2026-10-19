@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { activityGrid } from "./activity";
+import { activityCellSize, activityGrid } from "./activity";
 import type { UsageDay } from "../types";
 
 const day = (date: string, runs: number, tokens = 0, usd = 0): UsageDay => ({
@@ -46,4 +46,19 @@ it("labels months at the column holding their first day", () => {
   expect(activityGrid("2026-09-06", [], "runs").months.slice(0, 2)).toEqual([
     { column: 0, label: "Sep" }, { column: 3, label: "Oct" },
   ]);
+});
+
+it("sizes calendar cells in whole pixels that fit the available width", () => {
+  const span = (width: number) => {
+    const { cell, gap } = activityCellSize(width, 53);
+    return 28 + 53 * cell + 52 * gap;
+  };
+  // A settings-width card: 10px cells need the tighter gap to fit without scrolling.
+  expect(activityCellSize(663, 53)).toEqual({ cell: 10, gap: 2 });
+  expect(span(663)).toBeLessThanOrEqual(663);
+  // Wide cards keep the roomier gap; very wide ones stop growing.
+  expect(activityCellSize(900, 53)).toEqual({ cell: 13, gap: 3 });
+  expect(activityCellSize(2000, 53)).toEqual({ cell: 15, gap: 3 });
+  // Narrow screens keep a minimum size and scroll instead.
+  expect(activityCellSize(300, 53)).toEqual({ cell: 8, gap: 2 });
 });

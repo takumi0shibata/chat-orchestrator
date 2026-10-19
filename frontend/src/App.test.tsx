@@ -4,6 +4,16 @@ import { App, ContextRing, RunView, budgetStatus, newChatSelection } from "./App
 import type { AgentEvent, Run } from "./types";
 import { usageDashboard } from "./test/usageDashboard";
 
+const MODEL_PICKER = { name: "Model and reasoning effort" };
+
+/** Opens the model list through the model name in the combined model and effort panel. */
+function openModelList() {
+  const trigger = screen.getByRole("button", MODEL_PICKER);
+  if (trigger.getAttribute("aria-expanded") !== "true") fireEvent.click(trigger);
+  fireEvent.click(screen.getByTitle("Change model"));
+  return screen.getByRole("listbox", { name: "Model" });
+}
+
 vi.mock("./components/HostTerminalPanel", () => ({
   HostTerminalPanel: ({ currentWorkspacePath, visible }: { currentWorkspacePath: string; visible: boolean }) =>
     <div data-testid="host-terminal-mock" data-visible={visible}>{currentWorkspacePath}</div>,
@@ -152,9 +162,9 @@ it.each([false, true])("shows Azure connection labels and filters a bound chat: 
   });
   render(<App />);
   await screen.findByRole("textbox", { name: "Message" });
-  const model = screen.getByRole("button", { name: "Model" });
+  const model = screen.getByRole("button", MODEL_PICKER);
   await waitFor(() => expect(model).toHaveTextContent("GPT-5.6 Luna · 既存Azure"));
-  fireEvent.click(model);
+  openModelList();
   const options = screen.getAllByRole("option").map((option) => option.textContent);
   // The selected GPT-5.6 Luna is an older Luna, so "More models" opens with it shown.
   expect(options).toEqual(bound
@@ -402,6 +412,9 @@ it("restores selected conversation and replays persistent events on reload", asy
   render(<App />);
   await screen.findByText("保存された回答");
   expect(screen.queryByText("元ファイルを直接編集")).not.toBeInTheDocument();
+  // With history, the composer sits at the bottom without the new-chat greeting.
+  expect(screen.queryByRole("heading", { name: "What should we work on?" })).not.toBeInTheDocument();
+  expect(document.querySelector("main")).not.toHaveClass("is-new-chat");
   expect(screen.getByRole("textbox", { name: "Message" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Add attachments and tools" }));
   fireEvent.click(await screen.findByRole("button", { name: "academic-writing" }));
@@ -413,28 +426,28 @@ it("restores selected conversation and replays persistent events on reload", asy
   expect(screen.queryByRole("button", { name: "Remove Web Search" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Add attachments and tools" }));
   fireEvent.click(screen.getByRole("button", { name: "Web Search" }));
-  const modelSelector = screen.getByRole("button", { name: "Model" });
-  fireEvent.click(modelSelector);
-  const modelMenu = screen.getByRole("listbox", { name: "Model" });
+  const modelSelector = screen.getByRole("button", MODEL_PICKER);
+  const modelMenu = openModelList();
   fireEvent.keyDown(modelMenu, { key: "ArrowDown" });
   fireEvent.keyDown(modelMenu, { key: "Enter" });
   expect(modelSelector).toHaveTextContent("GPT-5.6 Luna");
-  const effortSelector = screen.getByRole("button", { name: "Reasoning effort" });
-  fireEvent.click(effortSelector);
+  // Choosing a model returns to the effort view of the still-open panel.
+  expect(screen.queryByRole("listbox", { name: "Model" })).not.toBeInTheDocument();
   fireEvent.change(screen.getByRole("slider", { name: "Reasoning effort" }), { target: { value: "2" } });
-  expect(effortSelector).toHaveTextContent("High");
+  expect(modelSelector).toHaveTextContent("High");
   fireEvent.keyDown(screen.getByRole("slider", { name: "Reasoning effort" }), { key: "Escape" });
-  expect(screen.queryByRole("dialog", { name: "Reasoning effort" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog", MODEL_PICKER)).not.toBeInTheDocument();
   fireEvent.click(modelSelector);
   fireEvent.pointerDown(document.body);
-  expect(screen.queryByRole("listbox", { name: "Model" })).not.toBeInTheDocument();
-  fireEvent.click(modelSelector);
+  expect(screen.queryByRole("dialog", MODEL_PICKER)).not.toBeInTheDocument();
+  openModelList();
   fireEvent.click(screen.getByRole("option", { name: "GPT-5.6 Sol" }));
-  expect(effortSelector).toHaveTextContent("Medium");
-  fireEvent.click(modelSelector);
+  expect(modelSelector).toHaveTextContent("Medium");
+  openModelList();
   fireEvent.click(screen.getByRole("option", { name: "GPT-5.6 Luna" }));
-  fireEvent.click(effortSelector);
-  fireEvent.click(screen.getByRole("button", { name: "High" }));
+  fireEvent.change(screen.getByRole("slider", { name: "Reasoning effort" }), { target: { value: "2" } });
+  fireEvent.keyDown(screen.getByRole("slider", { name: "Reasoning effort" }), { key: "Enter" });
+  expect(screen.queryByRole("dialog", MODEL_PICKER)).not.toBeInTheDocument();
   const message = screen.getByRole("textbox", { name: "Message" });
   fireEvent.change(message, { target: { value: "Analyze the report" } });
   fireEvent.keyDown(message, { key: "Enter", shiftKey: true });
@@ -1252,13 +1265,15 @@ it("starts new conversations with GPT-6.1 Sol and offers registered Azure GPT-6 
   });
 
   render(<App />);
-  const modelSelect = await screen.findByRole("button", { name: "Model" });
+  const modelSelect = await screen.findByRole("button", MODEL_PICKER);
   await waitFor(() => expect(modelSelect).toHaveTextContent("GPT-6.1 Sol"));
+  // Name and effort only: no model family mark beside them.
+  expect(modelSelect.querySelectorAll("svg")).toHaveLength(1);
   const expectedOrder = [
     "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna",
     "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
   ];
-  fireEvent.click(modelSelect);
+  openModelList();
   const menu = () => screen.getByRole("listbox", { name: "Model" });
   // The default GPT-6.1 Sol is the newest Sol, so only each family's newest model is listed.
   const more = () => screen.getByRole("option", { name: /More models/ });
@@ -1266,9 +1281,6 @@ it("starts new conversations with GPT-6.1 Sol and offers registered Azure GPT-6 
   expect(screen.getByRole("option", { name: "GPT-6.1 Sol" })).toHaveAttribute("aria-selected", "true");
   expect(Array.from(screen.getAllByRole("option"), (option) => option.textContent)).toEqual([
     "GPT-6 Astra", "GPT-6.1 Sol", "GPT-6 Luna", "GPT-5.6 Terra", "More models3",
-  ]);
-  expect(Array.from(menu().querySelectorAll("[data-model-icon]"), (icon) => icon.getAttribute("data-model-icon"))).toEqual([
-    "astra", "sol", "luna", "terra",
   ]);
   // Expanding keeps the menu open; End and Enter reach the disclosure from the keyboard.
   fireEvent.click(more());
@@ -1287,37 +1299,37 @@ it("starts new conversations with GPT-6.1 Sol and offers registered Azure GPT-6 
   expect(more()).toHaveAttribute("aria-expanded", "true");
   fireEvent.click(screen.getByRole("option", { name: "GPT-6 Sol" }));
   expect(modelSelect).toHaveTextContent("GPT-6 Sol");
-  // A model from "More models" reopens the menu already expanded around it.
-  fireEvent.click(modelSelect);
+  // A model from "More models" reopens the list already expanded around it.
+  openModelList();
   expect(more()).toHaveAttribute("aria-expanded", "true");
   expect(screen.getByRole("option", { name: "GPT-6 Sol" })).toHaveAttribute("aria-selected", "true");
   fireEvent.keyDown(menu(), { key: "Escape" });
-  expect(screen.queryByRole("listbox", { name: "Model" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog", MODEL_PICKER)).not.toBeInTheDocument();
 
-  const effortButton = screen.getByRole("button", { name: "Reasoning effort" });
-  expect(effortButton).toHaveTextContent("Medium");
-  fireEvent.click(effortButton);
+  expect(modelSelect).toHaveTextContent("Medium");
+  fireEvent.click(modelSelect);
   const slider = screen.getByRole("slider", { name: "Reasoning effort" });
   expect(slider).toHaveAttribute("max", "1");
   expect(slider).toHaveAttribute("aria-valuetext", "Medium");
-  expect(Array.from(screen.getByRole("dialog", { name: "Reasoning effort" }).querySelectorAll(".effort-ticks button"), (tick) => tick.textContent)).toEqual([
-    "Instant", "Medium",
-  ]);
+  const stops = () => screen.getByRole("dialog", MODEL_PICKER).querySelectorAll(".effort-stop");
+  expect(stops()).toHaveLength(2);
+  const reset = screen.getByRole("button", { name: "Reset reasoning effort" });
+  expect(reset).toBeDisabled();
   fireEvent.change(slider, { target: { value: "0" } });
-  expect(effortButton).toHaveTextContent("Instant");
+  expect(modelSelect).toHaveTextContent("Instant");
+  fireEvent.click(reset);
+  expect(modelSelect).toHaveTextContent("Medium");
+  expect(reset).toBeDisabled();
   fireEvent.keyDown(slider, { key: "Escape" });
 
-  fireEvent.click(modelSelect);
+  openModelList();
   fireEvent.click(screen.getByRole("option", { name: "GPT-6.1 Sol" }));
-  expect(effortButton).toHaveTextContent("Medium");
-  fireEvent.click(effortButton);
-  expect(Array.from(screen.getByRole("dialog", { name: "Reasoning effort" }).querySelectorAll(".effort-ticks button"), (tick) => tick.textContent)).toEqual([
-    "Light", "Medium", "High", "X-High", "Max",
-  ]);
-  fireEvent.click(screen.getByRole("button", { name: "X-High" }));
-  expect(effortButton).toHaveTextContent("Extra High");
+  expect(modelSelect).toHaveTextContent("Medium");
+  expect(stops()).toHaveLength(5);
+  fireEvent.change(screen.getByRole("slider", { name: "Reasoning effort" }), { target: { value: "3" } });
+  expect(modelSelect).toHaveTextContent("Extra High");
   fireEvent.pointerDown(document.body);
-  expect(screen.queryByRole("dialog", { name: "Reasoning effort" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog", MODEL_PICKER)).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
   fireEvent.click(screen.getByRole("button", { name: "General" }));
@@ -1928,10 +1940,21 @@ describe("new chat defaults, budget and storage settings", () => {
     localStorage.setItem("workspace-conversation", "c");
     mockServer({ default_provider: "openai", default_model: "gpt-6-luna", default_effort: "high", default_web_search: true });
     render(<App />);
-    const model = await screen.findByRole("button", { name: "Model" });
+    const model = await screen.findByRole("button", MODEL_PICKER);
     await waitFor(() => expect(model).toHaveTextContent("GPT-6 Luna"));
-    expect(screen.getByRole("button", { name: "Reasoning effort" })).toHaveTextContent("High");
+    expect(model).toHaveTextContent("High");
     expect(screen.getByRole("button", { name: "Remove Web Search" })).toBeInTheDocument();
+    // An empty chat centers the composer under a greeting.
+    expect(screen.getByRole("heading", { name: "What should we work on?" })).toBeInTheDocument();
+    expect(document.querySelector("main")).toHaveClass("is-new-chat");
+    // The context ring is there from the start, before any response reports usage.
+    expect(screen.getByRole("img", { name: /^Context 0% used · 0 \/ 258K tokens/ })).toHaveTextContent("0%");
+    // Backspace in the empty message removes the last selected tool token, but not on key repeat.
+    const message = screen.getByRole("textbox", { name: "Message" });
+    fireEvent.keyDown(message, { key: "Backspace", repeat: true });
+    expect(screen.getByRole("button", { name: "Remove Web Search" })).toBeInTheDocument();
+    fireEvent.keyDown(message, { key: "Backspace" });
+    expect(screen.queryByRole("button", { name: "Remove Web Search" })).not.toBeInTheDocument();
   });
 
   it("edits new chat defaults and the budget, and warns near the budget", async () => {
@@ -1977,7 +2000,7 @@ describe("new chat defaults, budget and storage settings", () => {
     localStorage.setItem("workspace-conversation", "c");
     const { calls } = mockServer({ monthly_budget_usd: 30 }, 25);
     render(<App />);
-    await screen.findByRole("button", { name: "Model" });
+    await screen.findByRole("button", MODEL_PICKER);
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(screen.getByRole("button", { name: "Dashboard" })).toHaveAttribute("aria-current", "page");
     expect(await screen.findByRole("meter", { name: "Monthly budget used" })).toHaveAttribute("aria-valuenow", "83");
@@ -2014,7 +2037,7 @@ describe("new chat defaults, budget and storage settings", () => {
     localStorage.setItem("workspace-conversation", "c");
     mockServer({}, 2);
     render(<App />);
-    await screen.findByRole("button", { name: "Model" });
+    await screen.findByRole("button", MODEL_PICKER);
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("spent this month")).toBeInTheDocument();
     expect(screen.queryByRole("meter")).not.toBeInTheDocument();
@@ -2027,7 +2050,7 @@ describe("new chat defaults, budget and storage settings", () => {
     const { calls } = mockServer({});
     const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValue(true);
     render(<App />);
-    await screen.findByRole("button", { name: "Model" });
+    await screen.findByRole("button", MODEL_PICKER);
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(screen.getByRole("button", { name: "General" }));
     fireEvent.click(screen.getByRole("button", { name: /Storage/ }));

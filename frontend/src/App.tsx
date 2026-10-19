@@ -1,9 +1,9 @@
 import { DragEvent as ReactDragEvent, FormEvent, KeyboardEvent, Suspense, lazy, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties } from "react";
 import {
-  ArrowUp, Check, ChevronDown, ChevronRight, Copy, File, FileArchive, FileCode, FileImage,
+  ArrowUp, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, File, FileArchive, FileCode, FileImage,
   FileSpreadsheet, FileText, Folder, FolderOpen, Globe, Paperclip, PanelRight, Pin, Plus,
-  Presentation, RefreshCw, Search, Settings, Shield, ShieldCheck, Sparkles, SquarePen, SquareTerminal, X,
+  Presentation, RefreshCw, RotateCcw, Search, Settings, Shield, ShieldCheck, Sparkles, SquarePen, SquareTerminal, X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { api, events } from "./api";
@@ -127,11 +127,8 @@ const REASONING_EFFORT_LABELS: Record<string, string> = {
   max: "Max",
 };
 
-type ModelFamilyIconName = "astra" | "sol" | "terra" | "luna";
-
-function modelFamilyIconName(model: string): ModelFamilyIconName | undefined {
-  const family = model.toLowerCase().match(/-(astra|sol|terra|luna)$/)?.[1];
-  return family as ModelFamilyIconName | undefined;
+function modelFamily(model: string): string | undefined {
+  return model.toLowerCase().match(/-(astra|sol|terra|luna)$/)?.[1];
 }
 
 function reasoningEffortLabel(value: string) {
@@ -156,7 +153,7 @@ function splitModelsByFamily(models: Model[]): { primary: Model[]; more: Model[]
   const primary: Model[] = [];
   const more: Model[] = [];
   for (const model of orderedModels(models)) {
-    const family = modelFamilyIconName(model.model) ?? model.model;
+    const family = modelFamily(model.model) ?? model.model;
     (seen.has(family) ? more : primary).push(model);
     seen.add(family);
   }
@@ -196,12 +193,14 @@ const ICONS = {
   terminal: SquareTerminal,
   "chevron-right": ChevronRight,
   "chevron-down": ChevronDown,
+  "chevron-left": ChevronLeft,
   compose: SquarePen,
   search: Search,
   folder: Folder,
   "folder-open": FolderOpen,
   pin: Pin,
   refresh: RefreshCw,
+  reset: RotateCcw,
   paperclip: Paperclip,
   globe: Globe,
   check: Check,
@@ -250,138 +249,68 @@ function CopyButton({ content, tooltip }: { content: string; tooltip: string }) 
   );
 }
 
-type PopoverSelectOption = { value: string; label: string; icon?: ModelFamilyIconName };
+type ModelOption = { value: string; label: string };
+type ModelRow = { kind: "option"; option: ModelOption } | { kind: "more" };
 
-/**
- * Model family marks: one filled silhouette per family on a tinted tile, drawn on a
- * 24px grid without hairlines so each stays legible at 18px.
- */
-const MODEL_FAMILY_MARKS: Record<ModelFamilyIconName, ReactNode> = {
-  astra: <path d="M12 2.5C12.9 8.1 15.9 11.1 21.5 12 15.9 12.9 12.9 15.9 12 21.5 11.1 15.9 8.1 12.9 2.5 12 8.1 11.1 11.1 8.1 12 2.5Z" />,
-  sol: <>
-    <circle cx="12" cy="12" r="5" />
-    <path d="M12 2.5v1.6M12 19.9v1.6M2.5 12h1.6M19.9 12h1.6M5.3 5.3l1.1 1.1M17.6 17.6l1.1 1.1M18.7 5.3l-1.1 1.1M6.4 17.6l-1.1 1.1"
-      fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
-  </>,
-  terra: <>
-    <circle cx="12" cy="12" r="5.6" />
-    <ellipse cx="12" cy="12" rx="10.2" ry="3.4" transform="rotate(-22 12 12)" fill="none" stroke="currentColor" strokeWidth="1.9" />
-  </>,
-  luna: <path d="M15.2 3.2a9 9 0 1 0 5.6 14.4A7.4 7.4 0 0 1 15.2 3.2Z" />,
-};
-
-function ModelFamilyIcon({ name, size = "sm" }: { name: ModelFamilyIconName; size?: "sm" | "md" }) {
-  return (
-    <span aria-hidden="true" className={`model-family-icon model-family-icon-${name} model-family-icon-${size}`} data-model-icon={name}>
-      <svg viewBox="0 0 24 24" fill="currentColor">{MODEL_FAMILY_MARKS[name]}</svg>
-    </span>
-  );
+/** Reset target for the effort slider: the saved default when this model offers it. */
+function defaultEffortFor(levels: string[], saved: string | null) {
+  if (saved && levels.includes(saved)) return saved;
+  return levels.includes("medium") ? "medium" : levels[0] ?? "medium";
 }
 
-type PopoverRow = { kind: "option"; option: PopoverSelectOption } | { kind: "more" };
-
 /**
- * Listbox popover. `moreOptions` sit behind a "More …" row that expands in place; it
+ * Model listbox. `moreOptions` sit behind a "More …" row that expands in place; it
  * starts expanded when the current value is one of them.
  */
-function PopoverSelect({ label, value, options, moreOptions = [], moreLabel = "More", onChange, disabled = false, className = "" }: {
-  label: string;
+function ModelList({ value, options, moreOptions, moreLabel, onChange, onClose }: {
   value: string;
-  options: PopoverSelectOption[];
-  moreOptions?: PopoverSelectOption[];
-  moreLabel?: string;
+  options: ModelOption[];
+  moreOptions: ModelOption[];
+  moreLabel: string;
   onChange: (value: string) => void;
-  disabled?: boolean;
-  className?: string;
+  onClose: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const menuId = `popover-select-${useId().replace(/:/g, "")}`;
   const selectedInMore = moreOptions.some((option) => option.value === value);
-  const rows: PopoverRow[] = [
+  const [expanded, setExpanded] = useState(selectedInMore);
+  const listRef = useRef<HTMLDivElement>(null);
+  const menuId = `model-list-${useId().replace(/:/g, "")}`;
+  const rows: ModelRow[] = [
     ...options.map((option) => ({ kind: "option" as const, option })),
     ...(moreOptions.length ? [{ kind: "more" as const }] : []),
     ...(expanded ? moreOptions.map((option) => ({ kind: "option" as const, option })) : []),
   ];
-  const selectedIndex = rows.findIndex((row) => row.kind === "option" && row.option.value === value);
-  const selectedOption = [...options, ...moreOptions].find((option) => option.value === value);
-  const selectedLabel = selectedOption?.label || value;
+  const [activeIndex, setActiveIndex] = useState(() =>
+    Math.max(0, rows.findIndex((row) => row.kind === "option" && row.option.value === value)));
 
   useEffect(() => {
-    if (!open) return;
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
-  }, [open]);
-
-  useEffect(() => {
-    if (open) listRef.current?.focus();
-  }, [open]);
+    listRef.current?.focus();
+  }, []);
 
   const revealMore = useRef(false);
   useEffect(() => {
     if (!expanded || !revealMore.current) return;
     revealMore.current = false;
     // Bring the newly listed models into view inside the height-capped menu.
-    listRef.current?.querySelector<HTMLElement>(".popover-select-more")?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+    listRef.current?.querySelector<HTMLElement>(".model-list-more")?.scrollIntoView?.({ block: "start", behavior: "smooth" });
   }, [expanded]);
-
-  function close() {
-    setOpen(false);
-    triggerRef.current?.focus();
-  }
 
   function activate(index: number) {
     const row = rows[index];
     if (!row) return;
     if (row.kind === "more") {
       revealMore.current = !expanded;
-      setExpanded((value) => !value);
+      setExpanded((current) => !current);
       setActiveIndex(index);
       return;
     }
     onChange(row.option.value);
-    close();
   }
 
-  function openMenu(toEnd = false) {
-    if (disabled || rows.length === 0) return;
-    const showMore = selectedInMore;
-    setExpanded(showMore);
-    const visible = options.length + (moreOptions.length ? 1 : 0) + (showMore ? moreOptions.length : 0);
-    const current = showMore && selectedInMore
-      ? options.length + 1 + moreOptions.findIndex((option) => option.value === value)
-      : options.findIndex((option) => option.value === value);
-    setActiveIndex(toEnd ? visible - 1 : Math.max(0, current));
-    setOpen(true);
-  }
-
-  function handleTriggerKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape") {
       event.preventDefault();
-      close();
-      return;
-    }
-    if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(event.key)) {
-      event.preventDefault();
-      openMenu(event.key === "ArrowUp");
-    }
-  }
-
-  function handleListKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      close();
-      return;
-    }
-    if (event.key === "Tab") {
-      setOpen(false);
+      event.stopPropagation();
+      onClose();
       return;
     }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -396,175 +325,216 @@ function PopoverSelect({ label, value, options, moreOptions = [], moreLabel = "M
     }
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
+      event.stopPropagation();
       activate(activeIndex);
     }
   }
 
-  const renderOption = (option: PopoverSelectOption, index: number) => (
-    <button
-      className={`popover-select-option ${index === activeIndex ? "is-active" : ""}`}
-      id={`${menuId}-option-${index}`}
-      key={option.value}
-      type="button"
-      role="option"
-      tabIndex={-1}
-      aria-selected={option.value === value}
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={() => activate(index)}
-    >
-      <span className="popover-select-option-label">
-        {option.icon && <ModelFamilyIcon name={option.icon} size="md" />}
-        <span>{option.label}</span>
-      </span>
-      {option.value === value && <Icon name="check" size={15} />}
-    </button>
-  );
-
   return (
-    <div className={`popover-select ${className}`.trim()} ref={rootRef}>
-      <button
-        ref={triggerRef}
-        className="popover-select-trigger"
-        type="button"
-        aria-label={label}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={menuId}
-        disabled={disabled}
-        onClick={() => (open ? close() : openMenu())}
-        onKeyDown={handleTriggerKeyDown}
-      >
-        <span className="popover-select-value">
-          {selectedOption?.icon && <ModelFamilyIcon name={selectedOption.icon} />}
-          <span>{selectedLabel}</span>
-        </span>
-        <Icon name="chevron-down" size={14} />
-      </button>
-      {open && (
-        <div
-          ref={listRef}
-          className="popover-select-menu"
-          id={menuId}
-          role="listbox"
+    <div
+      ref={listRef}
+      className="model-list"
+      id={menuId}
+      role="listbox"
+      tabIndex={-1}
+      aria-label="Model"
+      aria-activedescendant={rows[activeIndex] ? `${menuId}-option-${activeIndex}` : undefined}
+      onKeyDown={handleKeyDown}
+    >
+      {rows.map((row, index) => row.kind === "option" ? (
+        <button
+          className={`model-list-option ${index === activeIndex ? "is-active" : ""}`}
+          id={`${menuId}-option-${index}`}
+          key={row.option.value}
+          type="button"
+          role="option"
           tabIndex={-1}
-          aria-label={label}
-          aria-activedescendant={rows[activeIndex] ? `${menuId}-option-${activeIndex}` : undefined}
-          onKeyDown={handleListKeyDown}
+          aria-selected={row.option.value === value}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => activate(index)}
         >
-          {rows.map((row, index) => row.kind === "option" ? renderOption(row.option, index) : (
-            <button
-              className={`popover-select-option popover-select-more ${index === activeIndex ? "is-active" : ""}`}
-              id={`${menuId}-option-${index}`}
-              key="more"
-              type="button"
-              role="option"
-              tabIndex={-1}
-              aria-selected={false}
-              aria-expanded={expanded}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => activate(index)}
-            >
-              <span className="popover-select-option-label">
-                <span>{moreLabel}</span>
-                <small>{moreOptions.length}</small>
-              </span>
-              <span className={`popover-select-more-chevron ${expanded ? "is-expanded" : ""}`}><Icon name="chevron-right" size={14} /></span>
-            </button>
-          ))}
-        </div>
-      )}
+          <span>{row.option.label}</span>
+          {row.option.value === value && <Icon name="check" size={15} />}
+        </button>
+      ) : (
+        <button
+          className={`model-list-option model-list-more ${index === activeIndex ? "is-active" : ""}`}
+          id={`${menuId}-option-${index}`}
+          key="more"
+          type="button"
+          role="option"
+          tabIndex={-1}
+          aria-selected={false}
+          aria-expanded={expanded}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => activate(index)}
+        >
+          <span>{moreLabel}<small>{moreOptions.length}</small></span>
+          <span className={`model-list-more-chevron ${expanded ? "is-expanded" : ""}`}><Icon name="chevron-right" size={14} /></span>
+        </button>
+      ))}
     </div>
   );
 }
 
-/** Ordered levels as a stepped slider, like the effort control in Codex and Claude. */
-export function EffortSlider({ value, levels, onChange, disabled = false }: {
-  value: string;
+/**
+ * Model and reasoning effort behind one quiet trigger ("GPT-6 Astra High"). The panel
+ * opens on the effort slider; the model name in its header leads to the model list.
+ */
+export function ModelPicker({ model, options, moreOptions = [], onModelChange, effort, levels, defaultEffort, onEffortChange, disabled = false }: {
+  model: string;
+  options: ModelOption[];
+  moreOptions?: ModelOption[];
+  onModelChange: (value: string) => void;
+  effort: string;
   levels: string[];
-  onChange: (value: string) => void;
+  defaultEffort: string;
+  onEffortChange: (value: string) => void;
   disabled?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [view, setView] = useState<"closed" | "effort" | "models">("closed");
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const sliderRef = useRef<HTMLInputElement>(null);
-  const panelId = `effort-${useId().replace(/:/g, "")}`;
-  const index = Math.max(0, levels.indexOf(value));
-  const level = levels.length > 1 ? index / (levels.length - 1) : 1;
+  const modelButtonRef = useRef<HTMLButtonElement>(null);
+  const returnFromModels = useRef(false);
+  const panelId = `model-picker-${useId().replace(/:/g, "")}`;
+  const open = view !== "closed";
+  const modelLabel = [...options, ...moreOptions].find((option) => option.value === model)?.label || model;
+  const index = Math.max(0, levels.indexOf(effort));
+  const ratio = levels.length > 1 ? index / (levels.length - 1) : 1;
 
   useEffect(() => {
     if (!open) return;
-    sliderRef.current?.focus();
     const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!rootRef.current?.contains(event.target as Node)) setView("closed");
     };
     document.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
   }, [open]);
 
+  useEffect(() => {
+    if (view !== "effort") return;
+    // Coming back from the model list keeps focus on the control that led there.
+    const target = returnFromModels.current ? modelButtonRef.current : sliderRef.current ?? modelButtonRef.current;
+    returnFromModels.current = false;
+    target?.focus();
+  }, [view]);
+
   function close() {
-    setOpen(false);
+    setView("closed");
     triggerRef.current?.focus();
   }
 
+  function backToEffort() {
+    returnFromModels.current = true;
+    setView("effort");
+  }
+
   return (
-    <div className="effort-slider" ref={rootRef}>
+    <div className="model-picker" ref={rootRef}>
       <button
         ref={triggerRef}
-        className="popover-select-trigger effort-trigger"
+        className="model-trigger"
         type="button"
-        aria-label="Reasoning effort"
+        aria-label="Model and reasoning effort"
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-controls={panelId}
-        disabled={disabled || levels.length === 0}
-        onClick={() => (open ? close() : setOpen(true))}
+        aria-controls={open ? panelId : undefined}
+        title={levels.length ? `${modelLabel} · ${reasoningEffortLabel(effort)}` : modelLabel}
+        disabled={disabled || options.length + moreOptions.length === 0}
+        onClick={() => (open ? close() : setView("effort"))}
       >
-        <span className="effort-meter" aria-hidden="true">
-          {[0, 1, 2, 3].map((bar) => (
-            <span key={bar} className={bar / 3 <= level + 1e-9 ? "is-on" : undefined} />
-          ))}
-        </span>
-        <span>{reasoningEffortLabel(value)}</span>
+        <span className="model-trigger-name">{modelLabel}</span>
+        {levels.length > 0 && <span className="model-trigger-effort">{reasoningEffortLabel(effort)}</span>}
         <Icon name="chevron-down" size={14} />
       </button>
       {open && (
-        <div className="effort-panel" id={panelId} role="dialog" aria-label="Reasoning effort"
+        <div
+          className={`model-panel is-${view}`}
+          id={panelId}
+          role="dialog"
+          aria-label="Model and reasoning effort"
           onKeyDown={(event) => {
-            if (event.key === "Escape" || event.key === "Enter") {
-              event.preventDefault();
-              close();
-            }
-          }}>
-          <div className="effort-panel-header">
-            <span>Reasoning effort</span>
-            <strong>{reasoningEffortLabel(value)}</strong>
-          </div>
-          <input
-            ref={sliderRef}
-            type="range"
-            min={0}
-            max={Math.max(0, levels.length - 1)}
-            step={1}
-            value={index}
-            aria-label="Reasoning effort"
-            aria-valuetext={reasoningEffortLabel(value)}
-            style={{ "--effort-fill": `${level * 100}%` } as CSSProperties}
-            onChange={(event) => onChange(levels[Number(event.target.value)])}
-          />
-          <div className="effort-ticks">
-            {levels.map((item, position) => {
-              const ratio = levels.length > 1 ? position / (levels.length - 1) : 0;
-              const edge = position === 0 ? "is-first" : position === levels.length - 1 ? "is-last" : "";
-              return (
-                <button key={item} type="button" className={`${edge} ${position === index ? "is-current" : ""}`.trim() || undefined}
-                  style={{ "--tick": ratio } as CSSProperties} tabIndex={-1} onClick={() => onChange(item)}>
-                  {item === "xhigh" ? "X-High" : reasoningEffortLabel(item)}
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            close();
+          }}
+        >
+          {view === "models" ? (
+            <>
+              <div className="model-panel-nav">
+                <button type="button" className="model-panel-icon" aria-label="Back to reasoning effort" onClick={backToEffort}>
+                  <Icon name="chevron-left" size={16} />
                 </button>
-              );
-            })}
-          </div>
-          <div className="effort-hint" aria-hidden="true"><span>Faster</span><span>Smarter</span></div>
+                <span>Model</span>
+              </div>
+              <ModelList
+                value={model}
+                options={options}
+                moreOptions={moreOptions}
+                moreLabel="More models"
+                onChange={(value) => {
+                  onModelChange(value);
+                  backToEffort();
+                }}
+                onClose={close}
+              />
+            </>
+          ) : (
+            <>
+              <div className="effort-head">
+                <span className="model-panel-icon" aria-hidden="true" />
+                <div className="effort-title">
+                  <strong aria-live="polite">{levels.length ? reasoningEffortLabel(effort) : "Default effort"}</strong>
+                  <button ref={modelButtonRef} type="button" className="effort-model" title="Change model" onClick={() => setView("models")}>
+                    <span>{modelLabel}</span>
+                    <Icon name="chevron-right" size={13} />
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="model-panel-icon"
+                  aria-label="Reset reasoning effort"
+                  title={`Reset to ${reasoningEffortLabel(defaultEffort)}`}
+                  disabled={!levels.length || effort === defaultEffort}
+                  onClick={() => onEffortChange(defaultEffort)}
+                >
+                  <Icon name="reset" size={15} />
+                </button>
+              </div>
+              {levels.length > 0 && (
+                <div className="effort-track" style={{ "--effort-fill": ratio } as CSSProperties}>
+                  <span className="effort-track-fill" aria-hidden="true" />
+                  {levels.map((item, position) => (
+                    <span
+                      key={item}
+                      className={`effort-stop ${position <= index ? "is-filled" : ""}`}
+                      aria-hidden="true"
+                      style={{ "--stop": levels.length > 1 ? position / (levels.length - 1) : 0 } as CSSProperties}
+                    />
+                  ))}
+                  <input
+                    ref={sliderRef}
+                    type="range"
+                    min={0}
+                    max={Math.max(0, levels.length - 1)}
+                    step={1}
+                    value={index}
+                    aria-label="Reasoning effort"
+                    aria-valuetext={reasoningEffortLabel(effort)}
+                    onChange={(event) => onEffortChange(levels[Number(event.target.value)])}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter") return;
+                      event.preventDefault();
+                      close();
+                    }}
+                  />
+                </div>
+              )}
+              {levels.length > 1 && <div className="effort-hint" aria-hidden="true"><span>Faster</span><span>Smarter</span></div>}
+            </>
+          )}
         </div>
       )}
     </div>
@@ -1669,6 +1639,8 @@ export function App() {
     selectedProvider?.enabled && selectedModel && cid && loadedCid === cid &&
     !busy && !active && (input.trim() || attachments.length),
   );
+  // A chat without runs starts with the composer centered; it settles at the bottom once a run exists.
+  const newChat = Boolean(cid && loadedCid === cid && runs.length === 0 && !activeRun);
   const canDropFiles = Boolean(settingsPage === "chat" && cid && loadedCid === cid && !busy && !active);
   const displayedConversations = query.trim() ? searchResults || [] : conversations;
   const sortedConversations = (items: Conversation[]) => [...items].sort(
@@ -2332,6 +2304,12 @@ export function App() {
         }
       }
     }
+    // Backspace in an empty message removes the last selected tool, like deleting a token.
+    if (e.key === "Backspace" && !e.repeat && !input && selectedTools.length) {
+      e.preventDefault();
+      selectedTools[selectedTools.length - 1].remove();
+      return;
+    }
     if (e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
     if (canSend) e.currentTarget.form?.requestSubmit();
@@ -2675,7 +2653,7 @@ export function App() {
         />
       </aside>
       <main
-        className={`main ${draggingFiles ? "is-file-dragging" : ""}`}
+        className={`main ${draggingFiles ? "is-file-dragging" : ""} ${settingsPage === "chat" && newChat ? "is-new-chat" : ""}`}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -2746,12 +2724,6 @@ export function App() {
             </div>
           ) : (
             <div className="chat-column" ref={chatContent}>
-              {runs.length === 0 && (
-                <div className="welcome compact">
-                  <h2>What would you like to work on?</h2>
-                  <p>Describe the files and the result you want.</p>
-                </div>
-              )}
               {runs.map((run) => (
                 <RunView
                   key={run.id}
@@ -2770,6 +2742,7 @@ export function App() {
         </div>
         {cid && (
           <form className="composer" onSubmit={submit}>
+            {newChat && <h2 className="composer-greeting">What should we work on?</h2>}
             {connection && (
               <p className="connection" role="status">
                 {connection}
@@ -2823,6 +2796,30 @@ export function App() {
                   </div>
                 ))}
               </div>
+              {selectedTools.length > 0 && (
+                <div className="composer-tools" role="group" aria-label="Selected tools">
+                  {selectedTools.map((tool) => (
+                    <button
+                      className="composer-tool"
+                      key={tool.key}
+                      type="button"
+                      aria-label={`Remove ${tool.label}`}
+                      title={`Remove ${tool.label}`}
+                      disabled={active || busy}
+                      onClick={() => {
+                        tool.remove();
+                        messageInput.current?.focus();
+                      }}
+                    >
+                      <span className="composer-tool-icon" aria-hidden="true">
+                        <Icon name={tool.icon} size={15} />
+                        <Icon name="close" size={15} />
+                      </span>
+                      <span className="composer-tool-label">{tool.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               <textarea
                 ref={messageInput}
                 onDragEnter={(event) => {
@@ -2956,19 +2953,6 @@ export function App() {
                     </div>
                   )}
                 </div>
-                {selectedTools.length > 0 && (
-                  <div className="selected-tools" aria-label="Selected tools">
-                    {selectedTools.map((tool) => (
-                      <span className="selected-tool" key={tool.key}>
-                        <Icon name={tool.icon} size={14} />
-                        <span>{tool.label}</span>
-                        <button type="button" aria-label={`Remove ${tool.label}`} title={`Remove ${tool.label}`} disabled={active || busy} onClick={tool.remove}>
-                          <Icon name="close" size={13} />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
                 <input
                   ref={fileInput}
                   className="visually-hidden"
@@ -2983,38 +2967,36 @@ export function App() {
                 />
                 <div className="composer-selection">
                   {(() => {
+                    // Shown from the start (0% before the first response), left of the model.
+                    const usage = contextUsage(runs.map((run) => timelines[run.id] || []))
+                      ?? { tokens: 0, compacted: false, compacting: false };
+                    return config?.compact_token_threshold ? (
+                      <ContextRing tokens={usage.tokens} compacted={usage.compacted} compacting={usage.compacting}
+                        threshold={config.compact_token_threshold} modelLimit={selectedModel?.max_input_tokens} />
+                    ) : null;
+                  })()}
+                  {(() => {
                     const { primary, more } = splitModelsByFamily(models);
-                    const toOption = (m: Model) => ({ value: m.id, label: modelDisplayLabel(m), icon: modelFamilyIconName(m.model) });
+                    const toOption = (m: Model) => ({ value: m.id, label: modelDisplayLabel(m) });
+                    const levels = selectedModel?.efforts || [];
                     return (
-                      <PopoverSelect
-                        label="Model"
-                        value={model}
-                        disabled={active}
-                        className="model-select"
+                      <ModelPicker
+                        model={model}
                         options={primary.map(toOption)}
                         moreOptions={more.map(toOption)}
-                        moreLabel="More models"
-                        onChange={(value) => {
+                        onModelChange={(value) => {
                           setModel(value);
                           setEffort("medium");
                         }}
+                        effort={effort}
+                        levels={levels}
+                        defaultEffort={defaultEffortFor(levels, appSettings.default_effort)}
+                        onEffortChange={setEffort}
+                        disabled={active}
                       />
                     );
                   })()}
-                  <EffortSlider
-                    value={effort}
-                    levels={selectedModel?.efforts || []}
-                    disabled={active}
-                    onChange={setEffort}
-                  />
                 </div>
-                {(() => {
-                  const usage = contextUsage(runs.map((run) => timelines[run.id] || []));
-                  return usage && config?.compact_token_threshold ? (
-                    <ContextRing tokens={usage.tokens} compacted={usage.compacted} compacting={usage.compacting}
-                      threshold={config.compact_token_threshold} modelLimit={selectedModel?.max_input_tokens} />
-                  ) : null;
-                })()}
                 {activeRun ? (
                   <button
                     className="send stop-send"
