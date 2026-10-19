@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import { activityGrid, type ActivityCell, type ActivityMetric } from "../lib/activity";
+import { activityCellSize, activityGrid, type ActivityCell, type ActivityMetric } from "../lib/activity";
 import type { UsageDashboard as Dashboard, UsageTotals } from "../types";
 import "./UsageDashboard.css";
 
@@ -75,11 +75,26 @@ export function UsageDashboard({ budget, refreshKey, labelFor, onSetBudget }: {
 
   const grid = useMemo(() => data && activityGrid(data.today, data.days, metric), [data, metric]);
   const calendar = useRef<HTMLDivElement>(null);
-  // Narrow screens scroll the calendar; start at the most recent weeks.
   const loaded = Boolean(grid);
+  const weeks = grid?.weeks.length ?? 0;
+  const [{ cell, gap }, setGeometry] = useState({ cell: 11, gap: 3 });
+  useLayoutEffect(() => {
+    const element = calendar.current;
+    if (!element || !weeks) return;
+    const measure = () => {
+      // Unlaid-out (e.g. hidden) calendars report no width; keep the last size.
+      if (element.clientWidth > 0) setGeometry(activityCellSize(element.clientWidth, weeks));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [weeks]);
+  // Narrow screens scroll the calendar; start at the most recent weeks.
   useLayoutEffect(() => {
     if (calendar.current) calendar.current.scrollLeft = calendar.current.scrollWidth;
-  }, [loaded]);
+  }, [loaded, cell]);
   if (error && !data) return <p className="settings-message" role="alert">{error}</p>;
   if (!data || !grid) return <p className="settings-description" role="status">Loading…</p>;
 
@@ -141,7 +156,8 @@ export function UsageDashboard({ budget, refreshKey, labelFor, onSetBudget }: {
           </div>
         </div>
         <div className="activity-scroll" ref={calendar}>
-          <div className="activity-calendar" style={{ ["--weeks" as string]: grid.weeks.length }} onMouseLeave={() => setHovered(null)}>
+          <div className="activity-calendar"
+            style={{ ["--weeks" as string]: grid.weeks.length, ["--cell" as string]: `${cell}px`, ["--activity-gap" as string]: `${gap}px` }} onMouseLeave={() => setHovered(null)}>
             <div className="activity-months" aria-hidden="true">
               {grid.months.map((item) => <span key={item.column} style={{ gridColumnStart: item.column + 1 }}>{item.label}</span>)}
             </div>

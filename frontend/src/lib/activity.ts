@@ -90,3 +90,17 @@ export function activityGrid(today: string, days: UsageDay[], metric: ActivityMe
     longestStreak,
   };
 }
+
+/**
+ * Calendar geometry in whole pixels: fractional cells round unevenly and look ragged.
+ * The weekday column is 24px plus a 4px gap (see UsageDashboard.css); small cells get a 2px gap to stay legible.
+ */
+const WEEKDAY_COLUMN = 28;
+const MIN_CELL = 8;
+const MAX_CELL = 15;
+
+export function activityCellSize(width: number, weeks: number) {
+  const fit = (gap: number) => Math.floor((width - WEEKDAY_COLUMN - (weeks - 1) * gap) / weeks);
+  const gap = fit(3) >= 11 ? 3 : 2;
+  return { cell: Math.max(MIN_CELL, Math.min(MAX_CELL, fit(gap))), gap };
+}

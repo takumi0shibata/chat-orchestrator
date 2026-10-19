@@ -33,32 +33,35 @@
 .dashboard-segmented button:hover { background: transparent; color: var(--text, #202124); }
 .dashboard-segmented button[aria-pressed="true"] { background: var(--bg, #fff); color: var(--text, #202124); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / 8%); }
 
-/* Cells scale with the card; narrow screens scroll the calendar instead of shrinking it further. */
+/* Cells are sized in whole pixels to fit the card (see UsageDashboard), so every square
+   and gap renders identically; narrow screens scroll the calendar instead. Levels are
+   steps of the theme color over the empty-cell surface. */
 .activity-scroll { overflow-x: auto; padding-bottom: 4px; }
 .activity-calendar {
+  --cell: 11px;
   --activity-gap: 3px;
   display: grid;
-  grid-template-columns: 26px 1fr;
-  grid-template-rows: auto 1fr;
-  column-gap: 6px;
-  min-width: 560px;
+  grid-template-columns: 24px max-content;
+  column-gap: 4px;
+  width: max-content;
+  margin-inline: auto;
 }
-.activity-months { grid-column: 2; display: grid; grid-template-columns: repeat(var(--weeks), minmax(0, 1fr)); gap: var(--activity-gap); margin-bottom: 4px; color: var(--text-3, #85878e); font-size: 10px; }
+.activity-months { grid-column: 2; display: grid; grid-template-columns: repeat(var(--weeks), var(--cell)); column-gap: var(--activity-gap); margin-bottom: 4px; color: var(--text-3, #85878e); font-size: 10px; line-height: 14px; }
 .activity-months span { white-space: nowrap; }
-.activity-weekdays { display: grid; grid-template-rows: repeat(7, 1fr); gap: var(--activity-gap); color: var(--text-3, #85878e); font-size: 9px; }
+.activity-weekdays { display: grid; grid-template-rows: repeat(7, var(--cell)); row-gap: var(--activity-gap); color: var(--text-3, #85878e); font-size: 9px; line-height: 1; }
 .activity-weekdays span { display: flex; align-items: center; }
-.activity-grid { display: grid; grid-template-columns: repeat(var(--weeks), minmax(0, 1fr)); grid-template-rows: repeat(7, auto); grid-auto-flow: column; gap: var(--activity-gap); }
-.activity-cell { display: block; aspect-ratio: 1; border-radius: 2px; background: var(--surface-2, #ebedf0); outline: 1px solid rgb(27 31 35 / 6%); outline-offset: -1px; }
-.activity-grid .activity-cell:not(.is-future):hover { outline: 1px solid var(--inverse-bg, #202124); }
-.activity-cell.is-future { background: transparent; outline: 0; }
-.activity-cell.level-1 { background: #9be9a8; }
-.activity-cell.level-2 { background: #40c463; }
-.activity-cell.level-3 { background: #30a14e; }
-.activity-cell.level-4 { background: #216e39; }
+.activity-grid { display: grid; grid-template-columns: repeat(var(--weeks), var(--cell)); grid-template-rows: repeat(7, var(--cell)); grid-auto-flow: column; gap: var(--activity-gap); }
+.activity-cell { display: block; width: var(--cell, 10px); height: var(--cell, 10px); border-radius: calc(var(--cell, 10px) / 4); background: var(--surface-2, #ebedf0); }
+.activity-grid .activity-cell:not(.is-future):hover { outline: 1px solid var(--text, #202124); outline-offset: 1px; }
+.activity-cell.is-future { background: transparent; }
+.activity-cell.level-1 { background: color-mix(in oklab, var(--accent-text, #25262a) 26%, var(--surface-2, #ebedf0)); }
+.activity-cell.level-2 { background: color-mix(in oklab, var(--accent-text, #25262a) 50%, var(--surface-2, #ebedf0)); }
+.activity-cell.level-3 { background: color-mix(in oklab, var(--accent-text, #25262a) 75%, var(--surface-2, #ebedf0)); }
+.activity-cell.level-4 { background: var(--accent-text, #25262a); }
 .activity-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; color: var(--text-3, #777980); font-size: 11px; }
 .activity-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .activity-legend { display: flex; align-items: center; flex: none; gap: 3px; }
-.activity-legend .activity-cell { width: 10px; }
+.activity-legend .activity-cell { --cell: 10px; }
 .activity-legend .activity-cell:first-child { margin-left: 3px; }
 .activity-legend .activity-cell:last-child { margin-right: 3px; }
 
@@ -78,11 +81,6 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  .activity-cell { outline-color: rgb(255 255 255 / 4%); }
-  .activity-cell.level-1 { background: #0e4429; }
-  .activity-cell.level-2 { background: #006d32; }
-  .activity-cell.level-3 { background: #26a641; }
-  .activity-cell.level-4 { background: #39d353; }
   .settings-tabs button[aria-current="page"],
   .dashboard-segmented button[aria-pressed="true"] { background: var(--surface-3); box-shadow: none; }
 }
