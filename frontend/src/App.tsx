@@ -1,8 +1,8 @@
 import { DragEvent as ReactDragEvent, FormEvent, KeyboardEvent, Suspense, lazy, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import {
-  ArrowUp, Check, ChevronDown, ChevronRight, Copy, File, FileArchive, FileCode, FileImage,
-  FileSpreadsheet, FileText, Folder, FolderOpen, Globe, Paperclip, PanelRight, Pin, Plus,
+  ArrowUp, BookOpenText, ChartColumnBig, Check, ChevronDown, ChevronRight, Copy, File, FileArchive, FileCode, FileImage,
+  FilePenLine, FileSpreadsheet, FileText, Folder, FolderOpen, Globe, Paperclip, PanelRight, Pin, Plus,
   Presentation, RefreshCw, Search, Settings, Shield, ShieldCheck, Sparkles, SquarePen, SquareTerminal, X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -1824,9 +1824,9 @@ export function App() {
     const element = messageInput.current;
     if (!element) return;
     const resize = () => {
-      const max = Math.min(240, window.innerHeight * 0.35);
+      const max = Math.min(260, window.innerHeight * 0.35);
       element.style.height = "0px";
-      element.style.height = `${Math.min(max, Math.max(Math.min(82, max), element.scrollHeight))}px`;
+      element.style.height = `${Math.min(max, Math.max(Math.min(58, max), element.scrollHeight))}px`;
       element.style.overflowY = element.scrollHeight > max ? "auto" : "hidden";
     };
     resize();
@@ -2739,9 +2739,9 @@ export function App() {
                 </p>
               )}
               <div className="examples">
-                <span>Compare papers in a research folder</span>
-                <span>Analyze a CSV and save a chart</span>
-                <span>Review and edit a Word or Excel file</span>
+                <span><BookOpenText aria-hidden="true" size={18} strokeWidth={1.7} />Compare papers in a research folder</span>
+                <span><ChartColumnBig aria-hidden="true" size={18} strokeWidth={1.7} />Analyze a CSV and save a chart</span>
+                <span><FilePenLine aria-hidden="true" size={18} strokeWidth={1.7} />Review and edit a Word or Excel file</span>
               </div>
             </div>
           ) : (
