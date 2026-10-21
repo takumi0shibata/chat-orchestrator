@@ -16,6 +16,39 @@ class CommandTimeoutError(TimeoutError):
         super().__init__(f"Command time limit reached ({timeout_seconds:g}s).")
 
 
+class SandboxUnavailable(RuntimeError):
+    """Docker never started a container. The workspace stays usable."""
+
+
+_DAEMON_MARKERS = (
+    "cannot connect to the docker daemon",
+    "is the docker daemon running",
+    "docker daemon is not running",
+    "error during connect",
+    "if the daemon is running",
+)
+
+
+def explain_docker_start_failure(error):
+    """Turn a failed `docker run` into an error the user can act on."""
+    if isinstance(error, FileNotFoundError):
+        return SandboxUnavailable(
+            "Docker is not installed or not on PATH. "
+            "Install Docker, then send the message again."
+        )
+    text = str(error).lower()
+    if any(marker in text for marker in _DAEMON_MARKERS):
+        return SandboxUnavailable(
+            "Docker is installed, but the daemon is not running. "
+            "Start Docker, then send the message again."
+        )
+    detail = str(error).strip() or "Docker command failed"
+    return SandboxUnavailable(
+        "The sandbox could not be started. Check Docker and try again. "
+        + detail[:500]
+    )
+
+
 async def docker(*args, timeout=30):
     process = await asyncio.create_subprocess_exec(
         "docker", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -50,6 +83,7 @@ class Sandbox:
         self.workspace = workspace
         self.skills, self.resources, self.input_dir = skills, resources, input_dir
         self.commands = set()
+        self.started = False
 
     def arguments(self):
         s = self.settings
@@ -121,9 +155,26 @@ class Sandbox:
 
     async def start(self):
         self.input_dir.mkdir(parents=True, exist_ok=True)
-        await docker(*self.arguments(), timeout=60)
+        try:
+            await docker(*self.arguments(), timeout=60)
+        except Exception as error:
+            # `docker run` can leave a named container behind (for example after a
+            # timeout). Drop it, but do not treat that best-effort removal as a
+            # cleanup failure: nothing here was ever handed to the run.
+            await self._discard_unstarted()
+            raise explain_docker_start_failure(error) from error
+        self.started = True
+
+    async def _discard_unstarted(self):
+        try:
+            await docker("rm", "-f", self.name, timeout=10)
+        except Exception:
+            return
 
     async def close(self):
+        # A container that never started has nothing to confirm.
+        if not self.started:
+            return
         if self.commands:
             try:
                 await docker(

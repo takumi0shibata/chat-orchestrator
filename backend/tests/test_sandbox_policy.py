@@ -4,7 +4,7 @@ import pytest
 
 from app.attachments import file_snapshot
 from app.config import Folder, Settings, Skill
-from app.sandbox import Sandbox, command_time_limit
+from app.sandbox import Sandbox, SandboxUnavailable, command_time_limit
 
 
 def test_timeout_bounds():
@@ -47,6 +47,7 @@ def test_skill_mounts_are_read_only_and_network_remains_disabled(tmp_path):
 def test_close_forces_removal_when_graceful_stop_fails(tmp_path, monkeypatch, grace_error):
     sandbox = Sandbox(Settings(_env_file=None), Folder(id="w", label="w", path=tmp_path),
                       "test", [], [], tmp_path / "input")
+    sandbox.started = True
     sandbox.commands.add("/tmp/test-command")
     calls = []
 
@@ -64,6 +65,7 @@ def test_close_forces_removal_when_graceful_stop_fails(tmp_path, monkeypatch, gr
 def test_close_reports_unconfirmed_container_removal(tmp_path, monkeypatch):
     sandbox = Sandbox(Settings(_env_file=None), Folder(id="w", label="w", path=tmp_path),
                       "test", [], [], tmp_path / "input")
+    sandbox.started = True
 
     async def fake_docker(*args, **kwargs):
         raise RuntimeError("Docker unavailable")
@@ -71,3 +73,69 @@ def test_close_reports_unconfirmed_container_removal(tmp_path, monkeypatch):
     monkeypatch.setattr("app.sandbox.docker", fake_docker)
     with pytest.raises(RuntimeError, match="Docker unavailable"):
         asyncio.run(sandbox.close())
+
+
+def test_close_before_start_does_not_touch_docker(tmp_path, monkeypatch):
+    sandbox = Sandbox(Settings(_env_file=None), Folder(id="w", label="w", path=tmp_path),
+                      "test", [], [], tmp_path / "input")
+    calls = []
+
+    async def fake_docker(*args, **kwargs):
+        calls.append(args)
+
+    monkeypatch.setattr("app.sandbox.docker", fake_docker)
+    asyncio.run(sandbox.close())
+    assert calls == []
+    assert sandbox.started is False
+
+
+def _sandbox(tmp_path):
+    return Sandbox(
+        Settings(_env_file=None),
+        Folder(id="w", label="w", path=tmp_path),
+        "test",
+        [],
+        [],
+        tmp_path / "input",
+    )
+
+
+@pytest.mark.parametrize(
+    "failure, match",
+    [
+        (lambda: FileNotFoundError(2, "No such file or directory"), "not installed or not on PATH"),
+        (
+            lambda: RuntimeError(
+                "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. "
+                "Is the docker daemon running?"
+            ),
+            "daemon is not running",
+        ),
+        (
+            lambda: RuntimeError(
+                "error during connect: this error may indicate that the docker daemon is not running"
+            ),
+            "daemon is not running",
+        ),
+        (
+            lambda: RuntimeError("Unable to find image 'missing:latest'"),
+            r"could not be started.*missing:latest",
+        ),
+    ],
+)
+def test_start_failure_stays_unstarted_and_explains_the_cause(tmp_path, monkeypatch, failure, match):
+    sandbox = _sandbox(tmp_path)
+    calls = []
+
+    async def fake_docker(*args, **kwargs):
+        calls.append(args[0])
+        raise failure()
+
+    monkeypatch.setattr("app.sandbox.docker", fake_docker)
+    with pytest.raises(SandboxUnavailable, match=match):
+        asyncio.run(sandbox.start())
+    assert sandbox.started is False
+    assert calls == ["run", "rm"]
+    calls.clear()
+    asyncio.run(sandbox.close())
+    assert calls == []

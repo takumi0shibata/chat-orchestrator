@@ -11,7 +11,7 @@ import pytest
 from app.agent_runner import RunManager
 from app.config import Deployment, Folder, MCPServer, RuntimeConfig, Settings, Skill
 from app.patch_tool import apply_operation
-from app.sandbox import CommandTimeoutError
+from app.sandbox import CommandTimeoutError, Sandbox
 from app.schemas import Approval, RunCreate
 from app.storage import Store
 
@@ -828,6 +828,134 @@ def test_cleanup_failure_blocks_workspace_then_recovers(tmp_path, monkeypatch):
         await recovered.recover()
         assert not store.needs_cleanup(run["id"])
         assert not recovered.poisoned_workspaces
+
+    asyncio.run(scenario())
+
+
+def _errors(store, rid):
+    return [e["data"]["message"] for e in store.events(rid) if e["type"] == "error"]
+
+
+def _labels(store, rid):
+    return [e["data"]["label"] for e in store.events(rid) if e["type"] == "status"]
+
+
+def test_missing_docker_does_not_block_the_workspace(tmp_path, monkeypatch):
+    async def scenario():
+        manager, store, _, request = setup(
+            tmp_path, [[message()]], sandbox=Sandbox, checkpoints=False
+        )
+
+        async def missing(*args, **kwargs):
+            raise FileNotFoundError(2, "No such file or directory")
+
+        monkeypatch.setattr("app.sandbox.docker", missing)
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        errors = _errors(store, run["id"])
+        assert store.run(run["id"])["status"] == "failed"
+        assert any("not installed or not on PATH" in message for message in errors)
+        assert not any("No such file or directory" in message for message in errors)
+        assert not any("Could not confirm sandbox shutdown" in message for message in errors)
+        assert _labels(store, run["id"])[-1].startswith("Docker is not installed")
+        assert not store.needs_cleanup(run["id"])
+        assert not manager.poisoned_workspaces
+
+        retry = manager.start(request)
+        await manager.tasks[retry["id"]]
+        assert store.run(retry["id"])["status"] == "failed"
+        assert any("not installed or not on PATH" in message for message in _errors(store, retry["id"]))
+        assert not manager.poisoned_workspaces
+
+    asyncio.run(scenario())
+
+
+def test_docker_daemon_down_does_not_block_the_workspace(tmp_path, monkeypatch):
+    async def scenario():
+        manager, store, _, request = setup(
+            tmp_path, [[message()]], sandbox=Sandbox, checkpoints=False
+        )
+
+        async def daemon_down(*args, **kwargs):
+            raise RuntimeError(
+                "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. "
+                "Is the docker daemon running?"
+            )
+
+        monkeypatch.setattr("app.sandbox.docker", daemon_down)
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        errors = _errors(store, run["id"])
+        assert store.run(run["id"])["status"] == "failed"
+        assert any("daemon is not running" in message for message in errors)
+        assert not any("Could not confirm sandbox shutdown" in message for message in errors)
+        assert "daemon is not running" in _labels(store, run["id"])[-1]
+        assert not store.needs_cleanup(run["id"])
+        assert not manager.poisoned_workspaces
+
+        retry = manager.start(request)
+        await manager.tasks[retry["id"]]
+        assert any("daemon is not running" in message for message in _errors(store, retry["id"]))
+        assert not manager.poisoned_workspaces
+
+    asyncio.run(scenario())
+
+
+def test_run_succeeds_after_docker_becomes_available(tmp_path, monkeypatch):
+    async def scenario():
+        manager, store, _, request = setup(
+            tmp_path, [[message()]], sandbox=Sandbox, checkpoints=False
+        )
+        state = {"available": False}
+        calls = []
+
+        async def docker(*args, **kwargs):
+            calls.append(args[0])
+            if not state["available"]:
+                raise FileNotFoundError(2, "No such file or directory")
+            return ""
+
+        monkeypatch.setattr("app.sandbox.docker", docker)
+        failed = manager.start(request)
+        await manager.tasks[failed["id"]]
+        assert store.run(failed["id"])["status"] == "failed"
+        assert any("not installed" in message for message in _errors(store, failed["id"]))
+        assert not manager.poisoned_workspaces
+
+        state["available"] = True
+        recovered = manager.start(request)
+        await manager.tasks[recovered["id"]]
+        assert store.run(recovered["id"])["status"] == "completed"
+        assert calls.count("run") >= 1
+        assert not manager.poisoned_workspaces
+        assert not store.needs_cleanup(recovered["id"])
+
+    asyncio.run(scenario())
+
+
+def test_started_container_cleanup_failure_still_blocks(tmp_path, monkeypatch):
+    async def scenario():
+        manager, store, _, request = setup(
+            tmp_path, [[message()]], sandbox=Sandbox, checkpoints=False
+        )
+
+        async def docker(*args, **kwargs):
+            if args[0] == "rm":
+                raise RuntimeError("daemon disconnected")
+            return ""
+
+        monkeypatch.setattr("app.sandbox.docker", docker)
+        run = manager.start(request)
+        await manager.tasks[run["id"]]
+        assert store.run(run["id"])["status"] == "failed"
+        assert store.needs_cleanup(run["id"])
+        assert any(
+            "Could not confirm sandbox shutdown" in message
+            for message in _errors(store, run["id"])
+        )
+        assert manager.poisoned_workspaces
+        with pytest.raises(ValueError, match="blocked"):
+            manager.start(request)
 
     asyncio.run(scenario())
 
