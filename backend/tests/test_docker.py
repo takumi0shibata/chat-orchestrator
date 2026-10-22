@@ -494,3 +494,49 @@ def test_view_image_runs_inside_sandbox(tmp_path):
             await sandbox.close()
 
     asyncio.run(scenario())
+
+
+def test_real_created_container_is_removed_when_start_ack_is_cancelled(tmp_path, monkeypatch):
+    from app import sandbox as module
+    from test_agent import setup, message
+
+    async def scenario():
+        manager, store, _, request = setup(tmp_path, [[message()]], sandbox=Sandbox, checkpoints=False)
+        original = module.docker
+        entered = asyncio.Event()
+        name = None
+        async def delayed_ack(*args, **kwargs):
+            nonlocal name
+            if args[0] == 'run':
+                name = args[args.index('--name') + 1]
+                result = await original(*args, **kwargs)
+                entered.set()
+                # Container exists on the daemon; client acknowledgement has not returned.
+                await asyncio.Future()
+                return result
+            return await original(*args, **kwargs)
+        monkeypatch.setattr(module, 'docker', delayed_ack)
+        run = manager.start(request)
+        try:
+            await asyncio.wait_for(entered.wait(), 30)
+            before = await original('inspect', '--format', '{{.State.Running}}', name)
+            assert before == 'true'
+            await manager.stop(run['id'])
+            try:
+                after = await original('inspect', '--format', '{{.State.Running}}', name)
+                exists = True
+            except RuntimeError as error:
+                if 'no such' not in str(error).lower():
+                    raise
+                after, exists = 'removed', False
+            result = dict(run_id=run['id'],container=name,run_status=store.run(run['id'])['status'],container_before_stop=before,container_after_stop=after,container_exists_after_stop=exists,needs_cleanup=store.needs_cleanup(run['id']))
+            assert not exists, f'Stopped run left real Docker container running: {result}'
+        finally:
+            if name:
+                try:
+                    await original('rm','-f',name)
+                except RuntimeError as error:
+                    if 'no such' not in str(error).lower():
+                        raise
+            await manager.shutdown()
+    asyncio.run(scenario())

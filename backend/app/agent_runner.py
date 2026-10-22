@@ -19,7 +19,7 @@ from app.chatgpt_auth import ChatGPTAuth
 from app.chatgpt_client import ChatGPTClient, compacted_context, completed_response, workspace_tools
 from app.provider_routes import ProviderRoutes
 from app.project_instructions import load_project_instructions
-from app.sandbox import CommandTimeoutError, Sandbox, command_time_limit, docker
+from app.sandbox import CommandTimeoutError, Sandbox, SandboxStartError, command_time_limit, docker
 from app.storage import TERMINAL, now
 
 log = logging.getLogger(__name__)
@@ -905,10 +905,11 @@ class RunManager:
                     "failed", "An operation timed out. Modified files remain.",
                 )
         except Exception as error:
-            self.store.event(rid, "error", dict(message=self.redact(str(error))[:4000]))
+            message = self.redact(str(error))[:4000]
+            self.store.event(rid, "error", dict(message=message))
             final_status, final_label = (
                 "failed",
-                "Run failed. Check the activity log.",
+                message if isinstance(error, SandboxStartError) else "Run failed. Check the activity log.",
             )
         finally:
             # Stop requests must wait for cleanup, including the final checkpoint.
