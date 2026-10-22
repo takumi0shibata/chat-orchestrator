@@ -124,14 +124,14 @@ it("drafts audit decisions into the project's chat with the audit Skill and star
   fireEvent.click(screen.getByRole("button", { name: "READMEを直す" }));
   fireEvent.click(await screen.findByRole("button", { name: /Open chat/ }));
   const draft = await screen.findByRole("textbox", { name: "Message" });
-  expect(draft).toHaveValue(`途中の依頼\n\nF-001「README と Makefile の不一致」の判断:「READMEを直す」で進めます。findings.md の decision と status を更新してください。修正はまだ行わないでください。`);
+  expect(draft).toHaveValue(`途中の依頼\n\nDecision for F-001 ("README と Makefile の不一致"): proceed with "READMEを直す". Update decision and status in findings.md. Do not make fixes yet.`);
   expect(screen.getByText("Project Audit")).toBeInTheDocument();
   expect(fetch.mock.calls.some(([url, init]) => String(url).startsWith("/api/runs") && init?.method === "POST")).toBe(false);
 
   fireEvent.click(screen.getByRole("button", { name: "Audit Research" }));
   fireEvent.click(await screen.findByRole("button", { name: "Run audit" }));
   await waitFor(() => expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue(
-    "Charterに沿ってこのProjectを監査してください。監査中は .chat-orchestrator/audit/ 以外のファイルを変更しないでください。",
+    "Audit this project according to its charter. During the audit, do not modify files outside .chat-orchestrator/audit/.",
   ));
   expect(fetch.mock.calls.filter(([url, init]) => url === "/api/conversations" && init?.method === "POST")).toHaveLength(1);
   expect(screen.getByText("Project Audit")).toBeInTheDocument();
@@ -170,8 +170,8 @@ it.each([false, true])("shows Azure connection labels and filters a bound chat: 
   expect(options).toEqual(bound
     ? ["GPT-6 Astra · 既存Azure", "GPT-5.6 Luna · 既存Azure"]
     : ["GPT-6 Astra · 既存Azure", "GPT-6 Sol · 新リージョン", "GPT-6 Luna · 新リージョン", "More models1", "GPT-5.6 Luna · 既存Azure"]);
-  if (bound) expect(screen.getByText("別接続先のモデルは新規チャットで選択してください。")).toBeInTheDocument();
-  else expect(screen.queryByText("別接続先のモデルは新規チャットで選択してください。")).not.toBeInTheDocument();
+  if (bound) expect(screen.getByText("Start a new chat to use a model from a different connection.")).toBeInTheDocument();
+  else expect(screen.queryByText("Start a new chat to use a model from a different connection.")).not.toBeInTheDocument();
   fireEvent.keyDown(screen.getByRole("listbox", { name: "Model" }), { key: "Escape" });
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
   fireEvent.click(screen.getByRole("button", { name: "General" }));

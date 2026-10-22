@@ -48,7 +48,7 @@ class ProviderRoutes:
         self.allow_unconfigured = allow_unconfigured
         self.openai = Connection("openai", "OpenAI", None, settings.openai_api_key)
         self.azure = {}
-        entries = [("default", "既存Azure", settings.azure_openai_endpoint,
+        entries = [("default", "Default Azure", settings.azure_openai_endpoint,
                     settings.azure_openai_api_key, "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY")]
         entries += [
             (c.id, c.label, settings.credential_env(c.endpoint_env),

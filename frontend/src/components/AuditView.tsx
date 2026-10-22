@@ -45,17 +45,17 @@ const checks: Record<EvidenceCheck, [tone: "ok" | "warn" | "bad", label: string]
   invalid_quote: ["bad", "Quote too long"],
 };
 const dateTime = (value: string) => new Date(value).toLocaleString("en-US", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
-const label = (finding: AuditFinding) => `${finding.id}「${finding.title}」`;
+const label = (finding: AuditFinding) => `${finding.id} ("${finding.title}")`;
 
 export const auditPrompts = {
-  charter: "このProjectの監査Charterを作成してください。まずProjectを棚卸しして草案をチャットで提示し、私が合意するまでファイルは保存しないでください。",
-  audit: "Charterに沿ってこのProjectを監査してください。監査中は .chat-orchestrator/audit/ 以外のファイルを変更しないでください。",
-  recheck: "未解決（open・decided）の監査指摘を再検証し、findings.md とレポートを更新してください。修正は行わないでください。",
-  option: (f: AuditFinding, option: string) => `${label(f)}の判断:「${option}」で進めます。findings.md の decision と status を更新してください。修正はまだ行わないでください。`,
-  custom: (f: AuditFinding) => `${label(f)}の判断: `,
-  intended: (f: AuditFinding) => `${label(f)}は意図どおりです。findings.md と Charter の「既知の例外・判断」に記録してください。理由: `,
-  dismissed: (f: AuditFinding) => `${label(f)}は誤検知です。findings.md に記録してください。理由: `,
-  fix: (f: AuditFinding) => `${label(f)}を判断どおりに修正し、再検証して findings.md を更新してください。`,
+  charter: "Create an audit charter for this project. First inspect the project and present a draft in chat. Do not save any files until I approve it.",
+  audit: "Audit this project according to its charter. During the audit, do not modify files outside .chat-orchestrator/audit/.",
+  recheck: "Recheck unresolved audit findings (open or decided), and update findings.md and the report. Do not make fixes.",
+  option: (f: AuditFinding, option: string) => `Decision for ${label(f)}: proceed with "${option}". Update decision and status in findings.md. Do not make fixes yet.`,
+  custom: (f: AuditFinding) => `Decision for ${label(f)}: `,
+  intended: (f: AuditFinding) => `${label(f)} is intended behavior. Record this in findings.md and the charter's known exceptions and decisions section. Reason: `,
+  dismissed: (f: AuditFinding) => `${label(f)} is a false positive. Record this in findings.md. Reason: `,
+  fix: (f: AuditFinding) => `Fix ${label(f)} according to my decision, verify it again, and update findings.md.`,
 };
 
 function evidenceSummary(finding: AuditFinding) {

@@ -148,7 +148,7 @@ def test_chat_title_compaction_clients_and_binding(tmp_path, monkeypatch):
         next_run = manager.start(request.model_copy(update={"model": "new-astra"}))
         await manager.tasks[next_run["id"]]
         assert new.calls[-1]["model"] == "astra-actual"
-        with pytest.raises(ValueError, match="新規チャット"):
+        with pytest.raises(ValueError, match="Create a new chat"):
             manager.start(request.model_copy(update={"model": "shared-name"}))
         assert len(created) == 2
         assert manager.redact("new-private-key old-private-key") == "[redacted] [redacted]"
@@ -170,10 +170,10 @@ def test_endpoint_changes_block_history_but_key_rotation_does_not(tmp_path, monk
     manager.validate(request)
     monkeypatch.setenv("TEST_AZURE_ENDPOINT", "https://changed.openai.azure.com")
     manager = RunManager(Settings(_env_file=None), config, store, client_factory=lambda *_: Client([]))
-    with pytest.raises(ValueError, match="新規チャット"):
+    with pytest.raises(ValueError, match="Create a new chat"):
         manager.validate(request)
     # The storage transaction also rejects a mismatched binding independently.
-    with pytest.raises(ValueError, match="新規チャット"):
+    with pytest.raises(ValueError, match="Create a new chat"):
         store.create_run(request.model_dump(), azure_binding=("new", "https://changed.openai.azure.com/openai/v1"))
     assert len(store.runs(cid)) == 1
 
@@ -196,7 +196,7 @@ def test_legacy_database_migration(tmp_path, monkeypatch, legacy_available):
     manager = RunManager(settings, config, migrated)
     assert migrated.conversation(cid)["context"] == history
     request = RunCreate(conversation_id=cid, provider="azure_openai", model="new-sol", input="続き")
-    with pytest.raises(ValueError, match="新規チャット"):
+    with pytest.raises(ValueError, match="Create a new chat"):
         manager.validate(request)
     if legacy_available:
         assert migrated.conversation(cid)["azure_endpoint"] == "https://old.openai.azure.com/openai/v1"
@@ -206,7 +206,7 @@ def test_legacy_database_migration(tmp_path, monkeypatch, legacy_available):
         manager.validate(request.model_copy(update={"model": "shared-name"}))
     else:
         assert migrated.conversation(cid)["azure_endpoint"] is None
-        with pytest.raises(ValueError, match="新規チャット"):
+        with pytest.raises(ValueError, match="Create a new chat"):
             manager.validate(request.model_copy(update={"model": "shared-name"}))
 
 
@@ -226,7 +226,7 @@ def test_interrupted_legacy_run_is_bound_before_recovery(tmp_path, monkeypatch):
     assert migrated.conversation(cid)["azure_endpoint"] == "https://old.openai.azure.com/openai/v1"
     with pytest.raises(ValueError, match="change provider"):
         manager.validate(request.model_copy(update={"provider": "openai", "model": "gpt-6-sol"}))
-    with pytest.raises(ValueError, match="新規チャット"):
+    with pytest.raises(ValueError, match="Create a new chat"):
         manager.validate(request.model_copy(update={"model": "new-sol"}))
 
 

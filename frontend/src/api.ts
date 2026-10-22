@@ -34,7 +34,7 @@ export async function events(
     signal,
   });
   if (!response.ok || !response.body)
-    throw new Error("実行履歴に接続できません");
+    throw new Error("Could not connect to the run history.");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";

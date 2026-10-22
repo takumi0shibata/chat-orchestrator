@@ -11,6 +11,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Reworked the English README with setup, authentication, everyday workflows, safety limits, and troubleshooting. Standardized application-generated labels, messages, and audit drafts in English while preserving user content and existing records.
+
 ## [0.3.1] - 2026-10-22
 
 ### Fixed

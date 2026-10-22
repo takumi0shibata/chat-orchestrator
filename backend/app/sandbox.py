@@ -167,7 +167,7 @@ class Sandbox:
                     await emit(channel, piece)
                 if len(text) > remaining and channel not in truncated:
                     truncated.add(channel)
-                    await emit(channel, "\n[出力を上限で省略しました]\n")
+                    await emit(channel, "\n[Output truncated at the configured limit]\n")
             tail = decoder.decode(b"", final=True)
             if tail and len(captured[channel]) < self.settings.max_output_chars:
                 captured[channel] += tail

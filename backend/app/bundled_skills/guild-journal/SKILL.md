@@ -1,6 +1,6 @@
 ---
 name: guild-journal
-description: OrchestratorのGuild Boardにプロジェクトを登録し、現在地・次の一手・TODO・作業日誌をMarkdownで作成・更新する。ギルドへの登録、ギルド記録の更新、既存のギルドへの作業結果や会議の記録を依頼されたときに使う。一般のTODO相談や、記録を依頼されていない通常の作業には適用しない。
+description: Create and update project overviews, next actions, tasks, and work journals as Markdown for the Orchestrator Guild Board. Use when asked to register a project or record project work or meeting results, not for general advice or unrequested record keeping.
 ---
 
 # ギルド記録

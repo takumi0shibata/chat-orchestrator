@@ -20,18 +20,18 @@ export function nextGuildPeriodDelay(date = new Date()): number {
 export const guildDay = {
   morning: {
     label: "Morning", activity: "Getting ready for the day",
-    comments: ["おはようございます。今日も一つずつ。", "まずは今日の依頼を、のぞいてみましょう。", "出発前に、お茶を一杯いかがですか？"],
+    comments: ["Good morning. One step at a time.", "Let's take a look at today's quests.", "How about a cup of tea before setting out?"],
   },
   day: {
     label: "Daytime", activity: "Delivering the day's quests",
-    comments: ["こんにちは。どの依頼から始めましょう？", "少し進んだら、ひと息つくのも大事です。", "新しい記録があれば、Syncで届けてください。"],
+    comments: ["Hello! Which quest shall we start with?", "Remember to take a break when you've made some progress.", "New records to share? Bring them in with Sync."],
   },
   evening: {
     label: "Evening", activity: "Taking the evening rounds",
-    comments: ["夕暮れですね。ギルドに灯りをともしました。", "今日の気づき、日誌に残しておきませんか？", "残った依頼は、明日の道しるべにもなります。"],
+    comments: ["It's dusk. The guild lights are on.", "Shall we record today's discoveries in the journal?", "Unfinished quests can guide tomorrow's journey."],
   },
   night: {
     label: "Night", activity: "Tea and a little rest",
-    comments: ["夜のギルドは静かですね。温かいお茶をどうぞ。", "続きは明日でも。ここで少し休みましょう。", "猫もすっかり夢の中です。おやすみなさい。"],
+    comments: ["The guild is quiet tonight. Here's some warm tea.", "We can continue tomorrow. Rest here for a while.", "Even the cat is dreaming. Good night."],
   },
 } satisfies Record<GuildPeriod, { label: string; activity: string; comments: string[] }>;

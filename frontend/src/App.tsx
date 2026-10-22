@@ -3022,7 +3022,7 @@ export function App() {
                 )}
               </div>
             </div>
-            {hasOtherConnections && <p className="composer-note">別接続先のモデルは新規チャットで選択してください。</p>}
+            {hasOtherConnections && <p className="composer-note">Start a new chat to use a model from a different connection.</p>}
             <p className="composer-note">Sandboxed: network access is disabled; only files in the mounted workspace can be modified.</p>
           </form>
         )}

@@ -256,7 +256,7 @@ class Store:
         with self.connect() as c:
             c.execute(
                 "INSERT INTO conversations(id,workspace_id,title,created_at,updated_at,title_status) VALUES(?,?,?,?,?,?)",
-                (cid, workspace_id, "新しい作業", now(), now(), "pending"),
+                (cid, workspace_id, "New chat", now(), now(), "pending"),
             )
         self.conversation_updates.publish()
         return self.conversation(cid)
@@ -362,7 +362,7 @@ class Store:
                     (connection_id, endpoint, request["conversation_id"], connection_id, endpoint),
                 )
                 if not updated.rowcount:
-                    raise ValueError("Azure接続先が異なります。新規チャットを作成してください。")
+                    raise ValueError("This chat uses a different Azure connection. Create a new chat.")
             c.execute(
                 "INSERT INTO runs VALUES(?,?,?,?,?,?)",
                 (
@@ -380,7 +380,7 @@ class Store:
                 (now(), request["conversation_id"]),
             )
         self.event(
-            rid, "status", {"status": "preparing", "label": "実行を準備しています"}
+            rid, "status", {"status": "preparing", "label": "Preparing run"}
         )
         self.conversation_updates.publish()
         return self.run(rid)

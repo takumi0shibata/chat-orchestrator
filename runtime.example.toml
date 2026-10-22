@@ -7,7 +7,7 @@ project_doc_fallback_filenames = [] # e.g. ["TEAM_GUIDE.md", ".agents.md"]
 
 [[workspaces]]
 id = "research"
-label = "研究フォルダ"
+label = "Research project"
 path = "/absolute/path/to/research"
 
 # Registered Skills are available automatically on every turn, based on name/description.
@@ -17,13 +17,13 @@ path = "/absolute/path/to/research"
 # A registered Skill with the same id or manifest name replaces the bundled version.
 # [[skills]]
 # id = "review"
-# label = "論文レビュー"
+# label = "Paper review"
 # path = "/absolute/path/to/standard-skill" # contains SKILL.md
 
 # Pre-downloaded NLP models and datasets; selected per run, mounted read-only.
 # [[resources]]
 # id = "models"
-# label = "ローカルNLPモデル"
+# label = "Local NLP models"
 # path = "/absolute/path/to/models"
 
 # Azure's deployed name is distinct from the underlying model ID.
@@ -42,7 +42,7 @@ path = "/absolute/path/to/research"
 # The connection ID "default" is reserved for the legacy environment settings.
 # [[azure_connections]]
 # id = "gpt6"
-# label = "GPT-6用Azure"
+# label = "Azure GPT-6"
 # endpoint_env = "AZURE_GPT6_ENDPOINT"
 # api_key_env = "AZURE_GPT6_API_KEY"
 
@@ -77,7 +77,7 @@ path = "/absolute/path/to/research"
 # Remote MCP must be reachable by the provider (localhost is not reachable).
 # [[mcp_servers]]
 # id = "research_api"
-# label = "研究API"
+# label = "Research API"
 # url = "https://example.org/mcp"
 # allowed_tools = ["search_papers"]
 # authorization_env = "RESEARCH_MCP_TOKEN" # export in backend environment
