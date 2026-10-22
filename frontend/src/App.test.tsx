@@ -1498,6 +1498,31 @@ it("keeps old messages and their DOM across second and third sends, subscribing 
   }
 });
 
+it("keeps the newly selected chat and its draft when a previous chat deletion finishes", async () => {
+  const other = { ...uxConversation, id: "other", title: "Other chat" };
+  let deleted = false;
+  let finishDelete!: (response: Response) => void;
+  const pending = new Promise<Response>((resolve) => { finishDelete = resolve; });
+  const fetchMock = mockUxApi((url, options) => {
+    if (url === "/api/conversations") return new Response(JSON.stringify(deleted ? [other] : [uxConversation, other]));
+    if (url === "/api/conversations/other") return new Response(JSON.stringify({ ...other, runs: [] }));
+    if (url === "/api/conversations/c" && options?.method === "DELETE") return pending;
+  });
+  render(<App />);
+  await screen.findByRole("heading", { name: "UX chat" });
+  fireEvent.click(screen.getByRole("button", { name: "Delete UX chat" }));
+  await waitFor(() => expect(fetchMock.mock.calls.some(([url, options]) => url === "/api/conversations/c" && options?.method === "DELETE")).toBe(true));
+  fireEvent.click(screen.getByRole("button", { name: "Other chat" }));
+  await screen.findByRole("heading", { name: "Other chat" });
+  fireEvent.change(screen.getByRole("textbox", { name: "Message" }), { target: { value: "Keep this new draft" } });
+  deleted = true;
+  await act(async () => finishDelete(new Response(JSON.stringify({ ok: true }))));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "UX chat" })).not.toBeInTheDocument());
+  expect(screen.getByRole("heading", { name: "Other chat" })).toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("Keep this new draft");
+  expect(localStorage.getItem("workspace-conversation")).toBe("other");
+});
+
 it("retains the draft and attachments when sending fails", async () => {
   mockUxApi((url, options) => {
     if (url === "/api/attachments") return new Response(JSON.stringify([{ id: "a", name: "input.txt", path: "input.txt", size: 1 }]));

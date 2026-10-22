@@ -2421,7 +2421,7 @@ export function App() {
         return next;
       });
       await refreshConversations();
-      if (cid === id) setCid("");
+      setCid((current) => current === id ? "" : current);
     } catch (e) {
       setError(String(e));
     }
