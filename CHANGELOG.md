@@ -11,6 +11,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Docker availability failures before container creation allow retry without restarting the backend. Startup cancellation, timeouts, and uncertain container removal still require confirmed cleanup and retain workspace protection when cleanup fails.
+
 ## [0.3.1] - 2026-10-22
 
 ### Fixed

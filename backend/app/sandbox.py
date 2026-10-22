@@ -16,6 +16,10 @@ class CommandTimeoutError(TimeoutError):
         super().__init__(f"Command time limit reached ({timeout_seconds:g}s).")
 
 
+class SandboxStartError(RuntimeError):
+    """Startup failed; a creation attempt may still require confirmed cleanup."""
+
+
 async def docker(*args, timeout=30):
     process = await asyncio.create_subprocess_exec(
         "docker", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -50,6 +54,7 @@ class Sandbox:
         self.workspace = workspace
         self.skills, self.resources, self.input_dir = skills, resources, input_dir
         self.commands = set()
+        self._cleanup_required = False
 
     def arguments(self):
         s = self.settings
@@ -121,9 +126,34 @@ class Sandbox:
 
     async def start(self):
         self.input_dir.mkdir(parents=True, exist_ok=True)
-        await docker(*self.arguments(), timeout=60)
+        # Availability failures here cannot create this run's container. In
+        # particular, a stopped daemon must not poison an untouched workspace.
+        try:
+            await docker("info", "--format", "{{.ServerVersion}}", timeout=10)
+        except FileNotFoundError as error:
+            raise SandboxStartError(
+                "Docker is not installed or is not on PATH. "
+                "Install Docker or add it to PATH, then send the message again."
+            ) from error
+        except (RuntimeError, TimeoutError) as error:
+            raise SandboxStartError(
+                "Docker is not available. Check that Docker is running and accessible, "
+                "then send the message again. " + str(error).strip()[:500]
+            ) from error
+        # Set this before awaiting run: cancellation or a lost reply can happen
+        # after the daemon has created a container but before we receive its ID.
+        self._cleanup_required = True
+        try:
+            await docker(*self.arguments(), timeout=60)
+        except (OSError, RuntimeError, TimeoutError) as error:
+            raise SandboxStartError(
+                "The sandbox could not be started. Check Docker and try again. "
+                + str(error).strip()[:500]
+            ) from error
 
     async def close(self):
+        if not self._cleanup_required:
+            return
         if self.commands:
             try:
                 await docker(
@@ -136,8 +166,9 @@ class Sandbox:
         try:
             await docker("rm", "-f", self.name)
         except RuntimeError as e:
-            if "No such container" not in str(e):
+            if "no such container" not in str(e).lower():
                 raise
+        self._cleanup_required = False
 
     async def execute(self, command, emit, timeout=None):
         limit = command_time_limit(self.settings, timeout)
