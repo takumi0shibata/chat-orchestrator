@@ -269,7 +269,7 @@ def test_search_and_pin_api(app_client):
     assert result.json()["pinned"] is True
     assert result.json()["updated_at"] == c["updated_at"]
     assert "context" not in result.json()
-    assert http.get("/api/conversations", params={"q": "新しい"}).json()[0]["id"] == c["id"]
+    assert http.get("/api/conversations", params={"q": "New chat"}).json()[0]["id"] == c["id"]
     assert http.get("/api/conversations?q=missing").json() == []
     assert http.patch("/api/conversations/missing", json={"pinned": True}).status_code == 404
     assert http.patch(f"/api/conversations/{c['id']}", json={"unknown": True}).status_code == 422

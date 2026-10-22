@@ -1,6 +1,6 @@
 ---
 name: project-audit
-description: Projectの不整合・矛盾・根拠のない記述（ハルシネーション）を監査し、監査の憲章（Charter）・指摘台帳・監査レポートを `.chat-orchestrator/audit/` に記録する。Projectの監査、Charterの作成・更新、監査指摘への判断の記録、判断済み指摘の修正・再検証を依頼されたときに使う。監査を依頼されていない通常のコードレビューや作業には適用しない。
+description: Audit project inconsistencies, contradictions, and unsupported claims (hallucinations), and record the charter, findings, and reports in .chat-orchestrator/audit/. Use when asked to audit a project, create or update its charter, record decisions on findings, or fix and recheck findings with an agreed decision. Do not use for ordinary code reviews or work that does not request an audit.
 ---
 
 # Project監査

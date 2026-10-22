@@ -1,266 +1,219 @@
 # Orchestrator
 
-OpenAI / Azure OpenAI **Responses API** とローカルDockerサンドボックスで動く、個人向けのファイル作業チャットです。React + FastAPI + SQLite。
+A local browser app for working with files through an AI agent. Connect a project folder, describe a task, and follow the agent's commands and results in a persistent chat. The backend uses FastAPI and SQLite, the interface uses React, and agent commands run in a Docker sandbox.
 
-モデルが作業フォルダを探索し、必要なファイルを読み、Shellで分析・編集・検証します。指定したフォルダはコンテナの `/workspace` と共有され、**編集は元ファイルに即時反映**されます。200ファイルを最初から全文抽出してモデルへ送る構成ではありません。
+Orchestrator supports Login with ChatGPT, OpenAI API keys, and configured Azure OpenAI deployments. Available models and tools depend on the selected connection.
 
-## 起動
+**The agent edits your original project files.** Docker shares the selected folder as `/workspace`; changes are visible on the host immediately. Checkpoints provide per-run diffs and Undo for supported files, but are not a replacement for backups or version control.
 
-前提: macOS / Linux、Python 3.11以上、Node 20以上、uv、起動済みDocker DesktopまたはDocker Engine。標準ではCPU 4コア・メモリ8 GiBをコンテナに割り当てます。Windowsネイティブは対象外です。
+## Requirements
 
-```bash
+- macOS or Linux. Native Windows is not supported.
+- Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), and Git on the host.
+- Node.js 20 or newer and npm.
+- Docker Desktop or Docker Engine, installed and running.
+- An eligible ChatGPT connection, an OpenAI API key, or an Azure OpenAI deployment with credentials.
+
+The sandbox runs CPU workloads. Its default limits are 4 CPUs and 8 GiB of memory; adjust these in `.env` to suit your Docker environment. The initial image build downloads a substantial set of document-processing and analysis tools.
+
+## Quick start
+
+### 1. Get the source and create configuration files
+
+```sh
+git clone https://github.com/takumi0shibata/chat-orchestrator.git
+cd chat-orchestrator
 cp .env.example .env
 cp runtime.example.toml runtime.toml
-# .env にAPIキー、runtime.toml に既存作業フォルダの絶対パスを設定
+```
+
+Edit `runtime.toml` and replace the example workspace with an **existing absolute directory**:
+
+```toml
+[[workspaces]]
+id = "project"
+label = "My project"
+path = "/absolute/path/to/your/project"
+```
+
+Use a folder containing files you want the agent to work on. Workspaces must not overlap. Keep this application's source, configuration, credentials, and state outside all registered workspaces. Do not use `~` or a relative path in place of an absolute directory.
+
+`.env` and `runtime.toml` are local configuration files and are excluded from Git. Never commit credentials or application data.
+
+### 2. Install dependencies and build the sandbox
+
+Run these commands from the repository root:
+
+```sh
 make setup-backend
 make setup-frontend
 make sandbox-build
 ```
 
-2つのターミナルで起動します。
+Confirm that Docker is accessible with `docker info` if the image build fails. Rebuild with `make sandbox-build` after changing the sandbox image definition.
 
-```bash
+### 3. Start the app
+
+Keep two terminals open, both in the repository root:
+
+```sh
+# Terminal 1
 make dev-backend
+```
+
+```sh
+# Terminal 2
 make dev-frontend
 ```
 
-[チャット](http://127.0.0.1:5173) / [API仕様](http://127.0.0.1:8000/docs)
+Open [the chat interface](http://127.0.0.1:5173). The backend's [interactive API documentation](http://127.0.0.1:8000/docs) is available on port 8000.
 
-フロントエンドは5173番ポート固定です。既に使用されている場合は起動エラーになります。先に起動したフロントエンドを終了してから再起動してください。別ポートはバックエンドのOrigin許可対象外です。
+Use one backend process on the host. Multiple workers and two processes sharing the same data directory are not supported. The frontend uses port 5173 and fails if that port is occupied; moving it to a different port does not update the backend's allowed origins. Restart the backend after changing configuration or credentials, after letting active runs finish.
 
-APIキーの代わりにChatGPTの利用枠を使う場合は、Settings → ChatGPT connection → Continue with ChatGPT でログインし、利用枠へのアクセスを許可してください。既存のOpenAI APIキー・Azure接続と併用できます。ChatGPT接続は公式のサーバー側compactionと、既存Dockerサンドボックスを使うShellに対応しています。[対応範囲・認証・検証結果](docs/chatgpt-login.md)を参照してください。
+### 4. Connect a provider
 
-バックエンドはホスト上の単一プロセスで起動してください。複数ワーカーは禁止です。同一データディレクトリを使う二重起動はロックで拒否します。通常起動ではreloadを使わず、実行中の再起動を避けます。設定変更後は再起動してください。
+Choose one of these paths:
 
-Docker Composeはイメージのビルド専用です (`docker compose --profile build build sandbox`)。バックエンドをDocker内で動かしたり、サンドボックスにDockerソケットを渡したりしません。
+| Connection | Setup |
+| --- | --- |
+| Login with ChatGPT | API keys may remain empty. In the app, open **Settings → General → ChatGPT connection → Continue with ChatGPT**. Complete sign-in and plan-access consent in the browser. Then choose **ChatGPT** under **+ → Provider** in a new chat. Eligibility depends on your account and workspace policies. |
+| OpenAI API | Set `OPENAI_API_KEY` in `.env`, restart the backend, and select OpenAI in a new chat. API requests are billed to that account. |
+| Azure OpenAI | Set `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_API_KEY` in `.env`, register your deployment in `runtime.toml`, and restart the backend. Only configured, available deployments appear in the selector. |
 
-## 使い方
-
-1. サイドバーから登録済み作業フォルダを選び「新しい作業」。
-2. モデル・推論の深さを選び、モデル／データ、Remote MCP、Web検索を必要に応じて有効化。登録済みSkillsは依頼に応じて自動利用されます。明示的に適用する場合は `@skill-name` の入力候補または＋メニューから選択します。
-3. ファイル名や完成形を自然言語で指示。添付ボタンのほか、中央のチャット領域へのドラッグ＆ドロップで複数ファイルを添付できます。
-4. 現在工程と実行履歴で、実行コマンド・出力・所要時間・終了コードを確認。
-5. ファイルパネルを更新して成果物を確認。Files のファイルやフォルダをチャット入力欄へドラッグすると、作業フォルダからの相対パスをカーソル位置へ挿入できます。回答内の `[Word版](sandbox:/workspace/reviews/結果.docx)` のような成果物リンクからも取得できます。リンクは会話のファイルAPIへ変換し、領域外参照やシンボリックリンクは同APIで拒否します。
-
-未送信の本文・添付・モデルへの直接添付指定は、アプリを開いている間だけ会話ごとに保持します。会話を切り替えて戻ると下書きが復元され、送信成功または会話削除時にその会話の下書きを消去します。ページの再読み込み・終了後は保持しません。
-
-成果物リンクは `file:///workspace/...`、`/workspace/...`、作業フォルダからの相対パスにも対応し、保存済み回答にも適用されます。ファイル名に空白を含む場合は `[結果](<sandbox:/workspace/my report.docx>)` のようにリンク先を `<...>` で囲むか、空白を `%20` にします。日本語・括弧を含むファイル名や、リンクラベル内のコード表記も使用できます。
-
-チャット本文のLaTeX数式は `$…$`・`\(…\)`（行内）、`$$…$$`・`\[…\]`（独立数式）で表示します。独立数式は複数行も扱えます。コード内は数式に変換せず、不正な数式はエラー表示、入力途中の数式は文字列として残します。通常のドル記号は `\$` と書けます。KaTeXのCSS・フォントをアプリに同梱しているため、表示に外部CDNは不要です。LaTeX文書全体のPDFコンパイルには対応しません。
-
-右上の端末アイコンから、チャットとFilesの下にホスト端末を開けます。左の履歴サイドバーの下には表示しません。上端をドラッグまたは矢印キーで高さを変え、＋で最大8つの独立した端末タブを開けます。各タブは作成時に選択されていた作業フォルダをカレントディレクトリとするホストOSのログインシェルです。パネルを閉じる、⌘Jで隠す、会話やProjectを切り替えるだけでは端末セッションを終了せず、同じページ内で再表示できます。Projectを切り替えると現在の端末workspaceとの不一致を警告し、「Open new terminal」で新しいProject用タブを追加できます。個別タブの×はその端末を終了します。ブラウザの再読み込み・終了、ページ離脱、バックエンド終了時は端末セッションも終了します。端末の入出力はアプリの会話履歴やSQLiteに保存しません（シェル自身の履歴設定は別です）。
-
-ブラウザを閉じてもAIの実行はバックエンドで続きます。同じ会話を開くとイベントを再取得します。「停止」はバックエンドの処理とコンテナを停止します。停止・失敗時も反映済みの変更は残り、自動ロールバックはしません。終了した実行の回答の下に変更ファイル一覧と差分を表示し、「Undo」でその実行前の状態へ戻せます（後述のチェックポイント）。同じ作業フォルダへの実行は順番待ちになり、別フォルダなら並行実行できます。別会話への切り替えは実行を停止しません。
-
-会話を削除しても元ファイルは削除されません。アプリ管理の添付も自動削除せず保持するため、不要になったものは停止中に `backend/data/agent/attachments/` から管理してください。
-
-## 設定
-
-サイドバーの「Guild Board」では、直下に `.chat-orchestrator/` があるProjectだけをまとめて閲覧できます。SyncでMarkdownの現在地・TODO・作業記録を取り込みます。掲示板自体はフォルダの自動生成や編集、モデル呼び出し、常時監視を行いません。[記録形式とSyncの仕様](docs/guild-board.md)を参照してください。
-
-ギルド用の標準Skill [guild-journal](backend/app/bundled_skills/guild-journal/SKILL.md)を同梱しており、`runtime.toml`への登録は不要です。対象Projectのチャットで「このプロジェクトをギルドに登録して」「今回の成果をギルドに記録して」と依頼すると、記録ファイルを作成・更新できます。`@guild-journal` または＋メニューの「Guild Journal」で明示指定もできます。記録後にGuild BoardのSyncを押してください。通常の作業だけで記録を作ったり、TODOの完了・期限を推測したりしない方針です。同梱Skillを追加したバージョンへの更新後は、バックエンドを再起動すると利用できます。
-
-サイドバーのProject名にカーソルを合わせると表示される盾のアイコンから、そのProjectの「Audit」を開けます。同梱Skill [project-audit](backend/app/bundled_skills/project-audit/SKILL.md)と協業して、READMEと実態のずれ、AIに書かせた実装計画（論文形式の仕様書）の根拠のない記述や存在しないAPI、コードの誤り、論文と結果の数値の不一致などを洗い出します。初回は監査の範囲と正のデータを決めるCharterを対話で作成します。記録は `.chat-orchestrator/audit/` のMarkdownに保存され、画面は根拠の引用が実際にファイルにあるかを機械的に照合して表示します。判断・修正の操作はチャット入力欄への下書きで、送信するまで何も変更しません。[使い方と記録形式](docs/project-audit.md)を参照してください。
-
-`runtime.toml` はGit管理外です。[設定例](runtime.example.toml)を参照してください。
-
-- `workspaces`: ID・表示名・絶対パス。相互に重なるディレクトリは禁止。APIキーやアプリ設定・状態を含むフォルダは登録しないでください。
-- `skills`: 追加で利用する標準 `SKILL.md` を含むフォルダ。同梱Skillと全登録Skillsのfront matterの `name` / `description` を毎回Responsesのlocal shellへ渡し、読み取り専用の `/skills/<id>` に配置します。モデルは依頼に関連するSkillsを判断し、必要な本文・参照ファイルだけを読んで適用します。同梱版と同じIDまたはmanifestの `name` を登録した場合は登録したSkillを優先します。
-- `resources`: 事前ダウンロードしたNLPモデルやデータ等。実行ごとに選択し、読み取り専用の `/resources/<id>` に配置します。
-- `azure_connections`: 接続先ID・表示名・Endpoint/APIキーの環境変数名を登録。実値は `.env` またはプロセス環境変数に保存します。
-- `azure_models`: `model` にモデルID、`deployment` にAzureのデプロイ名、`connection_id` に接続先IDを記載。任意の `id` はアプリの選択用IDで、省略時はデプロイ名を使います。選択用IDは全Azureモデルで一意にしてください。
-- `mcp_servers`: HTTPS URL、明示的な `allowed_tools`、任意の `authorization_env`。トークンはバックエンドの環境変数としてexportします。MCP実行はAPIの承認要求をチャットで許可／拒否します。
-- `project_doc_max_bytes`: ワークスペース直下から読み込むプロジェクト指示の最大バイト数。既定は32 KiBです。
-- `project_doc_fallback_filenames`: `AGENTS.override.md`、`AGENTS.md` がない場合に確認する代替ファイル名。パスではなくファイル名だけを指定します。
-
-各実行ではワークスペース直下の `AGENTS.override.md`、`AGENTS.md`、設定した代替名をこの順に確認し、最初の空でないファイルをモデルのプロジェクト指示として読み込みます。この探索順と既定上限は[Codexの公式仕様](https://developers.openai.com/codex/guides/agents-md)に合わせています。内容は実行ごとに読み直され、Activityに使用したファイル名が表示されます。サブフォルダ内の指示とホストの `~/.codex` は読み込みません。シンボリックリンクやUTF-8ではない指示ファイルは、安全のため実行エラーになります。
-
-Remote MCPはプロバイダ側から接続されるため、ローカルの `localhost` URLは利用できません。このリポジトリにMCPサーバーや業務API本体は含みません。モデルAPI・MCP・Web検索の通信と、ネットワーク無効のローカルサンドボックスは別経路です。
-
-ローカルShellではホスト型Skillsの `skill_reference` IDは使いません。同梱Skill以外のSkills本体はユーザーが別途用意します。旧skill.yaml / skill.py のローダーや互換機能はありません。
-
-Skillsの自動利用は標準動作で、ON/OFF設定はありません。`@skill-name` または＋メニューの選択は明示的な適用指定です。チップや選択を解除すると明示指定を外し、自動判断に戻ります。自動候補からの除外ではありません。モデルには、適用するSkill名と目的を日本語の進捗で短く伝え、本文を読んでから実行するよう指示します。明示指定と自動利用の方針は各実行・履歴圧縮に渡します。ユーザーの依頼とsandboxの制約がSkillの指示に優先し、Skillから未選択のモデル／データ、Web検索、Remote MCPが有効になることはありません。
-
-新規会話の標準モデルは `gpt-6.1-sol` です（Azureでは同モデルのデプロイがあればそれを選び、なければ一覧の先頭）。新規データベースでのタイトル生成の標準モデルは `gpt-6-luna` です。`gpt-6-sol`、`gpt-6-astra` と GPT-5.6 系も選べます。モデル選択ではAstra・Sol・Terra・Lunaの各ファミリーの最新モデルだけを表示し、それ以外は「More models」にまとめます。推論の深さはスライダーで選びます。推論の標準は `medium`。GPT-6 Sol/LunaとGPT-5.6 Sol/Terraは `none/low/medium/high/xhigh/max`、GPT-6.1 Sol・GPT-6 Astra・GPT-5.6 Lunaは `low/medium/high/xhigh/max` に対応します。既存会話のモデル履歴と保存済みタイトル生成設定は変更しません。
-
-Azure OpenAIでは `runtime.toml` の `azure_models` に登録し、接続先のEndpointとAPIキーが設定されたデプロイだけが会話・タイトル生成の選択肢に表示されます。GPT-6 Astra・Sol・Lunaは対応済みです。新しいAzureリソースを使う場合は、以下のように接続先を登録して各デプロイに紐づけます。
+For the default Azure connection, a deployment entry looks like this:
 
 ```toml
-[[azure_connections]]
-id = "gpt6"
-label = "GPT-6用Azure"
-endpoint_env = "AZURE_GPT6_ENDPOINT"
-api_key_env = "AZURE_GPT6_API_KEY"
-
 [[azure_models]]
-id = "gpt6-astra"
-model = "gpt-6-astra"
-deployment = "実際のAstraデプロイ名"
-connection_id = "gpt6"
-
-[[azure_models]]
-id = "gpt6-sol"
-model = "gpt-6-sol"
-deployment = "実際のSolデプロイ名"
-connection_id = "gpt6"
-
-[[azure_models]]
-id = "gpt6-luna"
-model = "gpt-6-luna"
-deployment = "実際のLunaデプロイ名"
-connection_id = "gpt6"
+model = "gpt-6.1-sol"
+deployment = "your-actual-deployment-name"
 ```
 
-`.env` に `AZURE_GPT6_ENDPOINT=https://YOUR-RESOURCE.openai.azure.com/` と `AZURE_GPT6_API_KEY=...` を設定し、バックエンドを再起動してください。EndpointはリソースのルートURLまたは `/openai/v1/` までのHTTPS URLを指定します。モデルが別リソースにある場合は接続先をそれぞれ登録します。会話・タイトル生成・履歴圧縮は、選択したモデルの接続先と実際のデプロイ名を使用します。APIキーやEndpointの実値は画面/APIには返しません。
+`model` identifies a supported underlying model; `deployment` must match the name you deployed on Azure. For multiple Azure resources, use the `azure_connections` and `connection_id` examples in [runtime.example.toml](runtime.example.toml). Store secret values in `.env` or the backend environment, never in the TOML file.
 
-任意名の環境変数も、プロセス環境変数 → ルート `.env` → `backend/.env` の順で優先します。認証情報不足の接続先は、そのモデルだけを選択肢から外し、必要な環境変数名をログに表示します。重複ID、不明な接続先、不正なEndpointは起動時の設定エラーになります。
+A chat keeps its provider and Azure connection binding after its first run. Start a new chat to change providers or Azure resources. You can change models within the same connection. Orchestrator does not silently switch to another provider when a request fails.
 
-GPT-6.1 Solも、`model = "gpt-6.1-sol"` と実際のデプロイ名を `azure_models` に登録すれば利用できます。接続先の紐づけは他モデルと同じです。設定例は `runtime.example.toml` にあります。
+**Title generation has its own provider setting** under Settings → General. If you configure API keys but intend to use only ChatGPT plan usage, select ChatGPT for the title model as well. ChatGPT plan usage and API billing are separate; remote MCP is unavailable on the ChatGPT plan connection. See [ChatGPT connection details](docs/chatgpt-login.md) for capability and authentication details.
 
-`connection_id` を省略した既存モデルは、従来の `AZURE_OPENAI_ENDPOINT` と `AZURE_OPENAI_API_KEY` を使う `default` 接続先になります。`default` は予約IDです。既存会話を継続するには従来Endpointを維持し、新リソースは別の接続先として追加してください。旧DBのAzure会話は初回移行時に `default` と従来Endpointへ紐づけます。
+### 5. Send your first message
 
-最初のチャット実行で接続先を固定します。同じ接続先内ではモデルを変更できますが、接続先IDやEndpointが変わる場合は新規チャットが必要です。APIキーだけの更新は会話を継続できます。タイトル生成の接続先は会話とは独立し、有効な保存済み設定を維持します。モデルの利用権限やAzureの対応状況は契約・デプロイに依存し、エラー時に別モデルや接続先へ自動切替しません。同じ会話内でのプロバイダ変更はできません。
+1. Choose your project in the sidebar and click **New chat**.
+2. Select a model and reasoning effort using the combined model control in the composer. Set optional tools from the **+** menu.
+3. Start with a read-only request, such as: “List the files in this project and summarize what you find. Do not edit any files.”
+4. Send with **Enter** or the send button. Use **Shift+Enter** for a newline.
+5. Expand the activity entry to inspect commands, output, timing, and exit status. The answer appears below the activity.
 
-## 実行環境と添付
+When you want an edit, name the file and the result you need. Review the answer and any changed-file card before using the result. Refresh **Files** to see the current contents of the project folder.
 
-[sandbox/](sandbox/)にアプリとは独立したPython依存ロックがあります。Git、LibreOffice、Poppler、日本語フォント、Office/PDFライブラリ、NumPy、Pandas、Polars、SciPy、CPU版PyTorch、scikit-learn、Matplotlib、Seaborn、Transformers、Datasets、pytestを含みます。初回ビルドは大きなダウンロードが発生します。sandboxイメージの変更後は `make sandbox-build` で再ビルドし、バックエンドも再起動してください。
+## Everyday use
 
-Gitは `/workspace` 内のローカルリポジトリで `status`、`diff`、`log`、`add`、`commit` などを利用できます。Shellはネットワーク無効のため、リモートへの `clone`、`fetch`、`pull`、`push` は利用できません。ホストのGit認証情報やグローバル設定は引き継ぎません。コミットにはリポジトリ内の作者設定、または `git -c user.name=... -c user.email=... commit ...` が必要です。
+### Chats, files, and attachments
 
-- `/workspace`: 元ファイルを直接読み書きする領域。
-- `/input/<attachment-id>/<filename>`: アプリに添付した原本。読み取り専用。加工結果は `/workspace` に保存。
-- `/skills/<id>`: 登録済みの全Skills。読み取り専用。
-- `/resources/<id>`: 選択したモデル・データ。読み取り専用。
-- `/tmp`: 実行終了で破棄される一時領域。
+- Switch chats without stopping an active run. Runs continue on the backend if you close the browser; reopen the chat to reconnect to its history.
+- Draft text and attachments are kept separately for each chat while the page remains open. They are cleared after a successful send or chat deletion. Reloading or closing the page discards unsent drafts.
+- Search titles, user messages, and answers from the sidebar. Search terms are combined with AND; quotes preserve a phrase. Matching ignores case, full-width variations, and common Markdown formatting. Command output is not searched.
+- Pin a chat to keep it near the top. Deleting a chat removes its app history, not its project files. Its stored attachments remain available for orphan cleanup in Settings → General → Storage.
+- Open **Files** to browse the workspace, download results, or edit supported UTF-8 text files up to 1 MiB. **Save** writes to the original file; revision checks reject stale saves. You cannot save while an agent run holds that workspace.
+- Drag a workspace file or folder into the message box to insert its relative path. Drag external files into the chat, or use the attachment control, to upload them.
+- Uploaded originals are read-only under `/input/<attachment-id>/<filename>`. The upload limit defaults to 50 MiB per file. Direct model attachments are available for supported PNG, JPEG, WebP, and PDF files, up to 20 MiB each and 40 MiB per turn; direct attachment sends that content to the provider.
+- Download result links from an answer, such as `[Report](<sandbox:/workspace/my report.docx>)`. Results must actually exist in the project folder. The file APIs reject paths outside the workspace and symbolic links.
 
-コンテナは非root・ネットワーク無効・root filesystem読み取り専用・追加capabilityなしで起動します。APIキーやホストの環境変数は渡しません。コマンドは非対話実行です。Pythonは `python ...` でコンテナに用意済みの `/opt/runtime/.venv` を使います。作業フォルダのPythonテストは `pytest -q` または `python -m pytest -q` で実行できます。通常の `uv run` も `UV_PROJECT_ENVIRONMENT=/opt/runtime/.venv`、`UV_NO_SYNC=1`、`UV_FROZEN=1` によりこの環境を使い、ホストの `.venv` とロックファイルを同期しません（[uvの仕様](https://docs.astral.sh/uv/concepts/projects/sync/)）。この設定は意図的な上書きや直接のファイル削除を禁止するものではありません。モデルにはホストの環境をactivate・同期しないよう指示します。作業先は `/workspace` であり、`cd` に続くコマンドは `&&` でつないでください。成果物の変更一覧では `.venv`、`venv`、`node_modules`、`.git`、`__pycache__`、`.pytest_cache`、`.ruff_cache` を探索から除外します。NLPモデルは事前配置し、Transformers等はofflineモードで動かします。macOS DockerからMetal/MPSは利用しません。
+Markdown answers support inline and display mathematics using bundled KaTeX assets. This renders equations in chat; it does not compile complete LaTeX documents into PDFs.
 
-チャット作業中のサンドボックスのランタイム・ライブラリ・CLIは固定として扱います。モデルには、明示的に依頼された場合も `pip install`、`brew install`、インストール用の `curl` などによる導入・更新を行わないよう指示します。オフラインのwheel・キャッシュ、新しい仮想環境、外部ライブラリや実行用バイナリの持ち込みも解決手段にしません。ホストへのインストールはサンドボックスに反映されないため、ユーザーへの環境変更やイメージ再ビルドの依頼も行いません。必要な機能が不足していれば既存ツールで代替し、代替できなければ、できた部分と実行できない部分を説明します。既存ライブラリを使う作業用スクリプトの作成は可能です。
+### Stop, changes, and Undo
 
-Shellからの外部取得や通信確認・再試行も行わないよう指示します。有効なWeb検索・Remote MCPは別の通信経路として利用できますが、Shellの通信や環境変更を可能にするものではなく、検索結果が自動で作業フォルダへ保存されるわけでもありません。この方針と、ホストOS・作業フォルダの対応・有効な外部ツール・選択済みリソースは、各実行のモデル指示に含まれ、履歴圧縮にも渡されます。
+**Stop** cancels the run and stops its sandbox. Changes already written remain on disk; stopping or failing a run does not automatically roll them back. Runs in the same workspace are serialized, while different workspaces can run concurrently.
 
-Doclingによる自動抽出はありません。通常の添付はShellで必要な部分を読みます。添付ボタンとチャット領域へのドラッグ＆ドロップは同じアップロード処理を使い、フォルダの再帰添付は行いません。PNG/JPEG/WebP/PDFはUIで「モデルに直接添付」を選べます（1ファイル20 MiB、合計40 MiBまで、通常アップロードは1ファイル50 MiB）。直接添付するとその内容をResponsesへ送ります。ローカルShellで読んだ内容・出力もモデルに返されるため、ローカル実行は完全オフラインではありません。
+When checkpoints are available and a run changes covered files, its answer includes a changed-file card. Expand a file to inspect the diff, or use **Undo** to restore the files changed by that run. Files created by the run are removed during Undo. If a covered file changed again afterward, Orchestrator asks before overwriting it. Undo newer runs before older ones when reverting several runs.
 
-画面下のホスト端末は上記のAI用Dockerサンドボックスとは別で、ホストユーザーのファイル・ネットワーク権限を持ちます。端末にはバックエンドのAPIキーなどを環境変数として継承せず、HOME・PATH・ロケールなど端末に必要な環境だけを渡します。AI実行中も同じ作業フォルダで端末を操作できるため、同じファイルの同時編集には注意してください。
+A run with no recorded file differences has no changed-file card. Separate checkpoint warnings can still appear: an excluded file's contents may not have been captured, even when the run was read-only.
 
-既存環境で扱える資料・データ・モデル重みなどの入力ファイルを外部取得する必要がある場合は、次の流れでユーザーへ引き継ぎます。
+Checkpoint limits:
 
-1. モデルがローカルの入力を確認し、通信に依存しない準備を進めたうえで、取得が必要な理由、ホストOS用のコマンド、共有作業フォルダ内の保存先と対応する `/workspace` パスを回答します。環境の導入や、不足機能をホストで実行するための依頼にはしません。
-2. ユーザーが対象Projectのホスト端末でコマンドを実行し、チャットへ完了を返信します。失敗した場合は必要なエラー出力を返信してください。モデルはホスト端末を操作できず、端末出力も自動で読めません。認証情報をチャットに貼る必要はありません。
-3. 次の実行でモデルが `/workspace` の実際のファイルを確認して続行します。依頼は通常の最終回答で行い、自動再開や専用の待機状態は設けません。ユーザーへの依頼で実行が終了した場合も、タスク自体は入力待ちです。
+- Files over `CHECKPOINT_MAX_FILE_BYTES` (50 MiB by default), symbolic links, and generated directories such as `.git`, `.venv`, `venv`, `node_modules`, `__pycache__`, `.pytest_cache`, and `.ruff_cache` are excluded.
+- `.gitignore` does **not** control checkpoint coverage. Other ignored files can appear in diffs and Undo.
+- Files excluded in either the before or after checkpoint are left unchanged by Undo. Older checkpoints with incomplete exclusion records cannot authorize Undo.
+- Checkpoints require host Git and can use substantial disk space. They do not change the project's Git index or history.
+- On macOS, file events accelerate scanning. If event completeness cannot be established, the app falls back to a full scan. Set `WORKSPACE_WATCH=false` to disable this optimization.
 
-サンドボックスのルートfilesystemは隔離されていますが、登録した作業フォルダ内のファイルは編集・削除可能です。
+### Skills, resources, and external tools
 
-Azure OpenAIでは、`apply_patch` を他のツールと同時に渡すとモデルが呼ばなくなるという報告があります（2026年3月、GPT-5.3/5.4系、[Microsoft Q&A](https://learn.microsoft.com/en-us/answers/questions/5828009/azure-openai-apply-patch-works-alone-but-seems-una)）。Azureのデプロイを登録したら、次のライブテストで確認してください。`runtime.toml` の全Azureデプロイと `gpt-6-luna` について、Shell・apply_patch・view_imageを同時に渡した状態で編集と画像確認ができるかを検証します（実API課金あり）。
+Registered Skills are available to the agent by name and description. It reads relevant `SKILL.md` bodies as needed. Use `@skill-name` or the **+** menu to request a Skill explicitly. Removing its token removes the explicit request; it does not disable automatic Skill selection.
 
-```bash
-cd backend && RUN_LIVE_TESTS=1 uv run pytest -q tests/test_live.py -k full_toolset -rs
-```
+The built-in **Guild Journal** and **Project Audit** Skills require no registration. Add your own Skill folders and optional read-only resources in `runtime.toml`. Resources are selected per run. All Skills are mounted under `/skills/<id>`; selected resources are mounted under `/resources/<id>`.
 
-失敗する場合は `.env` に `APPLY_PATCH_TOOL=false` を設定すると、apply_patchを渡さずShellで編集する従来の動作に戻ります（チェックポイントとUndoは引き続き使えます）。
+The workspace root can provide project instructions in `AGENTS.override.md`, then `AGENTS.md`, then configured fallback filenames. The first nonempty file is read each run, up to `project_doc_max_bytes` (32 KiB by default). Nested folders and host configuration directories are not searched for these instructions.
 
-## 画像の確認（view_image）
+Web search and remote MCP use provider-side network connections, independently of the offline Docker sandbox. Remote MCP servers must use HTTPS, be reachable by the provider, and have an explicit `allowed_tools` list. Approve or deny external-tool requests in chat. Skill instructions cannot enable tools or resources you did not select.
 
-モデルは `view_image` ツールで、自分が作ったグラフ・図や作業に関係する画像を見て確認できます。読み込みはサンドボックス内で行い、対象は `/workspace`、`/input`、`/resources`、`/skills`、`/tmp` 内の画像だけです（相対パスは `/workspace` 基準、領域外を指すシンボリックリンクは拒否）。PNG・JPEG・WebPはそのまま、その他のPillow対応形式（BMP・TIFF・GIF等）はPNGまたはJPEGに変換し、長辺2048pxを超える画像は縮小して送ります。元ファイルは50 MiBまでです。画像はモデルの入力トークンとして課金され、会話履歴にも保存されます。Activityにはモデルが見た時点の縮小画像（長辺320px）を表示します。SVGやPDFは対象外で、必要ならShellでPNGに変換してから確認します。
+### Guild Board and project audits
 
-## ファイル編集とチェックポイント
+**Guild Board** displays projects that contain `.chat-orchestrator/` Markdown records. Ask the agent to register a project or record work with `@guild-journal`, then press **Sync** on the board. Sync reads records; the board does not create files, call a model, or continuously monitor changes. See [the record format](docs/guild-board.md).
 
-Filesでファイルをクリックすると編集画面を開けます。`.md`、`.txt`、`.toml`、`.yaml`、`.yml`、`.json`、`.csv`、ソースコードなどのUTF-8テキスト（最大1 MiB）に対応します。Saveまたは⌘/Ctrl+Sで元ファイルへ保存し、UTF-8 BOMと改行形式（LF / CRLF / CR）を維持します。未保存で閉じる・再読み込みする場合は確認します。開いた後にファイルの内容が変わっていた場合は保存を拒否し、編集内容を残します。必要な編集をコピーしてからReloadで最新版を読み直してください。同じProjectでAIが作業している間は保存できません。Office・PDF・画像などは編集せず、Downloadで取得できます。
+Open **Audit** beside a project to view its charter, findings, and reports. Actions such as **Create charter**, **Recheck**, and **Request fix** put a draft in chat for you to review and send; they do not immediately modify files. Evidence quotes are checked against project files. Existing record text is displayed as written, regardless of language. See [audit records](docs/project-audit.md).
 
-UTF-8テキストの編集にはResponses APIの `apply_patch` ツールを使います。パッチはサンドボックス内で適用するため、パスは `/workspace` 内に限られ、シンボリックリンク経由の書き込みや読み取り専用領域への書き込みは失敗としてモデルに返します。Office・PDF・画像などのバイナリ、生成物、一括置換はShellで扱います。Activityには編集ごとの差分を表示します。
+### Settings and usage
 
-各実行の開始前と終了時（停止・失敗を含む）に作業フォルダのチェックポイントを取り、`backend/data/agent/checkpoints/` のアプリ専用Gitリポジトリへ保存します。成果物の変更一覧とcheckpointは同じファイル選別処理を使います。`.gitignore` は参照せず、ignoreされたファイルや入れ子のリポジトリ内のファイルも変更一覧・差分・Undoの対象です。成果物の変更一覧はcheckpointの走査結果を再利用し、checkpoint無効時・失敗時だけ別に走査します。走査はバックグラウンドスレッドで行い、実行中の他の画面操作を止めません。
+Settings opens on **Dashboard**. It shows monthly estimated spending, budget usage and pace, token totals, cache hit rates, model breakdowns, and a daily activity grid. Activity dates use the browser's timezone; budget months use UTC. ChatGPT plan tokens and tool fees are excluded from the API-cost ledger. A budget notice does not block runs.
 
-`.venv`、`venv`、`node_modules`、`.git`、`__pycache__`、`.pytest_cache`、`.ruff_cache` ディレクトリとシンボリックリンクは常に除外し、AIが変更しても成果物の変更一覧・checkpointの差分・Undoの対象外です。checkpointはさらに `CHECKPOINT_MAX_FILE_BYTES`（既定50 MiB）を超えるファイルを除外します。実行前後のどちらかで保存対象外だったファイルは、サイズが上限をまたいで変化しても差分・Undoの対象にせず、その件数を変更パネルに警告します。新しいcheckpointは除外一覧を完全に保存します。旧形式で実行前後の除外一覧が完全に残っていない実行は、安全のためUndoを無効にします。ファイル内容には `.gitattributes` やGit LFSなどのフィルタを適用せず、ユーザーのGit index・履歴を変更しません。`CHECKPOINTS=false` はcheckpoint保存を無効にしますが、同じ除外ルールで成果物の確認は行います。
+The **General** tab contains the title model, new-chat defaults, ChatGPT connection, monthly budget, cost history, storage, and theme color. The interface follows the operating system's light or dark appearance.
 
-macOSでは、checkpointは作業フォルダのファイル変更イベント（FSEvents）を利用し、前回から変更イベントのあったファイルだけをstat・ハッシュします。ディレクトリの一覧は毎回取り直すため、作成・削除はイベントに依存せず反映されます。ホスト端末やエディタでの編集、サンドボックスコンテナからの書き込みも対象です。最後のcheckpointの状態とイベント位置を `backend/data/agent/checkpoints/` に保存し、バックエンドの停止中の変更も再起動後にFSEventsの履歴から取得します。イベントの欠落・履歴の消失・別ボリューム・ネットワークボリュームなど完全性を確認できない場合は、従来どおり全ファイルをstatする走査に戻ります。前回のcheckpoint以降にイベントがなければ、ファイル一覧も取らずに前回の内容を再利用します。初回のcheckpointは全ファイルのハッシュが必要なため、バックエンド起動時に登録済み作業フォルダをバックグラウンドで順に処理します。完了前に実行を始めた場合は、その実行が処理の完了を待ち、進捗（`Indexing workspace files for Undo`）を現在工程に表示します。バックエンドを終了すると処理を中断し、次回起動時にやり直します。`WORKSPACE_WATCH=false` でイベントの利用を無効にできます。Linuxでは常に全ファイルを走査します。
+Use **Storage** to inspect app-managed disk use and prune old checkpoints or attachments belonging to deleted chats. Pruned checkpoints lose their diffs and Undo capability. Cleanup is unavailable while runs are active and does not delete workspace files.
 
-「Undo」はその実行で変わったファイルだけを実行前の内容に戻し、実行中に追加されたファイルと空になったディレクトリは削除します。実行後にユーザーや後続の実行が同じファイルを変更していた場合は一覧を示して確認を求め、承認すると上書きします。複数の実行を戻す場合は新しい実行から順に戻してください。同じ作業フォルダで実行中の間はUndoできません。同一内容のファイルは共有して保存しますが、大きな作業フォルダでは初回のチェックポイントにファイル全体の容量が必要です。完全なバックアップや版管理の代替ではありません。
+### Host terminal
 
-## 画面表示
+The terminal button opens a host login shell for the selected workspace, separate from the agent's Docker sandbox. It has your host user's file and network access. Open up to eight tabs; closing the panel or switching projects keeps the tabs running, while closing a tab or reloading the browser ends its session. **⌘J** toggles the panel. A workspace-mismatch notice helps avoid running commands in the wrong project.
 
-サイドバーでは、実行中（作業フォルダの順番待ち・承認待ちを含む）のチャットにスピナー、終了後に未確認の結果があるチャットにドットを表示します。色はSettingsのTheme colorに連動します。折りたたんだプロジェクトにも配下の実行中・未確認状態を表示します。画面表示中はSSE接続で変更通知を受け取り、一覧を定期取得しません。非表示タブでは接続を閉じ、表示復帰時や通信切断後の再接続時に最新の一覧を受信します。待機中は20秒ごとに接続維持用のコメントだけを送り、DBは読みません。別の作業フォルダのチャットは並行実行でき、同じフォルダは順番待ちになります。
+The app does not store terminal input or output in chat history. Your shell's own history settings still apply. Avoid concurrent terminal and agent edits to the same files.
 
-完了・失敗・停止した結果は、アプリのウィンドウが前面にあり、そのチャットの結果を読み込んで表示すると確認済みになります。Settingsや別チャットを見ている間、非表示タブでは確認済みになりません。未確認状態は再読み込み・再起動後も保持され、同じサーバーを開いている画面間で共有されます。機能導入前の終了結果にはドットを付けません。
+## Configuration and local data
 
-Settingsを開くと、まず**Dashboard**タブに利用状況を表示します。今月（UTC）の推定費用と月間バジェットに対する使用率・月末の見込み額、累計と今月の入力・出力トークン数、キャッシュヒット率（入力トークンのうちキャッシュ済みの割合）、推定費用、モデル別の内訳、直近1年の日別アクティビティ（実行数・トークン数・費用を切り替え、日付はブラウザのタイムゾーン）を一覧できます。実行数はすべてのプロバイダを数えますが、トークン数と費用はコスト台帳（`llm_costs`）の値で、ChatGPTの利用枠による実行とツール料金は含みません。設定項目は**General**タブにあります。
+[.env.example](.env.example) and [runtime.example.toml](runtime.example.toml) are the configuration reference. Restart the backend after editing them. Useful controls include:
 
-Settingsでは次を変更できます。保存はアプリのSQLite（`app_settings`）に行い、再起動は不要です。
+| Setting | Purpose |
+| --- | --- |
+| `SANDBOX_IMAGE`, `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS` | Container image and resource limits. |
+| `COMMAND_TIMEOUT`, `COMMAND_TIMEOUT_MIN`, `RUN_TIMEOUT` | Command ceiling, model-requested timeout floor, and overall run limit. |
+| `MAX_MODEL_ROUNDS`, `MAX_MODEL_OUTPUT_TOKENS`, `MAX_TITLE_OUTPUT_TOKENS` | Model-call and output limits. |
+| `MAX_OUTPUT_CHARS`, `MAX_UPLOAD_BYTES` | Captured command output and upload limits. |
+| `CHECKPOINTS`, `CHECKPOINT_MAX_FILE_BYTES`, `WORKSPACE_WATCH` | Checkpoint storage and scanning. |
+| `COMPACT_TOKEN_THRESHOLD`, `REASONING_SUMMARY` | Automatic history compaction and visible reasoning summaries. |
+| `RUNTIME_CONFIG`, `DATA_DIR` | Optional paths for runtime configuration and app-managed state. |
 
-- **New chat defaults**: 新しい会話（履歴のない会話）で最初に選ばれるプロバイダ・モデル・推論の深さ・Web検索。既存の会話は最後に使った設定を引き継ぎます。保存したモデルが使えなくなった場合は標準モデル（GPT-6.1 Sol）に戻ります。
-- **Monthly budget**: 月の予算（USD、推定LLMトークン費用、UTC基準）。80%と100%で入力欄の上に通知を出します。実行は止めません。
-- **Storage**: チェックポイント・添付・会話履歴の使用量。指定日数より古い実行（または削除済みの会話の実行）のチェックポイントを削除できます。削除した実行は差分とUndoが使えなくなります。削除済みの会話の添付も削除できます。実行中のタスクがある間はどちらも実行できません。作業フォルダのファイルは対象外です。
+The app stores conversations, events, provider context, uploads, credentials, and checkpoints locally under `backend/data/agent/` by default. Treat that directory as sensitive. The SQLite database is `agent.db`, and ChatGPT credentials are in `chatgpt-auth.json`. Stopping or restarting the backend does not delete them. The old `backend/data/chat.db` is not automatically migrated.
 
-サイドバーの検索は、会話タイトル・自分のメッセージ・回答本文を対象にします。空白（全角スペース可）で区切った語はすべてを含む会話に絞り込み（AND検索、語の場所や順序は問いません）、`"月次 報告"` のように引用符で囲むと空白を含むフレーズとして検索します。全角・半角（`ＣＳＶ`と`CSV`、`（１）`と`(1)`）、大文字・小文字は区別せず、回答中のMarkdown記号（`**太字**`、`` `コード` ``、`~~`）や改行は無視して照合します。日本語入力の変換中は検索せず、確定後に検索します。コマンド出力は対象外です。
+## Security and limitations
 
-送信したメッセージの上に添付ファイル名・サイズを表示し、クリックで元ファイルをダウンロードできます。画像は縮小表示し、「モデルに直接添付」したファイルには「Sent to model」と表示します。
+Orchestrator is for a trusted local user. It binds to loopback and validates hosts and origins, but does not implement authentication for a public or multi-user deployment. Do not expose its ports to the internet.
 
-入力欄のリングは会話のコンテキスト使用量です。直近の応答の入力・出力トークン数を、自動履歴圧縮のしきい値（`COMPACT_TOKEN_THRESHOLD`、既定258K。Codexの既定セッションで使える量に合わせています）に対する割合で示し、70%で黄、90%で赤になります。OpenAI APIキー・Azureではリングが満ちると次のラウンドで履歴を圧縮し、圧縮中はリングが回転して「Compacting」と表示されます。圧縮するとActivity内と、Activityを閉じた状態の回答の上に「Context automatically compacted · 260K → 21K tokens」のような区切り線を表示します（圧縮前の量と、圧縮後の最初の応答の入力量）。ChatGPT接続は呼び出し中にサーバー側で圧縮し、圧縮直後の使用量は次の応答で再計測します。ツールチップにはモデルの最大入力トークン数（公式ページの値、全対応モデルで922K）も表示します。
+Agent containers run without network access, as a non-root user, with a read-only root filesystem and restricted capabilities. `/workspace` remains writable. Host API keys are not passed into the container. The host terminal is not subject to the sandbox's restrictions.
 
-アイコンは [Lucide](https://lucide.dev)（ISC License）を使用しています。モデル種別のアイコンはアプリ独自です。
+**Local execution is not fully offline:** prompts, file excerpts returned by tools, and direct attachments are sent to the selected model provider. Provider calls, web search, and remote MCP can access external services. Review what a task will disclose before selecting private files or external tools.
 
-## 実行上限・保存
+The sandbox includes document and CPU-analysis tools, including LibreOffice, Poppler, scientific Python libraries, and preinstalled model tooling. It does not provide GPU/Metal acceleration, interactive commands, or network downloads. Put required inputs and models in the workspace or configured resources before running a task. Host-terminal installations do not add packages to the sandbox image.
 
-`.env`で `COMMAND_TIMEOUT=600`、`RUN_TIMEOUT=3600`、`MAX_MODEL_ROUNDS=100`、`MAX_OUTPUT_CHARS=64000` 等を変更できます。出力はstdout/stderrごとに上限を設け、切り詰めを明示します。モデルの `timeout_ms` は秒に換算し、`min(COMMAND_TIMEOUT, max(COMMAND_TIMEOUT_MIN, モデル指定秒数))` を適用します。`COMMAND_TIMEOUT_MIN` は既定60秒、指定省略時は `COMMAND_TIMEOUT` を使います。上限を60秒未満に設定した場合も上限を優先します。短いモデル指定をそのまま使いたい場合は `COMMAND_TIMEOUT_MIN=1` としてください。実行履歴には適用上限を表示し、タイムアウトイベントにも値を保存します。実行全体の `RUN_TIMEOUT` は別途適用されます。コマンドのタイムアウトはプロセスを残さずコンテナごと停止し、その実行を失敗として終了します。
+## Troubleshooting
 
-タイムアウト時はコマンドの上限（`Command time limit reached`）と実行全体の上限（`Run time limit reached`）を区別し、実際に適用した秒数を表示します。Docker起動などの個別処理のタイムアウトも全体上限の到達として扱いません。モデルにはテキスト検索で `rg` と対象パス・拡張子の絞り込みを使い、通常は `.venv`、`node_modules` などの生成ディレクトリを除外するよう指示します。`grep -R` はシンボリックリンクや仮想環境内も探索するため避け、必要な場合は `grep -rI --devices=skip` と `--exclude-dir` を使います。
+| Symptom | What to check |
+| --- | --- |
+| Backend or image build cannot reach Docker | Start Docker and verify `docker info` from the same host environment. Install the CLI if it is missing, and run `make sandbox-build` if the image is missing. |
+| Workspace blocked after a cleanup failure | Restore Docker connectivity, confirm that the run's container is stopped, and restart the backend after active work has finished. Do not remove containers belonging to other runs or projects. |
+| No usable models | Complete ChatGPT sign-in or configure API credentials and matching Azure deployments. Restart the backend after `.env` or TOML changes. |
+| ChatGPT sign-in does not finish | Allow the sign-in popup, finish consent in the browser, and check account eligibility. Use the connection page to reconnect if needed; never paste tokens into chat. |
+| A provider or Azure connection cannot be changed | Start a new chat for that provider or resource. Existing chats retain their original binding. |
+| Port 5173 or 8000 is occupied | Identify and stop the existing app process you own before starting another. Do not use multiple backend workers or silently move the frontend to another port. |
+| Files look stale | Use **Refresh files**. The file list is not a live filesystem view. |
+| Text save reports a conflict or busy workspace | Keep your draft, wait for the active run, and reload the file before saving again. |
+| Undo is absent | The run may have no covered differences, checkpoints may be disabled or pruned, or an exclusion warning may explain incomplete coverage. |
+| A command times out | Inspect Activity and the reported limit. Command and overall-run limits are separate; adjust `.env` only if the task needs a larger limit. Written changes remain. |
+| Git reports a stale lock | End all Git operations, including IDE and agent activity, and confirm the lock is not in use before removing only that stale lock. The app does not delete Git locks automatically. |
 
-Gitの状態確認にはコンテナ内で `GIT_OPTIONAL_LOCKS=0` を適用し、`git status` による共有インデックスの書き換えを抑止します。コンテナ内の `core.fsmonitor=false` により、ホスト用の監視プログラムも起動しません。ファイル共有で所有者が異なる場合に備え、コンテナ内の `safe.directory` に `/workspace` だけを追加します。ホストのGit設定は変更せず、明示的な `git add`・commitは利用できます。モデルには必要なパスに絞ったGit確認を指示し、未追跡ファイルが不要なら `--untracked-files=no` を使わせます。Git確認とファイル閲覧・検索は別コマンドにして、Activityで停止箇所を確認できるようにします。
-
-Shellはコマンドごとのプロセスグループで実行します。停止・タイムアウト時はグループへSIGTERMを送り、後始末を最大2秒待ってからコンテナを強制削除します。SIGTERMで終了しない子プロセスもコンテナごと回収します。Dockerへの停止要求が失敗した場合も強制削除を試み、削除の成功を確認できなければワークスペースをブロックします。OSやDocker自体の強制終了、SIGTERMで後始末できない処理では、Gitロックが残る場合があります。アプリが既存ロックを自動削除することはありません。
-
-**残留したGitロックの復旧**
-
-`Unable to create ... index.lock: File exists` が出た場合は、対象フォルダでのエージェント実行を終了し、IDE・ターミナルを含むGit操作もすべて終了してください。ホストの対象リポジトリで次を実行してロックの場所と利用中のプロセスを確認します（macOS）。
+## Development
 
 ```sh
-lock_path="$(git rev-parse --path-format=absolute --git-path index.lock)"
-lsof "$lock_path"
-ps -axo pid,ppid,command | rg '[g]it|[c]hat-agent'
+make test          # Backend unit tests, frontend tests, TypeScript check, production build
+make test-docker   # Real sandbox integration tests; requires Docker and the built image
 ```
 
-`lsof`に何も表示されないことだけでは、Git処理の終了は保証できません。別のターミナルやIDE、エージェントを含め、このリポジトリを操作するGitプロセスが残っていないことを確認してください。終了を確認できた残留ロックだけを削除し、その後にGit操作を再実行します。
+Normal tests exclude paid live-provider tests. Live tests are opt-in, may incur charges, and require separate credentials and authorization; do not enable them for ordinary validation.
 
-```sh
-rm -- "$lock_path"
-git status --short
-```
-
-新しい保存先は `backend/data/agent/agent.db`。会話、実行、連番付きイベント、Responsesの完全な入出力（暗号化reasoningを含む）を保存します。旧 `backend/data/chat.db` は読み込み・移行・削除しません。
-
-Activityには推論サマリー（Thought）を表示します。`REASONING_SUMMARY` で `auto`（既定）・`concise`・`detailed`・`off` を選べます。推論の深さが `none` の場合は要求しません。サマリーの言語はモデル側で決まり、英語になることがあります。チャット応答には会話IDを `prompt_cache_key` として渡します。システム指示とツール定義は実行ごとに変えず、Web検索・Skillの明示指定・リソースなど実行ごとの設定は、変更があった場合だけ会話履歴にdeveloperメッセージとして追記します。これにより設定を変えても、それまでの指示と履歴はキャッシュから再利用されます。ただしWeb検索やRemote MCPの有無を切り替えるとツール定義が変わり、モデルや推論の深さを変えた場合も含めて、その実行の最初のラウンドはキャッシュが効きません。履歴圧縮の直後も同様です。
-
-モデルの出力上限は `MAX_MODEL_OUTPUT_TOKENS=32768`、タイトル生成は `MAX_TITLE_OUTPUT_TOKENS=1024` が既定値です。どちらも推論と本文を合計した1応答あたりのトークン上限で、`.env` で変更できます。チャット応答が上限に達した場合は実行を失敗として終了し、途中の回答を復旧履歴に保存します。中断応答でもAPIから使用量が返された場合は費用に計上します。`MAX_OUTPUT_CHARS` はShellのstdout/stderrの文字数上限で、モデルの出力トークン上限とは別です。
-
-OpenAI APIキー・AzureのResponsesは `store=false` で完全な入出力を再送し、保存済みの応答の入力・出力合計が既定258,000トークン以上になると次のAPI呼び出し前に `/responses/compact` を使います。実行をまたぐ追加メッセージやサーバー再起動後も、保存済みの使用量から圧縮を判定します。ChatGPT接続では各Responsesに `context_management` を指定してサーバー側で圧縮し、最新の暗号化compactionアイテム以降を次の入力に使います。ユーザー指示はモデル呼び出し前に保存し、ツール呼び出しを含むラウンドは結果がすべて揃ってから文脈を保存します。失敗・停止・再起動時は、最後のチェックポイント以降のコマンド、結果・出力の抜粋、途中の応答、失敗理由を復旧履歴として保存します。未完了のツール呼び出しは復元・自動再実行せず、モデルには現在のファイル状態を確認して続行するよう伝えます。サーバー再起動時は中断実行を失敗扱いとし、そのコンテナを回収します。外部ファイルへの変更は維持されるため、再開時はファイルの現状を確認してください。
-
-## API
-
-- `GET /api/config`: プロバイダ・モデル・登録済み作業フォルダ／Skills／resources／MCP一覧。認証情報は返さない。
-- `GET/POST /api/conversations`、`GET/DELETE /api/conversations/{id}`
-- `GET /api/conversations/events`: チャット一覧のSSE。接続時と変更保存後に `snapshot` イベントで最新の一覧を送信。再接続時も全体を送り直し、過去イベントの再生は不要。
-- `POST /api/conversations/{id}/read`: 表示した終了結果の `run_id` を渡して確認済みにする。新しい結果が完了している場合は未確認のまま維持。
-- `GET/PATCH /api/settings`: タイトル生成モデルとテーマカラー。
-- `GET /api/costs/monthly`: UTC月別の推定LLMトークン費用（USD）。
-- `POST /api/attachments`: `conversation_id` と複数 `files` のmultipart。
-- `GET /api/conversations/{id}/files?path=...`: フォルダ内のファイル一覧。
-- `GET /api/conversations/{id}/download?path=...`: 許可領域の通常ファイルを取得。
-- `GET/PUT /api/conversations/{id}/file?path=...`: UTF-8テキストを読み込み・保存。保存には `content` と読込時の `revision` を渡し、競合時は409を返す。
-- `POST /api/runs`、`GET /api/runs/{id}`
-- `GET /api/runs/{id}/events?after=<seq>`: NDJSONイベント購読・再取得。
-- `POST /api/runs/{id}/stop`
-- `POST /api/runs/{id}/approvals`: `request_id`、`approve`。
-- `WS /api/terminals/{workspace_id}`: 登録済み作業フォルダでホスト端末を起動。バイナリフレームでPTY入出力、JSONで初期サイズ・サイズ変更・終了状態をやり取りする。Host・Originを検証する。
-
-ファイルAPIでは絶対パス・領域外参照・シンボリックリンクを拒否します。loopbackバインド、Host/Origin検証を行います。信頼された個人利用向けで、インターネット公開やマルチユーザー用の認証は実装していません。
-
-## 検証
-
-```bash
-make test
-make test-docker
-# 設定済みAPIキーを使う有料の最小実APIテスト
-cd backend && RUN_LIVE_TESTS=1 uv run pytest -m live -rs
-```
-
-DockerテストはGitのローカル操作・200ファイル・元ファイル編集・Office/PDF・CPU分析・日本語グラフ・隔離・タイムアウト／停止を検証します。実APIテストは一時フォルダ内だけを編集し、Skill名を含まない依頼での自動利用、明示指定、無関係なSkillを実行しないことを検証します。指定モデルが利用できないアカウントでは理由付きでskipします。Azureの実APIテストは実デプロイを設定した環境で別途行ってください。
+The app version is tracked in [VERSION](VERSION), with changes in [CHANGELOG.md](CHANGELOG.md). The sandbox's Python environment has its own lockfile and version. Interface icons use [Lucide](https://lucide.dev), licensed under ISC.
