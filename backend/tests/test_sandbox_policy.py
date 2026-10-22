@@ -48,6 +48,7 @@ def test_close_forces_removal_when_graceful_stop_fails(tmp_path, monkeypatch, gr
     sandbox = Sandbox(Settings(_env_file=None), Folder(id="w", label="w", path=tmp_path),
                       "test", [], [], tmp_path / "input")
     sandbox.commands.add("/tmp/test-command")
+    sandbox._cleanup_required = True
     calls = []
 
     async def fake_docker(*args, **kwargs):
@@ -64,6 +65,7 @@ def test_close_forces_removal_when_graceful_stop_fails(tmp_path, monkeypatch, gr
 def test_close_reports_unconfirmed_container_removal(tmp_path, monkeypatch):
     sandbox = Sandbox(Settings(_env_file=None), Folder(id="w", label="w", path=tmp_path),
                       "test", [], [], tmp_path / "input")
+    sandbox._cleanup_required = True
 
     async def fake_docker(*args, **kwargs):
         raise RuntimeError("Docker unavailable")
