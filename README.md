@@ -216,4 +216,8 @@ make test-docker   # Real sandbox integration tests; requires Docker and the bui
 
 Normal tests exclude paid live-provider tests. Live tests are opt-in, may incur charges, and require separate credentials and authorization; do not enable them for ordinary validation.
 
-The app version is tracked in [VERSION](VERSION), with changes in [CHANGELOG.md](CHANGELOG.md). The sandbox's Python environment has its own lockfile and version. Interface icons use [Lucide](https://lucide.dev), licensed under ISC.
+The app version is tracked in [VERSION](VERSION), with changes in [CHANGELOG.md](CHANGELOG.md). The sandbox's Python environment has its own lockfile and version.
+
+## License
+
+Orchestrator is licensed under the [MIT License](LICENSE). Third-party dependencies retain their own licenses. Interface icons use [Lucide](https://lucide.dev), licensed under ISC.

@@ -1,6 +1,7 @@
 [project]
 name = "chat-orchestrator-backend"
 version = "0.3.1"
+license = { text = "MIT" }
 description = "Local sandbox workspace agent powered by OpenAI and Azure Responses API"
 requires-python = ">=3.11"
 dependencies = [
