@@ -11,6 +11,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the MIT License for Orchestrator and matching application license metadata, preserving third-party licenses and attribution.
+
 ### Changed
 
 - Reworked the English README with setup, authentication, everyday workflows, safety limits, and troubleshooting. Standardized application-generated labels, messages, and audit drafts in English while preserving user content and existing records.
