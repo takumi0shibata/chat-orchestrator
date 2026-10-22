@@ -1157,6 +1157,13 @@ export function RunChanges({ runId, timeline }: { runId: string; timeline: Agent
     return () => { cancelled = true; };
   }, [ready, runId]);
   if (!ready || !state?.available || (state.files.length === 0 && !state.skipped_count && !state.undo_warning)) return error ? <p role="alert" className="error">{error}</p> : null;
+  const warnings = <>
+    {Boolean(state.skipped_count) && (
+      <small className="run-changes-note" role="status">{state.skipped_count} {state.skipped_count === 1 ? "file was" : "files were"} not fully saved in both checkpoints. Undo will leave {state.skipped_count === 1 ? "it" : "them"} unchanged.</small>
+    )}
+    {state.undo_warning && <p role="alert" className="run-changes-note">{state.undo_warning}</p>}
+  </>;
+  if (state.files.length === 0) return warnings;
   const added = state.files.reduce((sum, file) => sum + (file.added ?? 0), 0);
   const removed = state.files.reduce((sum, file) => sum + (file.removed ?? 0), 0);
   async function toggle(path: string, open: boolean) {
@@ -1224,10 +1231,7 @@ export function RunChanges({ runId, timeline }: { runId: string; timeline: Agent
           </li>
         ))}
       </ul>
-      {Boolean(state.skipped_count) && (
-        <small className="run-changes-note" role="status">{state.skipped_count} {state.skipped_count === 1 ? "file was" : "files were"} not fully saved in both checkpoints. Undo will leave {state.skipped_count === 1 ? "it" : "them"} unchanged.</small>
-      )}
-      {state.undo_warning && <p role="alert" className="run-changes-note">{state.undo_warning}</p>}
+      {warnings}
       {error && <p role="alert" className="error">{error}</p>}
     </section>
   );

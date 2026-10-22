@@ -11,6 +11,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- checkpointの除外警告だけがある応答に「0 files changed」のUndoカードを表示する問題を修正。変更ファイルがない場合はカードを表示せず、保存対象外ファイルや旧checkpointの安全上の警告は単独で保持する。
+
 ## [0.3.0] - 2026-10-20
 
 ### Added

@@ -1758,6 +1758,8 @@ describe("file edits and checkpoints", () => {
     }));
     render(<RunView run={run} timeline={[event(1, "checkpoint", { name: "after" })]} onApproval={vi.fn()} />);
     expect(await screen.findByRole("status")).toHaveTextContent("2 files were not fully saved");
+    expect(screen.queryByRole("region", { name: "Changed files" })).not.toBeInTheDocument();
+    expect(screen.queryByText("0 files changed")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
   });
 
@@ -1767,6 +1769,7 @@ describe("file edits and checkpoints", () => {
     }));
     render(<RunView run={run} timeline={[event(1, "checkpoint", { name: "after" })]} onApproval={vi.fn()} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("incomplete exclusion records");
+    expect(screen.queryByRole("region", { name: "Changed files" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
   });
 });
