@@ -11,7 +11,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a browser-local Appearance selector in Settings → General with System, Light, and Dark modes. System mode follows live OS changes.
+
 ### Changed
+
+- Softened the chat and Files sidebar backgrounds in both appearances and made Show more neutral gray.
 
 - Reworked the English README with setup, authentication, everyday workflows, safety limits, and troubleshooting. Standardized application-generated labels, messages, and audit drafts in English while preserving user content and existing records.
 

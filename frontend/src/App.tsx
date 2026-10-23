@@ -1,3 +1,4 @@
+import { useAppearance, type Appearance } from "./lib/appearance";
 import { DragEvent as ReactDragEvent, FormEvent, KeyboardEvent, Suspense, lazy, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import {
@@ -858,6 +859,8 @@ function SettingsHeader({ page, onNavigate }: { page: SettingsPage; onNavigate: 
 }
 
 function SettingsPanel({
+  appearance,
+  onAppearanceChange,
   page,
   config,
   settings,
@@ -867,6 +870,8 @@ function SettingsPanel({
   onChange,
   onRefresh,
 }: {
+  appearance: Appearance;
+  onAppearanceChange: (value: Appearance) => void;
   page: SettingsPage;
   config: Config | null;
   settings: AppSettings;
@@ -928,6 +933,15 @@ function SettingsPanel({
   return (
     <section className="settings-page">
       <SettingsHeader page={page} onNavigate={onNavigate} />
+      <div className="appearance-setting">
+        <label htmlFor="appearance">Appearance</label>
+        <p className="settings-description" id="appearance-description">Choose how Orchestrator looks in this browser.</p>
+        <select id="appearance" aria-describedby="appearance-description" value={appearance} onChange={(event) => onAppearanceChange(event.target.value as Appearance)}>
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </div>
       <div className="title-model-setting">
         <h2>Title model</h2>
         <p className="settings-description">Generates a concise title from the first message.</p>
@@ -1494,6 +1508,7 @@ export function RunView({
 }
 
 export function App() {
+  const [appearance, changeAppearance] = useAppearance();
   const [config, setConfig] = useState<Config | null>(null);
   const latestConfig = useRef(config);
   latestConfig.current = config;
@@ -2676,7 +2691,7 @@ export function App() {
             if (target) selectConversation(target);
           }}
         /></Suspense> : <p className="muted" role="status">This project is no longer registered.</p> : settingsPage !== "chat" ? (
-          <SettingsPanel page={settingsPage} config={config} settings={appSettings} costs={costs} refreshKey={finishedRuns} onNavigate={setSettingsPage} onChange={saveAppSettings} onRefresh={refreshConfig} />
+          <SettingsPanel appearance={appearance} onAppearanceChange={changeAppearance} page={settingsPage} config={config} settings={appSettings} costs={costs} refreshKey={finishedRuns} onNavigate={setSettingsPage} onChange={saveAppSettings} onRefresh={refreshConfig} />
         ) : <>
         {cid && (
           <header className="chat-header">

@@ -107,7 +107,7 @@
   .audit-evidence-head { flex-direction: column; align-items: flex-start; }
 }
 
-@media (prefers-color-scheme: dark) {
+:root:where([data-theme="dark"]) {
   .audit-page {
     --audit-ink: var(--text);
     --audit-muted: var(--text-3);
