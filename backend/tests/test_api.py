@@ -465,3 +465,21 @@ def test_file_listing_has_no_gitignore_decoration(app_client):
     assert {e["name"]: set(e) for e in response.json()} == {
         name: {"name", "path", "directory", "size"} for name in (".gitignore", "generated")
     }
+
+
+def test_not_found_errors_do_not_add_python_quotes(app_client):
+    http, _, _ = app_client
+    response = http.get('/api/runs/missing')
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Run not found'
+
+
+def test_validation_errors_explain_field_without_echoing_input(app_client):
+    http, _, _ = app_client
+    response = http.post('/api/runs', json={'conversation_id': 'missing', 'input': 'x' * 1_000_001})
+    assert response.status_code == 422
+    detail = response.json()['detail'][0]
+    assert detail['loc'] == ['body', 'input']
+    assert '1000000' in detail['msg']
+    assert 'input' not in detail
+    assert len(response.content) < 1000
