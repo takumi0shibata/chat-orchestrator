@@ -22,6 +22,7 @@
 - Reworked the English README with setup, authentication, everyday workflows, safety limits, and troubleshooting. Standardized application-generated labels, messages, and audit drafts in English while preserving user content and existing records.
 
 ### Fixed
+- Reject empty Docker server-version checks so older CLIs cannot lock an untouched workspace when the daemon is unavailable.
 - Docker availability failures before container creation allow retry without restarting the backend. Startup cancellation, timeouts, and uncertain container removal still require confirmed cleanup and retain workspace protection when cleanup fails.
 
 ## [0.3.1] - 2026-10-22
