@@ -80,7 +80,7 @@
   .dashboard-card-head { flex-wrap: wrap; }
 }
 
-@media (prefers-color-scheme: dark) {
+:root:where([data-theme="dark"]) {
   .settings-tabs button[aria-current="page"],
   .dashboard-segmented button[aria-pressed="true"] { background: var(--surface-3); box-shadow: none; }
 }

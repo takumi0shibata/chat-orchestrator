@@ -274,7 +274,7 @@
   .guild-card.is-updated, .guild-scene svg *, .guild-speech { animation: none !important; }
 }
 
-@media (prefers-color-scheme: dark) {
+:root:where([data-theme="dark"]) {
   .guild-page {
     --guild-ink: var(--text);
     --guild-muted: var(--text-3);

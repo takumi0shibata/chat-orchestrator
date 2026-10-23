@@ -1209,6 +1209,9 @@ it("navigates settings, saves the title model and theme, and shows monthly cost"
   fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
   expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "General" }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Appearance" }), { target: { value: "dark" } });
+  expect(document.documentElement.dataset.theme).toBe("dark");
+  fireEvent.change(screen.getByRole("combobox", { name: "Appearance" }), { target: { value: "system" } });
   fireEvent.change(screen.getByRole("combobox", { name: "Title model" }), { target: { value: "gpt-5.6-sol" } });
   await waitFor(() => expect(patches).toContainEqual({ title_provider: "openai", title_model: "gpt-5.6-sol" }));
 
