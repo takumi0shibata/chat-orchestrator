@@ -467,6 +467,16 @@ def test_file_listing_has_no_gitignore_decoration(app_client):
     }
 
 
+def test_workspace_download_disables_mime_sniffing(app_client):
+    http, work, _ = app_client
+    (work / "page.html").write_text("<script>alert(1)</script>")
+    cid = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]
+    response = http.get(f"/api/conversations/{cid}/download", params={"path": "page.html"})
+    assert response.status_code == 200
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["content-disposition"].startswith("attachment;")
+
+
 def test_not_found_errors_do_not_add_python_quotes(app_client):
     http, _, _ = app_client
     response = http.get('/api/runs/missing')

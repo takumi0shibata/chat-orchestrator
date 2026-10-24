@@ -439,7 +439,8 @@ def create_app(settings=None, manager_factory=RunManager):
             media_type=mimetypes.guess_type(path)[0] or "application/octet-stream",
             headers={
                 "Content-Disposition": "attachment; filename*=UTF-8''"
-                + quote(path.split("/")[-1])
+                + quote(path.split("/")[-1]),
+                "X-Content-Type-Options": "nosniff",
             },
         )
 
