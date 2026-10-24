@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
+from fastapi.exceptions import RequestValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.agent_runner import RunManager
@@ -128,7 +129,18 @@ def create_app(settings=None, manager_factory=RunManager):
     async def missing(_, error):
         from fastapi.responses import JSONResponse
 
-        return JSONResponse({"detail": str(error)}, status_code=404)
+        return JSONResponse({"detail": str(error.args[0]) if error.args else "Not found"}, status_code=404)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(_, error):
+        from fastapi.responses import JSONResponse
+
+        # Return useful field diagnostics without reflecting request contents.
+        details = [
+            {key: item[key] for key in ("type", "loc", "msg") if key in item}
+            for item in error.errors()
+        ]
+        return JSONResponse({"detail": details}, status_code=422)
 
     @app.exception_handler(ValueError)
     async def invalid(_, error):
@@ -428,7 +440,8 @@ def create_app(settings=None, manager_factory=RunManager):
             media_type=mimetypes.guess_type(path)[0] or "application/octet-stream",
             headers={
                 "Content-Disposition": "attachment; filename*=UTF-8''"
-                + quote(path.split("/")[-1])
+                + quote(path.split("/")[-1]),
+                "X-Content-Type-Options": "nosniff",
             },
         )
 
