@@ -2102,3 +2102,15 @@ describe("new chat defaults, budget and storage settings", () => {
     expect(screen.getByRole("button", { name: "Delete unused attachments" })).toBeDisabled();
   });
 });
+
+
+it("rejects oversized attachments before uploading", async () => {
+  const fetchMock = mockUxApi((url) => url === "/api/config" ? new Response(JSON.stringify({
+    providers: [], workspaces: [{ id: "w", label: "Work", path: "/work" }], skills: [], resources: [], mcp_servers: [], max_upload_bytes: 2,
+  })) : undefined);
+  const { container } = render(<App />);
+  await screen.findByRole("textbox", { name: "Message" });
+  fireEvent.drop(container.querySelector(".main")!, { dataTransfer: { types: ["Files"], files: [new File(["abc"], "large.txt")], items: [] } });
+  expect(await screen.findByText(/Each attachment must be 2 bytes or smaller/)).toBeInTheDocument();
+  expect(fetchMock.mock.calls.some(([url]) => url === "/api/attachments")).toBe(false);
+});

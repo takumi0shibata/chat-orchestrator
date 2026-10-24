@@ -2343,6 +2343,11 @@ export function App() {
   }
   async function upload(selected: FileList | readonly File[] | null) {
     if (!selected?.length || !canDropFiles) return;
+    const limit = config?.max_upload_bytes;
+    if (limit !== undefined && Array.from(selected).some((file) => file.size > limit)) {
+      setError(`Each attachment must be ${limit.toLocaleString()} bytes or smaller.`);
+      return;
+    }
     setBusy(true);
     setError("");
     try {

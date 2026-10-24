@@ -22,6 +22,7 @@
 - Reworked the English README with setup, authentication, everyday workflows, safety limits, and troubleshooting. Standardized application-generated labels, messages, and audit drafts in English while preserving user content and existing records.
 
 ### Fixed
+- Reject oversized attachments before upload using the configured limit, and include the limit in server errors.
 - Docker availability failures before container creation allow retry without restarting the backend. Startup cancellation, timeouts, and uncertain container removal still require confirmed cleanup and retain workspace protection when cleanup fails.
 
 ## [0.3.1] - 2026-10-22
