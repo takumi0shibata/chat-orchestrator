@@ -1171,7 +1171,12 @@ export function RunChanges({ runId, timeline }: { runId: string; timeline: Agent
     return () => { cancelled = true; };
   }, [ready, runId]);
   if (!ready || !state?.available || (state.files.length === 0 && !state.skipped_count && !state.undo_warning)) return error ? <p role="alert" className="error">{error}</p> : null;
+  const unbackedChanges = state.skipped_count ? timeline
+    .filter((event) => event.type === "artifacts")
+    .flatMap((event) => Array.isArray(event.data.files) ? event.data.files as { path: string }[] : [])
+    .filter((file) => !state.files.some((covered) => covered.path === file.path)) : [];
   const warnings = <>
+    {unbackedChanges.length > 0 && <p className="run-changes-note" role="status">Changed files without a complete backup: {[...new Set(unbackedChanges.map((file) => file.path))].join(", ")}. Undo cannot restore these files.</p>}
     {Boolean(state.skipped_count) && (
       <small className="run-changes-note" role="status">{state.skipped_count} {state.skipped_count === 1 ? "file was" : "files were"} not fully saved in both checkpoints. Undo will leave {state.skipped_count === 1 ? "it" : "them"} unchanged.</small>
     )}
