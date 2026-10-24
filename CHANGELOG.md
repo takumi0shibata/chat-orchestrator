@@ -23,6 +23,10 @@
 
 ### Fixed
 - Confirm chat deletion, prevent duplicate deletion and editing while it is pending, and leave chats removed in another window.
+- Redact masked OpenAI key fragments from provider errors in logs and run events.
+- Return readable API validation and missing-resource errors without Python quotes or echoed request contents.
+- Disable MIME sniffing for workspace downloads, consistent with attachment downloads.
+- Reject empty Docker server-version checks so older CLIs cannot lock an untouched workspace when the daemon is unavailable.
 - Docker availability failures before container creation allow retry without restarting the backend. Startup cancellation, timeouts, and uncertain container removal still require confirmed cleanup and retain workspace protection when cleanup fails.
 
 ## [0.3.1] - 2026-10-22

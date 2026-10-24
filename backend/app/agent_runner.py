@@ -799,7 +799,8 @@ class RunManager:
         ]:
             if secret:
                 text = text.replace(secret, "[redacted]")
-        return text
+        # Provider errors may mask the middle of a key, defeating exact matching.
+        return re.sub(r"\bsk-(?:[A-Za-z0-9_*…-]|\.{2,})+", "[redacted]", text)
 
     async def execute(self, rid, request):
         sandbox = None
