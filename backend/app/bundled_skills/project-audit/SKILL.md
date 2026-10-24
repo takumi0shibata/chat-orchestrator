@@ -3,7 +3,14 @@ name: project-audit
 description: Audit project inconsistencies, contradictions, and unsupported claims (hallucinations), and record the charter, findings, and reports in .chat-orchestrator/audit/. Use when asked to audit a project, create or update its charter, record decisions on findings, or fix and recheck findings with an agreed decision. Do not use for ordinary code reviews or work that does not request an audit.
 ---
 
-# Project監査
+# Project Audit
+
+## Record language
+
+Write new charter prose, finding titles, explanations, decisions, and reports in the user's requested language, or their request's language when unspecified. Preserve existing record language, user wording, and verbatim evidence quotes unless explicitly asked to translate. Translate template placeholders into supported facts in that language; never translate quoted evidence.
+
+For English records, use English section headings and verdicts `contradiction`, `unsupported`, or `suspected`. Japanese records may use `矛盾`, `根拠なし`, or `疑い`. These verdicts are display text, not fixed machine values. Keep field keys (`status`, `severity`, `relation`, `verdict`, etc.), status/severity identifiers, finding IDs, paths, and date formats unchanged. Reports must use the recognized `Not checked` heading (or `確認しなかったこと` for Japanese) for omitted checks; use `Not checked` for other languages with prose in the user's language. Preserve recognized headings in existing files.
+
 
 作業対象Projectの `.chat-orchestrator/audit/` を管理する。OrchestratorのサンドボックスではProjectのルートは `/workspace`。記録は元ファイルに保存され、アプリのサイドバーでProjectのAuditを開くと読み取り専用で表示される。
 
@@ -39,32 +46,32 @@ description: Audit project inconsistencies, contradictions, and unsupported clai
 ```markdown
 # Audit Charter
 
-## 目的
-このProjectが目指すもの（例：論文投稿と再現可能なコード公開）。
+## Purpose
+State the project goal, such as submitting a paper with reproducible code.
 
-## 成果物の地図
-| パス | 種類 | 役割 |
+## Artifact map
+| Path | Type | Role |
 | --- | --- | --- |
-| docs/specs/ | 実装計画（論文形式） | 仕様。実装はこれに従う |
-| src/ | コード | 実態 |
-| results/final/ | 結果 | 正。数値の出所 |
-| paper/ | 論文 | 下流。results に合わせる |
-| README.md | ドキュメント | 下流。実態に合わせる |
+| docs/specs/ | Implementation plan | Specification followed by the implementation |
+| src/ | Code | Implementation |
+| results/final/ | Results | Source of truth for numbers |
+| paper/ | Paper | Downstream of results |
+| README.md | Documentation | Downstream of implementation |
 
-## 確認する関係
-- [x] README ↔ 実態
-- [x] 実装計画の主張 ↔ コード・データ・ライブラリ
-- [ ] 実装計画 ↔ 実装
-- [ ] 論文 ↔ 結果
-- [ ] コードの誤り
+## Relationships to check
+- [x] README ↔ implementation
+- [x] Plan claims ↔ code, data, and libraries
+- [ ] Plan ↔ implementation
+- [ ] Paper ↔ results
+- [ ] Code errors
 
-## 対象外
+## Out of scope
 data/raw/, checkpoints/
 
-## 実行してよい確認
+## Allowed checks
 - `pytest -q tests/unit`
 
-## 既知の例外・判断
+## Known exceptions and decisions
 ```
 
 役割は「正（ほかを合わせる基準）」「下流（正に合わせる）」「仕様（実装が従う）」「実態」「草稿（矛盾してもよい）」などで書く。正が決まっていない組み合わせの矛盾は、どちらが正しいかをユーザーに選んでもらう。Charterの更新を依頼された場合も、変更案をチャットで示して合意を得てから保存する。
@@ -110,16 +117,16 @@ Charterの「確認する関係」でチェックされた項目だけを確認�
 ```markdown
 # Audit findings
 
-## F-003 READMEに書かれた `make train` が存在しない
+## F-003 The README command `make train` does not exist
 - status: open
 - severity: major
-- relation: README ↔ 実態
-- verdict: 矛盾
+- relation: README ↔ implementation
+- verdict: contradiction
 - verified: executed `make -n train` → "No rule to make target 'train'"
 - evidence:
   - README.md:42 `make train`
-  - Makefile — train ターゲットはなく、実在するのは train-bert
-- options: READMEを `make train-bert` に直す / Makefileに `train` を追加する
+  - Makefile — no train target; the existing target is train-bert
+- options: Correct README to `make train-bert` / add `train` to Makefile
 - found: 2026-10-14-01
 - decision:
 ```
@@ -128,7 +135,7 @@ Charterの「確認する関係」でチェックされた項目だけを確認�
 - 各項目は `- キー: 値` の1行で書く。`evidence` だけは次の行から2スペース字下げした箇条書きにする。
 - `status`: `open`（未判断）、`decided`（方針が決まり未修正）、`fixed`（修正または再検証で解消を確認）、`intended`（意図どおり）、`dismissed`（誤検知）。
 - `severity`: `blocker`（論文・報告の主張や結果の正しさに影響する、または実行できない）、`major`（誤解・再現の失敗を招く）、`minor`（表記の揺れなど）。
-- `relation`: 監査の観点の表の関係名。`verdict`: `矛盾` / `根拠なし` / `疑い`。
+- `relation`: 監査の観点の表の関係名。`verdict`: use `contradiction` / `unsupported` / `suspected` for English records, or `矛盾` / `根拠なし` / `疑い` for Japanese records.
 - `verified`: 実行した場合は `executed` に続けてコマンドと結果の要点、読んで確認した場合は `read` に続けて確認内容を書く。
 - `evidence`: 1行に1件、`パス:行` または `パス:開始行-終了行` の後に、そのファイルに実在する原文をバッククォートで1つだけ引用する。パスはProjectルートからの相対パスで、`/workspace/` は付けない。引用は200文字以内の1行内の文字列とし、引用の中にバッククォートを含めない。引用の後に補足を書いてよい。「〜がない」という不在の根拠は `パス — 説明` の形で書く。`—` 以降は照合しない補足として扱われる。矛盾なら食い違う根拠を2件以上挙げる。
 - `options`: ユーザーが選べる解決案を ` / ` で区切って書く。どちらが正しいか分からない矛盾では、それぞれを正とする案を並べる。
@@ -142,27 +149,27 @@ Auditの画面は引用がファイルに実在するかを機械的に照合し
 監査・再検証の1回ごとに `reports/YYYY-MM-DD-NN.md` を作る（例：`2026-10-14-01.md`）。日付は実行した日、同日の2回目以降は未使用の番号にする。過去のレポートは書き換えない。
 
 ```markdown
-# 監査 2026-10-14-01
+# Audit 2026-10-14-01
 
-## 範囲
-README ↔ 実態、実装計画の主張 ↔ コード・データ
+## Scope
+README ↔ implementation / Plan claims ↔ code and data
 
-## 結果
-- 新規: F-004, F-005
-- 継続: F-001
-- 解消: F-002
+## Results
+- New: F-004, F-005
+- Continuing: F-001
+- Resolved: F-002
 
-## 確認したこと
-- `make -n` でREADMEの全コマンドを確認
-- docs/specs/retrieval.md の記述32件を照合（裏付けあり29件、指摘3件）
+## Checked
+- Checked all README commands with `make -n`
+- Checked 32 claims in docs/specs/retrieval.md (29 supported, 3 findings)
 
-## 確認しなかったこと
-- paper/（Charterで対象外）
-- GPUが必要なテスト（tests/gpu/）
-- 引用文献の実在（Web検索なし）
+## Not checked
+- paper/ (excluded by the charter)
+- GPU tests (tests/gpu/)
+- Existence of cited literature (web search unavailable)
 
-## 気になった点
-- 確証がなく指摘にしなかったこと
+## Open questions
+- Unconfirmed concerns that were not recorded as findings
 ```
 
 「確認しなかったこと」は画面の上部に表示される。何も省略していない場合も、その旨を1行で書く。

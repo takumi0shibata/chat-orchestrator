@@ -23,6 +23,27 @@
 
 ### Fixed
 - Apply saved or system appearance before the application bundle loads to avoid a light flash in dark mode.
+- Make bundled Guild Journal and Project Audit records follow the requested language, preserve user wording, and use recognized English or Japanese structural headings.
+- Coalesce streamed recovery text and cap serialized journal size so stopped replies do not inflate later model context with per-token JSON.
+- Use singular file wording for one-file artifact events and Undo confirmation.
+- Reject oversized attachments before upload using the configured limit, and include the limit in server errors.
+- Reuse the currently selected untouched new chat instead of creating repeated empty chats in the same project.
+- Retry failed title generation on the next run using the original task while retaining the fallback title in the meantime.
+- Render large file-browser folders in batches of 100 with Show more, keeping all paths accessible.
+- Close cancelled shell-command activity with a stopped outcome and document unreported usage on interrupted requests.
+- Name observed file changes that have no complete checkpoint backup and cannot be restored by Undo.
+- Clarify that dashboard run counts cover stored chats while API usage survives deletion and excludes unreported usage.
+- Explain how to build or configure a missing sandbox image instead of only suggesting a Docker retry.
+- Show provider setup guidance beside the composer when the selected connection cannot send messages.
+- Show an inline error for unavailable result files instead of downloading a JSON error response.
+- Refresh the Files panel after a successful Undo.
+- Explain rejected provider credentials with setup guidance instead of exposing the SDK error representation.
+- Label failed and stopped runs explicitly instead of displaying the successful-work heading.
+- Confirm chat deletion, prevent duplicate deletion and editing while it is pending, and leave chats removed in another window.
+- Redact masked OpenAI key fragments from provider errors in logs and run events.
+- Return readable API validation and missing-resource errors without Python quotes or echoed request contents.
+- Disable MIME sniffing for workspace downloads, consistent with attachment downloads.
+- Reject empty Docker server-version checks so older CLIs cannot lock an untouched workspace when the daemon is unavailable.
 - Docker availability failures before container creation allow retry without restarting the backend. Startup cancellation, timeouts, and uncertain container removal still require confirmed cleanup and retain workspace protection when cleanup fails.
 
 ## [0.3.1] - 2026-10-22

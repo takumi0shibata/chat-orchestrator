@@ -27,6 +27,7 @@ export interface Config {
   resources: Named[];
   mcp_servers: Named[];
   compact_token_threshold?: number;
+  max_upload_bytes?: number;
 }
 export interface AppSettings {
   title_provider: string;

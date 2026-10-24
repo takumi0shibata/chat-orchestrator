@@ -10,6 +10,8 @@ import stat
 from datetime import datetime, timedelta, timezone
 from time import monotonic
 
+from openai import AuthenticationError
+
 from app.attachments import direct_input, file_snapshot
 from app.checkpoints import CheckpointCancelled, Checkpoints, IncompleteCheckpoint
 from app.workspace_watch import FSEventsWatcher
@@ -409,7 +411,8 @@ class RunManager:
         binding = (route.connection.id, route.connection.base_url) if request.provider == "azure_openai" else None
         run = self.store.create_run(request.model_dump(), azure_binding=binding)
         if self.store.claim_title(request.conversation_id):
-            title_task = asyncio.create_task(self.generate_title(run["id"], request))
+            first_request = self.store.runs(request.conversation_id)[0]["request"]
+            title_task = asyncio.create_task(self.generate_title(run["id"], type(request).model_validate(first_request)))
             self.title_tasks.add(title_task)
             title_task.add_done_callback(self.title_tasks.discard)
         task = asyncio.create_task(self.execute(run["id"], request))
@@ -431,6 +434,7 @@ class RunManager:
 
     async def generate_title(self, rid, request):
         fallback = self.fallback_title(request)
+        complete = True
         try:
             selected = self.title_selection()
             provider, model = selected["title_provider"], selected["title_model"]
@@ -474,7 +478,8 @@ class RunManager:
         except Exception as error:
             log.warning("Unable to generate title for conversation %s: %s", request.conversation_id, self.redact(str(error)))
             title = fallback
-        if self.store.finish_title(request.conversation_id, title):
+            complete = False
+        if self.store.finish_title(request.conversation_id, title, complete=complete):
             try:
                 self.store.run(rid)
             except KeyError:
@@ -543,6 +548,12 @@ class RunManager:
                     emit,
                     timeout,
                 )
+            except asyncio.CancelledError:
+                self.store.event(rid, "command_done", dict(
+                    call_id=item["call_id"], index=index,
+                    elapsed=monotonic() - started, outcome={"type": "stopped"},
+                ))
+                raise
             except CommandTimeoutError as error:
                 self.store.event(
                     rid,
@@ -799,7 +810,8 @@ class RunManager:
         ]:
             if secret:
                 text = text.replace(secret, "[redacted]")
-        return text
+        # Provider errors may mask the middle of a key, defeating exact matching.
+        return re.sub(r"\bsk-(?:[A-Za-z0-9_*…-]|\.{2,})+", "[redacted]", text)
 
     async def execute(self, rid, request):
         sandbox = None
@@ -905,7 +917,14 @@ class RunManager:
                     "failed", "An operation timed out. Modified files remain.",
                 )
         except Exception as error:
-            message = self.redact(str(error))[:4000]
+            if isinstance(error, AuthenticationError):
+                message = (
+                    "OpenAI rejected the API key. Check OPENAI_API_KEY in .env and restart the backend, then retry."
+                    if request.provider == "openai" else
+                    "The provider rejected the credentials. Check this connection's API key and endpoint, then retry."
+                )
+            else:
+                message = self.redact(str(error))[:4000]
             self.store.event(rid, "error", dict(message=message))
             final_status, final_label = (
                 "failed",
@@ -962,7 +981,7 @@ class RunManager:
                 self.store.event(
                     rid,
                     "artifacts",
-                    dict(files=changed, label=f"{len(changed)} file changes"),
+                    dict(files=changed, label=f"{len(changed)} {'file' if len(changed) == 1 else 'files'} changed"),
                 )
             except OSError:
                 self.store.event(

@@ -3,7 +3,14 @@ name: guild-journal
 description: Create and update project overviews, next actions, tasks, and work journals as Markdown for the Orchestrator Guild Board. Use when asked to register a project or record project work or meeting results, not for general advice or unrequested record keeping.
 ---
 
-# ギルド記録
+# Guild Journal
+
+## Record language
+
+Write new record prose in the user's requested language, or the language of their request when unspecified. Preserve user-provided task wording, names, quotations, and existing records; do not translate them unless asked. The English templates below illustrate structure, and their placeholder prose must be replaced with supported facts in the user's language.
+
+For new English records use `Summary`, `Next action`, `Todo`, `In progress`, `Review`, `Waiting`, `Paused`, and `Done`. For new Japanese records the corresponding headings are `現在地`, `次の一手`, `未着手`, `進行中`, `確認待ち`, `待ち`, `保留`, and `完了`. For other languages use the English structural headings so the parser recognizes them, with prose in the user's language. When updating existing records, preserve their recognized headings and established language unless a translation is requested.
+
 
 作業対象Projectの `.chat-orchestrator/` を管理する。OrchestratorのサンドボックスではProjectのルートは `/workspace`。記録は元ファイルに保存され、ユーザーがGuild Boardの **Sync** を押すと画面へ反映される。
 
@@ -30,13 +37,13 @@ UTF-8の通常ファイルを使用する。専用フォルダや記録がシン
 ### overview.md
 
 ```markdown
-# プロジェクト名
+# Project name
 
-## 現在地
-確認できた進捗、成果、未解決の点を簡潔に記す。
+## Summary
+Briefly state verified progress, results, and unresolved matters in the user's language.
 
-## 次の一手
-次に行う作業や必要な判断を具体的に記す。
+## Next action
+State the next concrete action or required decision in the user's language.
 ```
 
 各節の先頭600文字までがカードに表示されるため、重要な内容を先に書く。画面のProject名はアプリの登録名であり、この見出しを書き換えても変更されない。
@@ -46,17 +53,17 @@ UTF-8の通常ファイルを使用する。専用フォルダや記録がシン
 ```markdown
 # TODO
 
-## 未着手
+## Todo
 
-## 進行中
+## In progress
 
-## 確認待ち
+## Review
 
-## 待ち
+## Waiting
 
-## 保留
+## Paused
 
-## 完了
+## Done
 ```
 
 タスクは該当する節の下に1行で `- [ ] タスク名` と書く。期限が明示されている場合だけ、末尾に `(due: YYYY-MM-DD)` を付ける。会話で確定した日付を使い、相対日付は会話のタイムゾーンに合わせる。日付を確定できない場合は期限を付けず、その旨を伝える。
