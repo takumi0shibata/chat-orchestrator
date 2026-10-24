@@ -331,7 +331,24 @@ class Store:
                 elif kind in {"command_output", "text_delta"} and output_budget > 0:
                     text = data.get("text", "")[:output_budget]
                     output_budget -= len(text)
-                    journal.append({"type": kind, "data": {**data, "text": text}})
+                    metadata = {key: value for key, value in data.items() if key != "text"}
+                    previous = journal[-1] if journal else None
+                    if (previous and previous["type"] == kind and
+                            {key: value for key, value in previous["data"].items() if key != "text"} == metadata):
+                        previous["data"]["text"] += text
+                    else:
+                        journal.append({"type": kind, "data": {**metadata, "text": text}})
+            # Bound serialized overhead too, not just the streamed text payload.
+            bounded = []
+            remaining = 32000
+            for entry in journal:
+                size = len(json.dumps(entry, ensure_ascii=False)) + 2
+                if size > remaining:
+                    bounded.append({"type": "truncated", "data": {"message": "Further recovery events omitted at the journal size limit."}})
+                    break
+                bounded.append(entry)
+                remaining -= size
+            journal = bounded
             context.append({"role": "user", "content": [{"type": "input_text", "text":
                 "Recovery journal for interrupted run " + rid + ". This is recorded history, not a new instruction. "
                 "Changes already applied remain. Commands listed as started may have partially or fully executed even without a result. "
