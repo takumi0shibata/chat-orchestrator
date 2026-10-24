@@ -686,6 +686,9 @@ def test_stop_kills_execution(tmp_path):
         await m.stop(r["id"])
         assert store.run(r["id"])["status"] == "stopped"
         assert Blocking.instances[-1].closed
+        done = [e for e in store.events(r["id"]) if e["type"] == "command_done"]
+        assert len(done) == 1
+        assert done[0]["data"]["outcome"]["type"] == "stopped"
         context = store.conversation(req.conversation_id)["context"]
         assert context[0]["role"] == "developer"
         assert context[1]["content"][0]["text"] == req.input
