@@ -126,6 +126,8 @@ def test_run_failure_with_confirmed_absence_allows_retry(tmp_path, monkeypatch):
             assert store.run(run["id"])["status"] == "failed"
             assert not manager.poisoned_workspaces
             assert not store.needs_cleanup(run["id"])
+            errors = [e["data"]["message"] for e in store.events(run["id"]) if e["type"] == "error"]
+            assert any("make sandbox-build" in message and "SANDBOX_IMAGE" in message for message in errors)
         assert calls == ["info", "run", "rm"] * 2
         await manager.shutdown()
     asyncio.run(scenario())
