@@ -410,11 +410,11 @@ class Store:
             )
         return bool(result.rowcount)
 
-    def finish_title(self, cid, title):
+    def finish_title(self, cid, title, *, complete=True):
         with self.connect() as c:
             result = c.execute(
-                "UPDATE conversations SET title=?,title_status='complete',updated_at=? WHERE id=?",
-                (title, now(), cid),
+                "UPDATE conversations SET title=?,title_status=?,updated_at=? WHERE id=?",
+                (title, "complete" if complete else "pending", now(), cid),
             )
         if result.rowcount:
             self.conversation_updates.publish()

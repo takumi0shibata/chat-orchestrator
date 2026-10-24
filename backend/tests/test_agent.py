@@ -686,6 +686,9 @@ def test_stop_kills_execution(tmp_path):
         await m.stop(r["id"])
         assert store.run(r["id"])["status"] == "stopped"
         assert Blocking.instances[-1].closed
+        done = [e for e in store.events(r["id"]) if e["type"] == "command_done"]
+        assert len(done) == 1
+        assert done[0]["data"]["outcome"]["type"] == "stopped"
         context = store.conversation(req.conversation_id)["context"]
         assert context[0]["role"] == "developer"
         assert context[1]["content"][0]["text"] == req.input
@@ -1741,4 +1744,58 @@ def test_storage_cleanup_waits_for_running_tasks(tmp_path):
         manager.tasks["running"].set_result(None)
         assert manager.prune_checkpoints(0)["removed_runs"] == 0
 
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('fragment', ['sk-proj-demo****tail', 'sk-demo...tail', 'sk-demo…tail', 'sk-proj-demo_123-tail'])
+def test_redact_key_fragments(tmp_path, fragment):
+    manager, _, _, _ = setup(tmp_path, [], checkpoints=False)
+    assert manager.redact(f'Incorrect API key provided: {fragment}. Try again.') == 'Incorrect API key provided: [redacted]. Try again.'
+    assert manager.redact('A task-related error') == 'A task-related error'
+
+
+def test_authentication_failure_has_actionable_message(tmp_path):
+    import httpx
+    from openai import AuthenticationError
+
+    async def scenario():
+        manager, store, client, request = setup(tmp_path, [], checkpoints=False)
+        async def rejected(**kwargs):
+            raise AuthenticationError('Incorrect API key provided: sk-demo****tail',
+                response=httpx.Response(401, request=httpx.Request('POST', 'https://example.invalid')),
+                body={'error': {'message': 'invalid key'}})
+        client.create = rejected
+        run = manager.start(request)
+        await manager.tasks[run['id']]
+        await manager.shutdown()
+        errors = [e['data']['message'] for e in store.events(run['id']) if e['type'] == 'error']
+        assert len(errors) == 1
+        assert 'OPENAI_API_KEY' in errors[0]
+        assert 'sk-demo' not in errors[0]
+        assert "{'error'" not in errors[0]
+    asyncio.run(scenario())
+
+
+def test_failed_title_is_retried_using_the_original_task(tmp_path):
+    async def scenario():
+        manager, store, client, request = setup(tmp_path, [[message()], [message()]], checkpoints=False)
+        original = client.create
+        titles = []
+        async def create(**kwargs):
+            if not kwargs.get('stream'):
+                titles.append(kwargs['input'])
+                if len(titles) == 1:
+                    raise RuntimeError('Temporary title failure')
+            return await original(**kwargs)
+        client.create = create
+        first = manager.start(request)
+        await manager.tasks[first['id']]
+        await asyncio.gather(*list(manager.title_tasks))
+        assert store.conversation(request.conversation_id)['title_status'] == 'pending'
+        second = manager.start(request.model_copy(update={'input': 'Thanks, continue'}))
+        await manager.tasks[second['id']]
+        await asyncio.gather(*list(manager.title_tasks))
+        assert titles == [request.input, request.input]
+        assert store.conversation(request.conversation_id)['title_status'] == 'complete'
+        await manager.shutdown()
     asyncio.run(scenario())
