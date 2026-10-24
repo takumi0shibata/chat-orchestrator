@@ -1774,3 +1774,28 @@ def test_authentication_failure_has_actionable_message(tmp_path):
         assert 'sk-demo' not in errors[0]
         assert "{'error'" not in errors[0]
     asyncio.run(scenario())
+
+
+def test_failed_title_is_retried_using_the_original_task(tmp_path):
+    async def scenario():
+        manager, store, client, request = setup(tmp_path, [[message()], [message()]], checkpoints=False)
+        original = client.create
+        titles = []
+        async def create(**kwargs):
+            if not kwargs.get('stream'):
+                titles.append(kwargs['input'])
+                if len(titles) == 1:
+                    raise RuntimeError('Temporary title failure')
+            return await original(**kwargs)
+        client.create = create
+        first = manager.start(request)
+        await manager.tasks[first['id']]
+        await asyncio.gather(*list(manager.title_tasks))
+        assert store.conversation(request.conversation_id)['title_status'] == 'pending'
+        second = manager.start(request.model_copy(update={'input': 'Thanks, continue'}))
+        await manager.tasks[second['id']]
+        await asyncio.gather(*list(manager.title_tasks))
+        assert titles == [request.input, request.input]
+        assert store.conversation(request.conversation_id)['title_status'] == 'complete'
+        await manager.shutdown()
+    asyncio.run(scenario())
