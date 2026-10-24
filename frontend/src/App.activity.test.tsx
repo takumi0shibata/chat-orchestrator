@@ -343,6 +343,7 @@ it("retains state on disconnect and accepts an authoritative snapshot after reco
 });
 
 it("ignores an older GET after SSE while still refreshing search after a mutation", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
   const state = setup({ completed: true, focused: false });
   render(<App />);
   await screen.findByRole("heading", { name: "First chat" });
@@ -391,4 +392,15 @@ it("aggregates unread and running together while prioritizing the spinner on cha
   expect(within(row).queryByRole("img", { name: "Unread result" })).not.toBeInTheDocument();
   fireEvent.click(beta);
   expect(screen.queryByRole("img", { name: "1 active chats" })).not.toBeInTheDocument();
+});
+
+
+it("leaves a selected chat removed by another window", async () => {
+  const state = setup({ completed: true });
+  render(<App />);
+  await screen.findByRole("heading", { name: "First chat" });
+  state.conversations.splice(0, 1);
+  await state.notify();
+  await waitFor(() => expect(screen.queryByRole("textbox", { name: "Message" })).not.toBeInTheDocument());
+  expect(localStorage.getItem("workspace-conversation")).not.toBe("a");
 });
