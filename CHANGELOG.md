@@ -22,6 +22,7 @@
 - Reworked the English README with setup, authentication, everyday workflows, safety limits, and troubleshooting. Standardized application-generated labels, messages, and audit drafts in English while preserving user content and existing records.
 
 ### Fixed
+- Name observed file changes that have no complete checkpoint backup and cannot be restored by Undo.
 - Clarify that dashboard run counts cover stored chats while API usage survives deletion and excludes unreported usage.
 - Explain how to build or configure a missing sandbox image instead of only suggesting a Docker retry.
 - Show provider setup guidance beside the composer when the selected connection cannot send messages.

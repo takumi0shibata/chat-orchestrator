@@ -2143,3 +2143,14 @@ it("explains provider setup when no provider is enabled", async () => {
   expect(await screen.findByText(/Set OPENAI_API_KEY in .env/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
 });
+
+
+it("names changed files excluded from Undo", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ available: true, files: [], skipped_count: 1, undo_available: false })));
+  render(<RunView run={run} timeline={[
+    event(1, "checkpoint", { name: "after" }),
+    event(2, "artifacts", { files: [{ path: "large.bin", change: "modified" }] }),
+  ]} onApproval={vi.fn()} />);
+  expect(await screen.findByText(/Changed files without a complete backup: large.bin/)).toHaveTextContent("Undo cannot restore");
+  expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+});
