@@ -543,6 +543,12 @@ class RunManager:
                     emit,
                     timeout,
                 )
+            except asyncio.CancelledError:
+                self.store.event(rid, "command_done", dict(
+                    call_id=item["call_id"], index=index,
+                    elapsed=monotonic() - started, outcome={"type": "stopped"},
+                ))
+                raise
             except CommandTimeoutError as error:
                 self.store.event(
                     rid,
