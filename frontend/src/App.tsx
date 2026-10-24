@@ -3037,6 +3037,7 @@ export function App() {
                 )}
               </div>
             </div>
+            {configReady && (!selectedProvider?.enabled || !selectedModel) && <p className="composer-note" role="status">This model provider is not connected or has no available models. Set OPENAI_API_KEY in .env and restart the backend, or sign in through Settings → General → ChatGPT connection and select ChatGPT. For Azure, check your configured deployment.</p>}
             {hasOtherConnections && <p className="composer-note">Start a new chat to use a model from a different connection.</p>}
             <p className="composer-note">Sandboxed: network access is disabled; only files in the mounted workspace can be modified.</p>
           </form>

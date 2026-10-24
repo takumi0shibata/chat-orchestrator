@@ -2102,3 +2102,13 @@ describe("new chat defaults, budget and storage settings", () => {
     expect(screen.getByRole("button", { name: "Delete unused attachments" })).toBeDisabled();
   });
 });
+
+
+it("explains provider setup when no provider is enabled", async () => {
+  mockUxApi((url) => url === "/api/config" ? new Response(JSON.stringify({
+    providers: [], workspaces: [{ id: "w", label: "Work", path: "/work" }], skills: [], resources: [], mcp_servers: [],
+  })) : undefined);
+  render(<App />);
+  expect(await screen.findByText(/Set OPENAI_API_KEY in .env/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+});
