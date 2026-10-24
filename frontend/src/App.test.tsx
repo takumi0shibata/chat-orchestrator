@@ -2166,3 +2166,14 @@ it("bounds initial file rendering and lets users reveal more", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Show more files (3900 remaining)" }));
   expect(container.querySelectorAll(".file-tree-file")).toHaveLength(200);
 });
+
+
+it("reuses an untouched new chat instead of creating another empty record", async () => {
+  const fresh = { ...uxConversation, title: "New chat" };
+  const fetchMock = mockUxApi((url) => url === "/api/conversations/c" ? new Response(JSON.stringify({ ...fresh, runs: [] })) : url === "/api/conversations" ? new Response(JSON.stringify([fresh])) : undefined);
+  render(<App />);
+  await screen.findByRole("textbox", { name: "Message" });
+  fireEvent.click(screen.getAllByRole("button", { name: "New chat" })[0]);
+  fireEvent.click(screen.getAllByRole("button", { name: "New chat" })[0]);
+  expect(fetchMock.mock.calls.filter(([url, options]) => url === "/api/conversations" && options?.method === "POST")).toHaveLength(0);
+});

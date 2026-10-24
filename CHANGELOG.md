@@ -22,6 +22,7 @@
 - Reworked the English README with setup, authentication, everyday workflows, safety limits, and troubleshooting. Standardized application-generated labels, messages, and audit drafts in English while preserving user content and existing records.
 
 ### Fixed
+- Reuse the currently selected untouched new chat instead of creating repeated empty chats in the same project.
 - Retry failed title generation on the next run using the original task while retaining the fallback title in the meantime.
 - Render large file-browser folders in batches of 100 with Show more, keeping all paths accessible.
 - Close cancelled shell-command activity with a stopped outcome and document unreported usage on interrupted requests.

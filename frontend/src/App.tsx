@@ -2177,7 +2177,12 @@ export function App() {
   }, []);
 
   async function newConversation(projectId = workspace) {
-    if (!projectId) return;
+    if (!projectId || busy) return;
+    if (newChat && current?.title === "New chat" && current.workspace_id === projectId && !input.trim() && !attachments.length && !skills.length && !resources.length && !mcps.length) {
+      setSettingsPage("chat");
+      messageInput.current?.focus();
+      return;
+    }
     setBusy(true);
     setError("");
     try {
