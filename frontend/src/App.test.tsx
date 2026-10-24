@@ -1502,6 +1502,7 @@ it("keeps old messages and their DOM across second and third sends, subscribing 
 });
 
 it("keeps the newly selected chat and its draft when a previous chat deletion finishes", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
   const other = { ...uxConversation, id: "other", title: "Other chat" };
   let deleted = false;
   let finishDelete!: (response: Response) => void;
@@ -1515,6 +1516,11 @@ it("keeps the newly selected chat and its draft when a previous chat deletion fi
   await screen.findByRole("heading", { name: "UX chat" });
   fireEvent.click(screen.getByRole("button", { name: "Delete UX chat" }));
   await waitFor(() => expect(fetchMock.mock.calls.some(([url, options]) => url === "/api/conversations/c" && options?.method === "DELETE")).toBe(true));
+  expect(screen.getByRole("button", { name: "Delete UX chat" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "UX chat" })).toBeDisabled();
+  expect(screen.getByRole("textbox", { name: "Message" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Delete UX chat" }));
+  expect(fetchMock.mock.calls.filter(([url, options]) => url === "/api/conversations/c" && options?.method === "DELETE")).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "Other chat" }));
   await screen.findByRole("heading", { name: "Other chat" });
   fireEvent.change(screen.getByRole("textbox", { name: "Message" }), { target: { value: "Keep this new draft" } });
@@ -1760,7 +1766,8 @@ describe("file edits and checkpoints", () => {
       throw new Error(url);
     });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    const { container } = render(<RunView run={run} timeline={[event(1, "checkpoint", { name: "after", files: 2 })]} onApproval={vi.fn()} />);
+    const onFilesChanged = vi.fn();
+    const { container } = render(<RunView run={run} timeline={[event(1, "checkpoint", { name: "after", files: 2 })]} onApproval={vi.fn()} onFilesChanged={onFilesChanged} />);
     expect(await screen.findByText("2 files changed")).toBeInTheDocument();
     expect(screen.getByText("1 file was not fully saved in both checkpoints. Undo will leave it unchanged.")).toBeInTheDocument();
     const details = container.querySelector(".run-changes li details") as HTMLDetailsElement;
@@ -1770,6 +1777,7 @@ describe("file edits and checkpoints", () => {
     expect(fetchMock.mock.calls.some(([url]) => String(url) === "/api/runs/r/diff?path=a.txt")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(await screen.findByText("Reverted")).toBeInTheDocument();
+    expect(onFilesChanged).toHaveBeenCalledTimes(1);
     expect(confirm).toHaveBeenCalledTimes(2);
     expect(confirm.mock.calls[1][0]).toContain("a.txt");
   });
@@ -2101,6 +2109,29 @@ describe("new chat defaults, budget and storage settings", () => {
     expect(await screen.findByText("Freed 1.0 KB.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete unused attachments" })).toBeDisabled();
   });
+});
+
+
+it("does not delete a chat when confirmation is cancelled", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(false);
+  const fetchMock = mockUxApi();
+  render(<App />);
+  await screen.findByRole("heading", { name: "UX chat" });
+  fireEvent.click(screen.getByRole("button", { name: "Delete UX chat" }));
+  expect(fetchMock.mock.calls.some(([, options]) => options?.method === "DELETE")).toBe(false);
+});
+
+
+it.each(["failed", "stopped"])("names the %s run outcome", (status) => {
+  render(<RunView run={{ ...run, status }} timeline={[]} onApproval={vi.fn()} />);
+  expect(screen.getByText(`${status === "failed" ? "Failed" : "Stopped"} after 5s`)).toBeInTheDocument();
+  expect(screen.queryByText("Worked for 5s")).not.toBeInTheDocument();
+});
+
+
+it("labels a run interrupted by a backend restart", () => {
+  render(<RunView run={{ ...run, status: "stopped" }} timeline={[event(1, "status", { status: "stopped", label: "Interrupted by a server restart. Check modified files." })]} onApproval={vi.fn()} />);
+  expect(screen.getByText("Interrupted after 5s")).toBeInTheDocument();
 });
 
 
