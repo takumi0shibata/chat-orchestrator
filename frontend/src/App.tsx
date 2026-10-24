@@ -1157,7 +1157,7 @@ interface ChangedFile { path: string; status: string; added: number | null; remo
 interface RunChangesState { available: boolean; reverted?: boolean; files: ChangedFile[]; skipped_count?: number; undo_available?: boolean; undo_warning?: string }
 
 /** Files changed by a finished run, with per-file diffs and checkpoint undo. */
-export function RunChanges({ runId, timeline }: { runId: string; timeline: AgentEvent[] }) {
+export function RunChanges({ runId, timeline, onFilesChanged }: { runId: string; timeline: AgentEvent[]; onFilesChanged?: () => void }) {
   const ready = timeline.some((event) => event.type === "checkpoint" && event.data.name === "after" && !event.data.error);
   const [state, setState] = useState<RunChangesState | null>(null);
   const [diffs, setDiffs] = useState<Record<string, string>>({});
@@ -1209,6 +1209,7 @@ export function RunChanges({ runId, timeline }: { runId: string; timeline: Agent
         const body = await response.json().catch(() => ({}));
         throw new Error(typeof body.detail === "string" ? body.detail : `Request failed (${response.status})`);
       }
+      onFilesChanged?.();
       setState(await api<RunChangesState>(`/runs/${runId}/changes`));
     } catch (e) {
       setError(String(e));
@@ -1363,10 +1364,12 @@ export function RunView({
   run,
   timeline,
   onApproval,
+  onFilesChanged,
 }: {
   run: Run;
   timeline: AgentEvent[];
   onApproval: (id: string, approve: boolean) => Promise<void>;
+  onFilesChanged?: () => void;
 }) {
   const [clock, setClock] = useState(Date.now());
   const [pending, setPending] = useState<string | null>(null);
@@ -1467,7 +1470,7 @@ export function RunView({
           <div className="answer-block" key={block.key}><MarkdownContent conversationId={run.conversation_id} content={block.content} /></div>
         ))}
         {assistantMessage && <CopyButton content={assistantMessage} tooltip="Copy response" />}
-        {terminal(run.status) && <RunChanges runId={run.id} timeline={timeline} />}
+        {terminal(run.status) && <RunChanges runId={run.id} timeline={timeline} onFilesChanged={onFilesChanged} />}
         {!terminal(run.status) &&
           approvals.map((e) => (
             <div className="approval" key={e.seq}>
@@ -2762,6 +2765,7 @@ export function App() {
             <div className="chat-column" ref={chatContent}>
               {runs.map((run) => (
                 <RunView
+                  onFilesChanged={() => { if (fileConversation.current === run.conversation_id) setFileRevision((value) => value + 1); }}
                   key={run.id}
                   run={run}
                   timeline={timelines[run.id] || []}
