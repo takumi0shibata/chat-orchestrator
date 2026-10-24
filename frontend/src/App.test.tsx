@@ -2102,3 +2102,15 @@ describe("new chat defaults, budget and storage settings", () => {
     expect(screen.getByRole("button", { name: "Delete unused attachments" })).toBeDisabled();
   });
 });
+
+
+it("bounds initial file rendering and lets users reveal more", async () => {
+  mockUxApi((url) => url.startsWith("/api/conversations/c/files") ? new Response(JSON.stringify(
+    Array.from({ length: 4000 }, (_, i) => ({ name: `item-${i}.txt`, path: `item-${i}.txt`, directory: false, size: 1 })),
+  )) : undefined);
+  const { container } = render(<App />);
+  await screen.findByRole("button", { name: "Show more files (3900 remaining)" });
+  expect(container.querySelectorAll(".file-tree-file")).toHaveLength(100);
+  fireEvent.click(screen.getByRole("button", { name: "Show more files (3900 remaining)" }));
+  expect(container.querySelectorAll(".file-tree-file")).toHaveLength(200);
+});

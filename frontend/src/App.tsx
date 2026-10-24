@@ -603,13 +603,15 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
   conversationId: string;
   depth?: number;
 }) {
+  const [visibleCount, setVisibleCount] = useState(100);
+  useEffect(() => setVisibleCount(100), [entries, conversationId]);
   function startDrag(event: ReactDragEvent<HTMLButtonElement>, entry: WorkspaceFile) {
     event.dataTransfer.effectAllowed = "copy";
     event.dataTransfer.setData(WORKSPACE_FILE_MIME, JSON.stringify({ conversationId, path: entry.path }));
   }
   return (
     <ul className={depth ? "file-tree file-tree-children" : "file-tree"}>
-      {entries.map((entry) => {
+      {entries.slice(0, visibleCount).map((entry) => {
         const isExpanded = expanded.includes(entry.path);
         if (!entry.directory) return (
           <li key={entry.path}>
@@ -644,6 +646,7 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
           </li>
         );
       })}
+      {entries.length > visibleCount && <li><button type="button" onClick={() => setVisibleCount((count) => count + 100)}>Show more files ({entries.length - visibleCount} remaining)</button></li>}
     </ul>
   );
 }
