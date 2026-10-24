@@ -1760,7 +1760,8 @@ describe("file edits and checkpoints", () => {
       throw new Error(url);
     });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    const { container } = render(<RunView run={run} timeline={[event(1, "checkpoint", { name: "after", files: 2 })]} onApproval={vi.fn()} />);
+    const onFilesChanged = vi.fn();
+    const { container } = render(<RunView run={run} timeline={[event(1, "checkpoint", { name: "after", files: 2 })]} onApproval={vi.fn()} onFilesChanged={onFilesChanged} />);
     expect(await screen.findByText("2 files changed")).toBeInTheDocument();
     expect(screen.getByText("1 file was not fully saved in both checkpoints. Undo will leave it unchanged.")).toBeInTheDocument();
     const details = container.querySelector(".run-changes li details") as HTMLDetailsElement;
@@ -1770,6 +1771,7 @@ describe("file edits and checkpoints", () => {
     expect(fetchMock.mock.calls.some(([url]) => String(url) === "/api/runs/r/diff?path=a.txt")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(await screen.findByText("Reverted")).toBeInTheDocument();
+    expect(onFilesChanged).toHaveBeenCalledTimes(1);
     expect(confirm).toHaveBeenCalledTimes(2);
     expect(confirm.mock.calls[1][0]).toContain("a.txt");
   });
