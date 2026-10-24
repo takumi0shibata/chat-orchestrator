@@ -22,6 +22,7 @@
 - Reworked the English README with setup, authentication, everyday workflows, safety limits, and troubleshooting. Standardized application-generated labels, messages, and audit drafts in English while preserving user content and existing records.
 
 ### Fixed
+- Show an inline error for unavailable result files instead of downloading a JSON error response.
 - Refresh the Files panel after a successful Undo.
 - Explain rejected provider credentials with setup guidance instead of exposing the SDK error representation.
 - Label failed and stopped runs explicitly instead of displaying the successful-work heading.
