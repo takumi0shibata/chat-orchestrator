@@ -2102,3 +2102,14 @@ describe("new chat defaults, budget and storage settings", () => {
     expect(screen.getByRole("button", { name: "Delete unused attachments" })).toBeDisabled();
   });
 });
+
+
+it("reuses an untouched new chat instead of creating another empty record", async () => {
+  const fresh = { ...uxConversation, title: "New chat" };
+  const fetchMock = mockUxApi((url) => url === "/api/conversations/c" ? new Response(JSON.stringify({ ...fresh, runs: [] })) : url === "/api/conversations" ? new Response(JSON.stringify([fresh])) : undefined);
+  render(<App />);
+  await screen.findByRole("textbox", { name: "Message" });
+  fireEvent.click(screen.getAllByRole("button", { name: "New chat" })[0]);
+  fireEvent.click(screen.getAllByRole("button", { name: "New chat" })[0]);
+  expect(fetchMock.mock.calls.filter(([url, options]) => url === "/api/conversations" && options?.method === "POST")).toHaveLength(0);
+});
