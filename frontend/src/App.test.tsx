@@ -2154,3 +2154,15 @@ it("names changed files excluded from Undo", async () => {
   expect(await screen.findByText(/Changed files without a complete backup: large.bin/)).toHaveTextContent("Undo cannot restore");
   expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
 });
+
+
+it("bounds initial file rendering and lets users reveal more", async () => {
+  mockUxApi((url) => url.startsWith("/api/conversations/c/files") ? new Response(JSON.stringify(
+    Array.from({ length: 4000 }, (_, i) => ({ name: `item-${i}.txt`, path: `item-${i}.txt`, directory: false, size: 1 })),
+  )) : undefined);
+  const { container } = render(<App />);
+  await screen.findByRole("button", { name: "Show more files (3900 remaining)" });
+  expect(container.querySelectorAll(".file-tree-file")).toHaveLength(100);
+  fireEvent.click(screen.getByRole("button", { name: "Show more files (3900 remaining)" }));
+  expect(container.querySelectorAll(".file-tree-file")).toHaveLength(200);
+});

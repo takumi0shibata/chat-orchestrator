@@ -22,6 +22,7 @@
 - Reworked the English README with setup, authentication, everyday workflows, safety limits, and troubleshooting. Standardized application-generated labels, messages, and audit drafts in English while preserving user content and existing records.
 
 ### Fixed
+- Render large file-browser folders in batches of 100 with Show more, keeping all paths accessible.
 - Close cancelled shell-command activity with a stopped outcome and document unreported usage on interrupted requests.
 - Name observed file changes that have no complete checkpoint backup and cannot be restored by Undo.
 - Clarify that dashboard run counts cover stored chats while API usage survives deletion and excludes unreported usage.
