@@ -211,6 +211,8 @@ export function UsageDashboard({ budget, refreshKey, labelFor, onSetBudget }: {
 
       <div className="cost-notes">
         <span>Estimated</span>
+        <span>Run counts cover stored chats; API usage and cost also include deleted chats.</span>
+        <span>Only usage returned by the provider is counted. Stopped requests may be missing.</span>
         <span>Tokens and cost exclude ChatGPT plan usage</span>
         <span>Tool fees excluded</span>
         <span>Budget uses UTC months</span>
