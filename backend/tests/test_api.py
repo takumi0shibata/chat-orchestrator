@@ -475,3 +475,21 @@ def test_workspace_download_disables_mime_sniffing(app_client):
     assert response.status_code == 200
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["content-disposition"].startswith("attachment;")
+
+
+def test_not_found_errors_do_not_add_python_quotes(app_client):
+    http, _, _ = app_client
+    response = http.get('/api/runs/missing')
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Run not found'
+
+
+def test_validation_errors_explain_field_without_echoing_input(app_client):
+    http, _, _ = app_client
+    response = http.post('/api/runs', json={'conversation_id': 'missing', 'input': 'x' * 1_000_001})
+    assert response.status_code == 422
+    detail = response.json()['detail'][0]
+    assert detail['loc'] == ['body', 'input']
+    assert '1000000' in detail['msg']
+    assert 'input' not in detail
+    assert len(response.content) < 1000
