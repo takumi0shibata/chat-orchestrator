@@ -962,7 +962,7 @@ class RunManager:
                 self.store.event(
                     rid,
                     "artifacts",
-                    dict(files=changed, label=f"{len(changed)} file changes"),
+                    dict(files=changed, label=f"{len(changed)} {'file' if len(changed) == 1 else 'files'} changed"),
                 )
             except OSError:
                 self.store.event(
