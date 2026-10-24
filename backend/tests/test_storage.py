@@ -290,3 +290,32 @@ def test_usage_dashboard_buckets_days_in_the_requested_zone(tmp_path):
     )
     assert by_day[tokyo_today.isoformat()]["runs"] == 1
     assert store.usage_dashboard(ZoneInfo("UTC"))["days"][0]["date"] == evening.date().isoformat()
+
+
+def test_interrupted_context_coalesces_streamed_text(tmp_path):
+    import json
+    store = Store(tmp_path)
+    cid = store.create_conversation('work')['id']
+    rid = store.create_run({'conversation_id': cid, 'input': 'Write a story', 'provider': 'openai', 'model': 'gpt-6-luna'})['id']
+    for _ in range(1000):
+        store.event(rid, 'text_delta', {'text': 'word ', 'item_id': 'message', 'round': 1})
+    store.status(rid, 'stopped', 'Stopped')
+    store.preserve_interrupted_context(rid)
+    context = store.conversation(cid)['context']
+    journal = context[-1]['content'][0]['text']
+    assert len(journal) < 7000
+    assert 'word ' * 1000 in journal
+    store.preserve_interrupted_context(rid)
+    assert store.conversation(cid)['context'] == context
+
+
+def test_interrupted_journal_bounds_nonstream_event_overhead(tmp_path):
+    store = Store(tmp_path)
+    cid = store.create_conversation('work')['id']
+    rid = store.create_run({'conversation_id': cid, 'input': 'Work', 'provider': 'openai', 'model': 'gpt-6-luna'})['id']
+    store.event(rid, 'tool_result', {'output': 'x' * 100000})
+    store.status(rid, 'failed', 'Failed')
+    store.preserve_interrupted_context(rid)
+    journal = store.conversation(cid)['context'][-1]['content'][0]['text']
+    assert len(journal) < 33000
+    assert 'journal size limit' in journal

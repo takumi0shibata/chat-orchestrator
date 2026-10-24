@@ -22,6 +22,7 @@
 - Reworked the English README with setup, authentication, everyday workflows, safety limits, and troubleshooting. Standardized application-generated labels, messages, and audit drafts in English while preserving user content and existing records.
 
 ### Fixed
+- Coalesce streamed recovery text and cap serialized journal size so stopped replies do not inflate later model context with per-token JSON.
 - Docker availability failures before container creation allow retry without restarting the backend. Startup cancellation, timeouts, and uncertain container removal still require confirmed cleanup and retain workspace protection when cleanup fails.
 
 ## [0.3.1] - 2026-10-22
