@@ -1744,6 +1744,13 @@ def test_storage_cleanup_waits_for_running_tasks(tmp_path):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize('fragment', ['sk-proj-demo****tail', 'sk-demo...tail', 'sk-demo…tail', 'sk-proj-demo_123-tail'])
+def test_redact_key_fragments(tmp_path, fragment):
+    manager, _, _, _ = setup(tmp_path, [], checkpoints=False)
+    assert manager.redact(f'Incorrect API key provided: {fragment}. Try again.') == 'Incorrect API key provided: [redacted]. Try again.'
+    assert manager.redact('A task-related error') == 'A task-related error'
+
+
 def test_authentication_failure_has_actionable_message(tmp_path):
     import httpx
     from openai import AuthenticationError
