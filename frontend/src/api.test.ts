@@ -28,3 +28,11 @@ it("decodes split UTF-8 NDJSON and a final unterminated line", async () => {
     expect.anything(),
   );
 });
+
+it("renders validation field errors", async () => {
+  const { api } = await import("./api");
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+    detail: [{ loc: ["body", "input"], msg: "String should have at most 1000000 characters", type: "string_too_long" }],
+  }), { status: 422 }));
+  await expect(api("/runs")).rejects.toThrow("input: String should have at most 1000000 characters");
+});

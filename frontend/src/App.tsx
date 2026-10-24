@@ -1526,6 +1526,8 @@ export function App() {
   const conversationRefresh = useRef<AbortController | null>(null);
   const readRequests = useRef(new Map<string, AbortController>());
   const pendingPins = useRef(new Map<string, boolean>());
+  const pendingDeletes = useRef(new Set<string>());
+  const [deletingIds, setDeletingIds] = useState<string[]>([]);
   const readRetryTimer = useRef<ReturnType<typeof setTimeout>>();
   const [readRetry, setReadRetry] = useState(0);
   const [foreground, setForeground] = useState(() => document.visibilityState === "visible" && document.hasFocus());
@@ -1639,6 +1641,7 @@ export function App() {
   const missingRunIds = [current?.active_run?.id, current?.latest_finished_run?.id]
     .filter((id) => id && !runs.some((run) => run.id === id)).join(",");
   const active = Boolean(activeRun);
+  const deletingCurrent = deletingIds.includes(cid);
   const selectedProvider = config?.providers.find((p) => p.id === provider);
   const configReady = Boolean(config);
   const providerModels = selectedProvider?.models || [];
@@ -1656,11 +1659,11 @@ export function App() {
   const activeSkillOption = Math.min(skillOption, Math.max(0, skillMatches.length - 1));
   const canSend = Boolean(
     selectedProvider?.enabled && selectedModel && cid && loadedCid === cid &&
-    !busy && !active && (input.trim() || attachments.length),
+    !busy && !active && !deletingCurrent && (input.trim() || attachments.length),
   );
   // A chat without runs starts with the composer centered; it settles at the bottom once a run exists.
   const newChat = Boolean(cid && loadedCid === cid && runs.length === 0 && !activeRun);
-  const canDropFiles = Boolean(settingsPage === "chat" && cid && loadedCid === cid && !busy && !active);
+  const canDropFiles = Boolean(settingsPage === "chat" && cid && loadedCid === cid && !busy && !active && !deletingCurrent);
   const displayedConversations = query.trim() ? searchResults || [] : conversations;
   const sortedConversations = (items: Conversation[]) => [...items].sort(
     (a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id),
@@ -1699,6 +1702,7 @@ export function App() {
   }
 
   function selectConversation(conversation: Conversation) {
+    if (pendingDeletes.current.has(conversation.id)) return;
     setSettingsPage("chat");
     rememberProject(conversation.workspace_id);
     setCid(conversation.id);
@@ -1763,6 +1767,10 @@ export function App() {
     for (const controller of readRequests.current.values()) controller.abort();
     readRequests.current.clear();
   }, []);
+
+  useEffect(() => {
+    if (cid && loadedCid === cid && !current && !busy) setCid("");
+  }, [cid, loadedCid, current, busy]);
 
   // Only acknowledge a result after its terminal event has actually been rendered.
   useEffect(() => {
@@ -2232,7 +2240,7 @@ export function App() {
   }
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (!canSend) return;
+    if (!canSend || pendingDeletes.current.has(cid)) return;
     setError("");
     setBusy(true);
     const submittingCid = cid;
@@ -2432,6 +2440,12 @@ export function App() {
     void upload(droppedFiles(event));
   }
   async function removeConversation(id: string) {
+    if (pendingDeletes.current.has(id)) return;
+    const title = conversations.find((item) => item.id === id)?.title || "this chat";
+    if (!window.confirm(`Delete "${title}"? Chat history will be permanently deleted. Project files will remain.`)) return;
+    pendingDeletes.current.add(id);
+    setDeletingIds([...pendingDeletes.current]);
+    setError("");
     try {
       await api(`/conversations/${id}`, { method: "DELETE" });
       setDrafts((old) => {
@@ -2439,10 +2453,13 @@ export function App() {
         delete next[id];
         return next;
       });
-      await refreshConversations();
       setCid((current) => current === id ? "" : current);
+      await refreshConversations();
     } catch (e) {
       setError(String(e));
+    } finally {
+      pendingDeletes.current.delete(id);
+      setDeletingIds([...pendingDeletes.current]);
     }
   }
 
@@ -2484,11 +2501,11 @@ export function App() {
     conversation = conversations.find((item) => item.id === conversation.id) || conversation;
     return (
       <div className={`conversation ${nested ? "nested" : ""} ${conversation.id === cid ? "selected" : ""}`} key={conversation.id}>
-        <button className="history-title" disabled={busy} onClick={() => selectConversation(conversation)} aria-label={conversation.title}>
-          <span className="history-title-text">{conversation.title}</span><ConversationIndicator conversation={conversation} />
+        <button className="history-title" disabled={busy || deletingIds.includes(conversation.id)} onClick={() => selectConversation(conversation)} aria-label={conversation.title}>
+          <span className="history-title-text">{conversation.title}</span>{deletingIds.includes(conversation.id) && <small role="status">Deleting…</small>}<ConversationIndicator conversation={conversation} />
         </button>
-        <button className="history-action pin" title={conversation.pinned ? "Unpin chat" : "Pin chat"} aria-label={`${conversation.pinned ? "Unpin" : "Pin"} ${conversation.title}`} aria-pressed={Boolean(conversation.pinned)} disabled={pinPending.includes(conversation.id)} onClick={() => void togglePin(conversation)}><Icon name="pin" size={14} /></button>
-        <button className="history-action delete" title="Delete chat" aria-label={`Delete ${conversation.title}`} disabled={busy || pinPending.includes(conversation.id) || Boolean(conversation.active_run) || (conversation.id === cid && active)} onClick={() => void removeConversation(conversation.id)}><Icon name="close" size={14} /></button>
+        <button className="history-action pin" title={conversation.pinned ? "Unpin chat" : "Pin chat"} aria-label={`${conversation.pinned ? "Unpin" : "Pin"} ${conversation.title}`} aria-pressed={Boolean(conversation.pinned)} disabled={pinPending.includes(conversation.id) || deletingIds.includes(conversation.id)} onClick={() => void togglePin(conversation)}><Icon name="pin" size={14} /></button>
+        <button className="history-action delete" title="Delete chat" aria-label={`Delete ${conversation.title}`} disabled={busy || deletingIds.includes(conversation.id) || pinPending.includes(conversation.id) || Boolean(conversation.active_run) || (conversation.id === cid && active)} onClick={() => void removeConversation(conversation.id)}><Icon name="close" size={14} /></button>
       </div>
     );
   }
@@ -2868,7 +2885,7 @@ export function App() {
                 }}
                 onSelect={(e) => updateSkillMention(e.currentTarget.value, e.currentTarget.selectionStart)}
                 onKeyDown={handleComposerKeyDown}
-                disabled={busy || active}
+                disabled={busy || active || deletingCurrent}
                 rows={3}
               />
               {draggingPath && <span className="path-drop-hint" role="status">Drop to insert relative path</span>}
