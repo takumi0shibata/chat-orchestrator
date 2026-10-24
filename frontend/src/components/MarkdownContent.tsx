@@ -1,10 +1,32 @@
-import { MouseEvent } from "react";
+import { MouseEvent, useState } from "react";
 
 import { markdownToHtml } from "../lib/markdown";
 
 export function MarkdownContent({ content, conversationId }: { content: string; conversationId?: string }) {
+  const [downloadError, setDownloadError] = useState("");
   const onClick = async (event: MouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
+    const link = target.closest<HTMLAnchorElement>("a[download]");
+    const href = link?.getAttribute("href") || "";
+    if (conversationId && href.startsWith(`/api/conversations/${encodeURIComponent(conversationId)}/download?`)) {
+      event.preventDefault();
+      setDownloadError("");
+      try {
+        const response = await fetch(href);
+        if (!response.ok) throw new Error("This file is unavailable. It may have been moved or deleted.");
+        const url = URL.createObjectURL(await response.blob());
+        const save = document.createElement("a");
+        save.href = url;
+        save.download = new URL(href, window.location.href).searchParams.get("path")?.split("/").pop() || "download";
+        document.body.appendChild(save);
+        save.click();
+        save.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (error) {
+        setDownloadError(error instanceof Error ? error.message : "Could not download this file. Please retry.");
+      }
+      return;
+    }
     const button = target.closest<HTMLButtonElement>("[data-copy-btn='1']");
     if (!button) return;
 
@@ -37,5 +59,5 @@ export function MarkdownContent({ content, conversationId }: { content: string; 
     }
   };
 
-  return <div className="markdown" onClick={onClick} dangerouslySetInnerHTML={{ __html: markdownToHtml(content, conversationId) }} />;
+  return <><div className="markdown" onClick={onClick} dangerouslySetInnerHTML={{ __html: markdownToHtml(content, conversationId) }} />{downloadError && <p role="alert" className="error">{downloadError}</p>}</>;
 }
