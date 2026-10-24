@@ -2177,3 +2177,15 @@ it("reuses an untouched new chat instead of creating another empty record", asyn
   fireEvent.click(screen.getAllByRole("button", { name: "New chat" })[0]);
   expect(fetchMock.mock.calls.filter(([url, options]) => url === "/api/conversations" && options?.method === "POST")).toHaveLength(0);
 });
+
+
+it("rejects oversized attachments before uploading", async () => {
+  const fetchMock = mockUxApi((url) => url === "/api/config" ? new Response(JSON.stringify({
+    providers: [], workspaces: [{ id: "w", label: "Work", path: "/work" }], skills: [], resources: [], mcp_servers: [], max_upload_bytes: 2,
+  })) : undefined);
+  const { container } = render(<App />);
+  await screen.findByRole("textbox", { name: "Message" });
+  fireEvent.drop(container.querySelector(".main")!, { dataTransfer: { types: ["Files"], files: [new File(["abc"], "large.txt")], items: [] } });
+  expect(await screen.findByText(/Each attachment must be 2 bytes or smaller/)).toBeInTheDocument();
+  expect(fetchMock.mock.calls.some(([url]) => url === "/api/attachments")).toBe(false);
+});

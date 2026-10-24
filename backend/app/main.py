@@ -196,6 +196,7 @@ def create_app(settings=None, manager_factory=RunManager):
             resources=[dict(id=r.id, label=r.label) for r in c.resources],
             mcp_servers=[dict(id=m.id, label=m.label) for m in c.mcp_servers],
             compact_token_threshold=settings.compact_token_threshold,
+            max_upload_bytes=settings.max_upload_bytes,
         )
 
     def chatgpt_idle():
