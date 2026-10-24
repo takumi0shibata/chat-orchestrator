@@ -22,6 +22,7 @@
 - Reworked the English README with setup, authentication, everyday workflows, safety limits, and troubleshooting. Standardized application-generated labels, messages, and audit drafts in English while preserving user content and existing records.
 
 ### Fixed
+- Label failed and stopped runs explicitly instead of displaying the successful-work heading.
 - Confirm chat deletion, prevent duplicate deletion and editing while it is pending, and leave chats removed in another window.
 - Redact masked OpenAI key fragments from provider errors in logs and run events.
 - Return readable API validation and missing-resource errors without Python quotes or echoed request contents.

@@ -1441,7 +1441,7 @@ export function RunView({
             setActivityOpen((open) => !open);
           }}>
             <span className="activity-label" role={terminal(run.status) ? undefined : "status"}>
-              {terminal(run.status) ? "Worked" : "Working"} for {elapsedLabel(seconds)}
+              {run.status === "failed" ? "Failed after" : run.status === "stopped" ? (timeline.some((event) => event.type === "status" && text(event.data.label).startsWith("Interrupted by")) ? "Interrupted after" : "Stopped after") : run.status === "completed" ? "Worked for" : "Working for"} {elapsedLabel(seconds)}
             </span>
             <span className="activity-chevron" aria-hidden="true"><Icon name="chevron-right" size={15} /></span>
           </summary>

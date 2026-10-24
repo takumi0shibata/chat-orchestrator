@@ -2118,3 +2118,16 @@ it("does not delete a chat when confirmation is cancelled", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Delete UX chat" }));
   expect(fetchMock.mock.calls.some(([, options]) => options?.method === "DELETE")).toBe(false);
 });
+
+
+it.each(["failed", "stopped"])("names the %s run outcome", (status) => {
+  render(<RunView run={{ ...run, status }} timeline={[]} onApproval={vi.fn()} />);
+  expect(screen.getByText(`${status === "failed" ? "Failed" : "Stopped"} after 5s`)).toBeInTheDocument();
+  expect(screen.queryByText("Worked for 5s")).not.toBeInTheDocument();
+});
+
+
+it("labels a run interrupted by a backend restart", () => {
+  render(<RunView run={{ ...run, status: "stopped" }} timeline={[event(1, "status", { status: "stopped", label: "Interrupted by a server restart. Check modified files." })]} onApproval={vi.fn()} />);
+  expect(screen.getByText("Interrupted after 5s")).toBeInTheDocument();
+});
