@@ -1198,7 +1198,7 @@ export function RunChanges({ runId, timeline, onFilesChanged }: { runId: string;
     }
   }
   async function revert() {
-    if (!window.confirm(`Undo this run's changes to ${state!.files.length} files?`)) return;
+    if (!window.confirm(`Undo this run's changes to ${state!.files.length} ${state!.files.length === 1 ? 'file' : 'files'}?`)) return;
     setBusy(true);
     setError("");
     try {
