@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MarkdownContent } from "./MarkdownContent";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("MarkdownContent", () => {
   it("renders saved artifact links and completes streamed equations", () => {
@@ -47,4 +49,13 @@ describe("MarkdownContent", () => {
 
     expect(await screen.findByRole("button", { name: "Copy failed" })).toHaveAttribute("data-state", "failed");
   });
+});
+
+
+it("shows a missing result file error without downloading the error body", async () => {
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ detail: "Invalid or unavailable file" }), { status: 400 }));
+  render(<MarkdownContent conversationId="c" content="[Result](sandbox:/workspace/missing.txt)" />);
+  fireEvent.click(screen.getByRole("link", { name: "Result" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("may have been moved or deleted");
+  expect(fetchMock).toHaveBeenCalledWith("/api/conversations/c/download?path=missing.txt");
 });

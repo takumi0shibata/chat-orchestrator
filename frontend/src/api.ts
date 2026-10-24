@@ -18,6 +18,9 @@ export async function api<T>(
     throw new Error(
       typeof body.detail === "string"
         ? body.detail
+        : Array.isArray(body.detail)
+        ? body.detail.map((item: { loc?: unknown[]; msg?: string }) =>
+          `${(item.loc || []).filter((part) => part !== "body").join(".")}: ${item.msg || "Invalid value"}`).join("; ")
         : `Request failed (${response.status})`,
     );
   }

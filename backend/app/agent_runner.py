@@ -10,6 +10,8 @@ import stat
 from datetime import datetime, timedelta, timezone
 from time import monotonic
 
+from openai import AuthenticationError
+
 from app.attachments import direct_input, file_snapshot
 from app.checkpoints import CheckpointCancelled, Checkpoints, IncompleteCheckpoint
 from app.workspace_watch import FSEventsWatcher
@@ -546,6 +548,12 @@ class RunManager:
                     emit,
                     timeout,
                 )
+            except asyncio.CancelledError:
+                self.store.event(rid, "command_done", dict(
+                    call_id=item["call_id"], index=index,
+                    elapsed=monotonic() - started, outcome={"type": "stopped"},
+                ))
+                raise
             except CommandTimeoutError as error:
                 self.store.event(
                     rid,
@@ -802,7 +810,8 @@ class RunManager:
         ]:
             if secret:
                 text = text.replace(secret, "[redacted]")
-        return text
+        # Provider errors may mask the middle of a key, defeating exact matching.
+        return re.sub(r"\bsk-(?:[A-Za-z0-9_*…-]|\.{2,})+", "[redacted]", text)
 
     async def execute(self, rid, request):
         sandbox = None
@@ -908,7 +917,14 @@ class RunManager:
                     "failed", "An operation timed out. Modified files remain.",
                 )
         except Exception as error:
-            message = self.redact(str(error))[:4000]
+            if isinstance(error, AuthenticationError):
+                message = (
+                    "OpenAI rejected the API key. Check OPENAI_API_KEY in .env and restart the backend, then retry."
+                    if request.provider == "openai" else
+                    "The provider rejected the credentials. Check this connection's API key and endpoint, then retry."
+                )
+            else:
+                message = self.redact(str(error))[:4000]
             self.store.event(rid, "error", dict(message=message))
             final_status, final_label = (
                 "failed",

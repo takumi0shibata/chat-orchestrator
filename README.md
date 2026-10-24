@@ -153,7 +153,7 @@ Open **Audit** beside a project to view its charter, findings, and reports. Acti
 
 ### Settings and usage
 
-Settings opens on **Dashboard**. It shows monthly estimated spending, budget usage and pace, token totals, cache hit rates, model breakdowns, and a daily activity grid. Activity dates use the browser's timezone; budget months use UTC. ChatGPT plan tokens and tool fees are excluded from the API-cost ledger. A budget notice does not block runs.
+Settings opens on **Dashboard**. It shows monthly estimated spending, budget usage and pace, token totals, cache hit rates, model breakdowns, and a daily activity grid. Activity dates use the browser's timezone; budget months use UTC. ChatGPT plan tokens and tool fees are excluded from the API-cost ledger. A budget notice does not block runs. Only token usage returned by the provider is recorded; interrupted or stopped requests may have incurred costs that are absent from this dashboard. The app does not invent token counts when the provider returns none.
 
 The **General** tab contains the title model, new-chat defaults, ChatGPT connection, monthly budget, cost history, storage, and theme color. The interface follows the operating system's light or dark appearance.
 
