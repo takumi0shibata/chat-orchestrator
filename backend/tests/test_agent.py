@@ -1742,3 +1742,25 @@ def test_storage_cleanup_waits_for_running_tasks(tmp_path):
         assert manager.prune_checkpoints(0)["removed_runs"] == 0
 
     asyncio.run(scenario())
+
+
+def test_authentication_failure_has_actionable_message(tmp_path):
+    import httpx
+    from openai import AuthenticationError
+
+    async def scenario():
+        manager, store, client, request = setup(tmp_path, [], checkpoints=False)
+        async def rejected(**kwargs):
+            raise AuthenticationError('Incorrect API key provided: sk-demo****tail',
+                response=httpx.Response(401, request=httpx.Request('POST', 'https://example.invalid')),
+                body={'error': {'message': 'invalid key'}})
+        client.create = rejected
+        run = manager.start(request)
+        await manager.tasks[run['id']]
+        await manager.shutdown()
+        errors = [e['data']['message'] for e in store.events(run['id']) if e['type'] == 'error']
+        assert len(errors) == 1
+        assert 'OPENAI_API_KEY' in errors[0]
+        assert 'sk-demo' not in errors[0]
+        assert "{'error'" not in errors[0]
+    asyncio.run(scenario())
