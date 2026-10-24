@@ -465,3 +465,13 @@ def test_file_listing_has_no_gitignore_decoration(app_client):
     assert {e["name"]: set(e) for e in response.json()} == {
         name: {"name", "path", "directory", "size"} for name in (".gitignore", "generated")
     }
+
+
+def test_workspace_download_disables_mime_sniffing(app_client):
+    http, work, _ = app_client
+    (work / "page.html").write_text("<script>alert(1)</script>")
+    cid = http.post("/api/conversations", json={"workspace_id": "work"}).json()["id"]
+    response = http.get(f"/api/conversations/{cid}/download", params={"path": "page.html"})
+    assert response.status_code == 200
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["content-disposition"].startswith("attachment;")
