@@ -19,7 +19,7 @@ def test_cancel_during_docker_run_still_removes_created_container(tmp_path, monk
                 await asyncio.Future()
             elif args[0] == 'rm':
                 created = False
-            return ''
+            return '26.1.5' if args[0] == 'info' else ''
         monkeypatch.setattr('app.sandbox.docker', docker)
         run = manager.start(request)
         await asyncio.wait_for(entered.wait(), 3)
@@ -42,7 +42,7 @@ def test_partial_start_timeout_and_failed_removal_remain_blocked(tmp_path, monke
                 raise TimeoutError('Docker run timed out after creating container')
             if args[0] == 'rm':
                 raise RuntimeError('Removal cannot be confirmed')
-            return ''
+            return '26.1.5' if args[0] == 'info' else ''
         monkeypatch.setattr('app.sandbox.docker', docker)
         run = manager.start(request)
         await manager.tasks[run['id']]
@@ -65,7 +65,7 @@ def test_preflight_failure_allows_retry_and_recovery(tmp_path, monkeypatch, fail
             calls.append(args[0])
             if args[0] == "info" and not available:
                 raise failure
-            return ""
+            return "26.1.5" if args[0] == "info" else ""
         monkeypatch.setattr("app.sandbox.docker", docker)
         try:
             for _ in range(2):
@@ -118,7 +118,7 @@ def test_run_failure_with_confirmed_absence_allows_retry(tmp_path, monkeypatch):
                 raise RuntimeError("No such image")
             if args[0] == "rm":
                 raise RuntimeError("No such container")
-            return ""
+            return "26.1.5" if args[0] == "info" else ""
         monkeypatch.setattr("app.sandbox.docker", docker)
         for _ in range(2):
             run = manager.start(request)
@@ -128,4 +128,30 @@ def test_run_failure_with_confirmed_absence_allows_retry(tmp_path, monkeypatch):
             assert not store.needs_cleanup(run["id"])
         assert calls == ["info", "run", "rm"] * 2
         await manager.shutdown()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("version", ["", "   "])
+def test_empty_server_version_preflight_allows_retry(tmp_path, monkeypatch, version):
+    async def scenario():
+        manager, store, _, request = setup(tmp_path, [[message()]], sandbox=Sandbox, checkpoints=False)
+        available = False
+        calls = []
+        async def docker(*args, **kwargs):
+            calls.append(args[0])
+            return ("26.1.5" if available else version) if args[0] == "info" else ""
+        monkeypatch.setattr("app.sandbox.docker", docker)
+        try:
+            failed = manager.start(request)
+            await manager.tasks[failed["id"]]
+            assert store.run(failed["id"])["status"] == "failed"
+            assert calls == ["info"]
+            assert not manager.poisoned_workspaces
+            assert not store.needs_cleanup(failed["id"])
+            available = True
+            retry = manager.start(request)
+            await manager.tasks[retry["id"]]
+            assert store.run(retry["id"])["status"] == "completed"
+        finally:
+            await manager.shutdown()
     asyncio.run(scenario())
