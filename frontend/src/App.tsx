@@ -603,13 +603,15 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
   conversationId: string;
   depth?: number;
 }) {
+  const [visibleCount, setVisibleCount] = useState(100);
+  useEffect(() => setVisibleCount(100), [entries, conversationId]);
   function startDrag(event: ReactDragEvent<HTMLButtonElement>, entry: WorkspaceFile) {
     event.dataTransfer.effectAllowed = "copy";
     event.dataTransfer.setData(WORKSPACE_FILE_MIME, JSON.stringify({ conversationId, path: entry.path }));
   }
   return (
     <ul className={depth ? "file-tree file-tree-children" : "file-tree"}>
-      {entries.map((entry) => {
+      {entries.slice(0, visibleCount).map((entry) => {
         const isExpanded = expanded.includes(entry.path);
         if (!entry.directory) return (
           <li key={entry.path}>
@@ -644,6 +646,7 @@ function FileTree({ entries, childrenByPath, expanded, loading, errors, onToggle
           </li>
         );
       })}
+      {entries.length > visibleCount && <li><button type="button" onClick={() => setVisibleCount((count) => count + 100)}>Show more files ({entries.length - visibleCount} remaining)</button></li>}
     </ul>
   );
 }
@@ -1157,7 +1160,7 @@ interface ChangedFile { path: string; status: string; added: number | null; remo
 interface RunChangesState { available: boolean; reverted?: boolean; files: ChangedFile[]; skipped_count?: number; undo_available?: boolean; undo_warning?: string }
 
 /** Files changed by a finished run, with per-file diffs and checkpoint undo. */
-export function RunChanges({ runId, timeline }: { runId: string; timeline: AgentEvent[] }) {
+export function RunChanges({ runId, timeline, onFilesChanged }: { runId: string; timeline: AgentEvent[]; onFilesChanged?: () => void }) {
   const ready = timeline.some((event) => event.type === "checkpoint" && event.data.name === "after" && !event.data.error);
   const [state, setState] = useState<RunChangesState | null>(null);
   const [diffs, setDiffs] = useState<Record<string, string>>({});
@@ -1171,7 +1174,12 @@ export function RunChanges({ runId, timeline }: { runId: string; timeline: Agent
     return () => { cancelled = true; };
   }, [ready, runId]);
   if (!ready || !state?.available || (state.files.length === 0 && !state.skipped_count && !state.undo_warning)) return error ? <p role="alert" className="error">{error}</p> : null;
+  const unbackedChanges = state.skipped_count ? timeline
+    .filter((event) => event.type === "artifacts")
+    .flatMap((event) => Array.isArray(event.data.files) ? event.data.files as { path: string }[] : [])
+    .filter((file) => !state.files.some((covered) => covered.path === file.path)) : [];
   const warnings = <>
+    {unbackedChanges.length > 0 && <p className="run-changes-note" role="status">Changed files without a complete backup: {[...new Set(unbackedChanges.map((file) => file.path))].join(", ")}. Undo cannot restore these files.</p>}
     {Boolean(state.skipped_count) && (
       <small className="run-changes-note" role="status">{state.skipped_count} {state.skipped_count === 1 ? "file was" : "files were"} not fully saved in both checkpoints. Undo will leave {state.skipped_count === 1 ? "it" : "them"} unchanged.</small>
     )}
@@ -1209,6 +1217,7 @@ export function RunChanges({ runId, timeline }: { runId: string; timeline: Agent
         const body = await response.json().catch(() => ({}));
         throw new Error(typeof body.detail === "string" ? body.detail : `Request failed (${response.status})`);
       }
+      onFilesChanged?.();
       setState(await api<RunChangesState>(`/runs/${runId}/changes`));
     } catch (e) {
       setError(String(e));
@@ -1363,10 +1372,12 @@ export function RunView({
   run,
   timeline,
   onApproval,
+  onFilesChanged,
 }: {
   run: Run;
   timeline: AgentEvent[];
   onApproval: (id: string, approve: boolean) => Promise<void>;
+  onFilesChanged?: () => void;
 }) {
   const [clock, setClock] = useState(Date.now());
   const [pending, setPending] = useState<string | null>(null);
@@ -1441,7 +1452,7 @@ export function RunView({
             setActivityOpen((open) => !open);
           }}>
             <span className="activity-label" role={terminal(run.status) ? undefined : "status"}>
-              {terminal(run.status) ? "Worked" : "Working"} for {elapsedLabel(seconds)}
+              {run.status === "failed" ? "Failed after" : run.status === "stopped" ? (timeline.some((event) => event.type === "status" && text(event.data.label).startsWith("Interrupted by")) ? "Interrupted after" : "Stopped after") : run.status === "completed" ? "Worked for" : "Working for"} {elapsedLabel(seconds)}
             </span>
             <span className="activity-chevron" aria-hidden="true"><Icon name="chevron-right" size={15} /></span>
           </summary>
@@ -1467,7 +1478,7 @@ export function RunView({
           <div className="answer-block" key={block.key}><MarkdownContent conversationId={run.conversation_id} content={block.content} /></div>
         ))}
         {assistantMessage && <CopyButton content={assistantMessage} tooltip="Copy response" />}
-        {terminal(run.status) && <RunChanges runId={run.id} timeline={timeline} />}
+        {terminal(run.status) && <RunChanges runId={run.id} timeline={timeline} onFilesChanged={onFilesChanged} />}
         {!terminal(run.status) &&
           approvals.map((e) => (
             <div className="approval" key={e.seq}>
@@ -1526,6 +1537,8 @@ export function App() {
   const conversationRefresh = useRef<AbortController | null>(null);
   const readRequests = useRef(new Map<string, AbortController>());
   const pendingPins = useRef(new Map<string, boolean>());
+  const pendingDeletes = useRef(new Set<string>());
+  const [deletingIds, setDeletingIds] = useState<string[]>([]);
   const readRetryTimer = useRef<ReturnType<typeof setTimeout>>();
   const [readRetry, setReadRetry] = useState(0);
   const [foreground, setForeground] = useState(() => document.visibilityState === "visible" && document.hasFocus());
@@ -1639,6 +1652,7 @@ export function App() {
   const missingRunIds = [current?.active_run?.id, current?.latest_finished_run?.id]
     .filter((id) => id && !runs.some((run) => run.id === id)).join(",");
   const active = Boolean(activeRun);
+  const deletingCurrent = deletingIds.includes(cid);
   const selectedProvider = config?.providers.find((p) => p.id === provider);
   const configReady = Boolean(config);
   const providerModels = selectedProvider?.models || [];
@@ -1656,11 +1670,11 @@ export function App() {
   const activeSkillOption = Math.min(skillOption, Math.max(0, skillMatches.length - 1));
   const canSend = Boolean(
     selectedProvider?.enabled && selectedModel && cid && loadedCid === cid &&
-    !busy && !active && (input.trim() || attachments.length),
+    !busy && !active && !deletingCurrent && (input.trim() || attachments.length),
   );
   // A chat without runs starts with the composer centered; it settles at the bottom once a run exists.
   const newChat = Boolean(cid && loadedCid === cid && runs.length === 0 && !activeRun);
-  const canDropFiles = Boolean(settingsPage === "chat" && cid && loadedCid === cid && !busy && !active);
+  const canDropFiles = Boolean(settingsPage === "chat" && cid && loadedCid === cid && !busy && !active && !deletingCurrent);
   const displayedConversations = query.trim() ? searchResults || [] : conversations;
   const sortedConversations = (items: Conversation[]) => [...items].sort(
     (a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id),
@@ -1699,6 +1713,7 @@ export function App() {
   }
 
   function selectConversation(conversation: Conversation) {
+    if (pendingDeletes.current.has(conversation.id)) return;
     setSettingsPage("chat");
     rememberProject(conversation.workspace_id);
     setCid(conversation.id);
@@ -1763,6 +1778,10 @@ export function App() {
     for (const controller of readRequests.current.values()) controller.abort();
     readRequests.current.clear();
   }, []);
+
+  useEffect(() => {
+    if (cid && loadedCid === cid && !current && !busy) setCid("");
+  }, [cid, loadedCid, current, busy]);
 
   // Only acknowledge a result after its terminal event has actually been rendered.
   useEffect(() => {
@@ -2237,7 +2256,7 @@ export function App() {
   }
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (!canSend) return;
+    if (!canSend || pendingDeletes.current.has(cid)) return;
     setError("");
     setBusy(true);
     const submittingCid = cid;
@@ -2437,6 +2456,12 @@ export function App() {
     void upload(droppedFiles(event));
   }
   async function removeConversation(id: string) {
+    if (pendingDeletes.current.has(id)) return;
+    const title = conversations.find((item) => item.id === id)?.title || "this chat";
+    if (!window.confirm(`Delete "${title}"? Chat history will be permanently deleted. Project files will remain.`)) return;
+    pendingDeletes.current.add(id);
+    setDeletingIds([...pendingDeletes.current]);
+    setError("");
     try {
       await api(`/conversations/${id}`, { method: "DELETE" });
       setDrafts((old) => {
@@ -2444,10 +2469,13 @@ export function App() {
         delete next[id];
         return next;
       });
-      await refreshConversations();
       setCid((current) => current === id ? "" : current);
+      await refreshConversations();
     } catch (e) {
       setError(String(e));
+    } finally {
+      pendingDeletes.current.delete(id);
+      setDeletingIds([...pendingDeletes.current]);
     }
   }
 
@@ -2489,11 +2517,11 @@ export function App() {
     conversation = conversations.find((item) => item.id === conversation.id) || conversation;
     return (
       <div className={`conversation ${nested ? "nested" : ""} ${conversation.id === cid ? "selected" : ""}`} key={conversation.id}>
-        <button className="history-title" disabled={busy} onClick={() => selectConversation(conversation)} aria-label={conversation.title}>
-          <span className="history-title-text">{conversation.title}</span><ConversationIndicator conversation={conversation} />
+        <button className="history-title" disabled={busy || deletingIds.includes(conversation.id)} onClick={() => selectConversation(conversation)} aria-label={conversation.title}>
+          <span className="history-title-text">{conversation.title}</span>{deletingIds.includes(conversation.id) && <small role="status">Deleting…</small>}<ConversationIndicator conversation={conversation} />
         </button>
-        <button className="history-action pin" title={conversation.pinned ? "Unpin chat" : "Pin chat"} aria-label={`${conversation.pinned ? "Unpin" : "Pin"} ${conversation.title}`} aria-pressed={Boolean(conversation.pinned)} disabled={pinPending.includes(conversation.id)} onClick={() => void togglePin(conversation)}><Icon name="pin" size={14} /></button>
-        <button className="history-action delete" title="Delete chat" aria-label={`Delete ${conversation.title}`} disabled={busy || pinPending.includes(conversation.id) || Boolean(conversation.active_run) || (conversation.id === cid && active)} onClick={() => void removeConversation(conversation.id)}><Icon name="close" size={14} /></button>
+        <button className="history-action pin" title={conversation.pinned ? "Unpin chat" : "Pin chat"} aria-label={`${conversation.pinned ? "Unpin" : "Pin"} ${conversation.title}`} aria-pressed={Boolean(conversation.pinned)} disabled={pinPending.includes(conversation.id) || deletingIds.includes(conversation.id)} onClick={() => void togglePin(conversation)}><Icon name="pin" size={14} /></button>
+        <button className="history-action delete" title="Delete chat" aria-label={`Delete ${conversation.title}`} disabled={busy || deletingIds.includes(conversation.id) || pinPending.includes(conversation.id) || Boolean(conversation.active_run) || (conversation.id === cid && active)} onClick={() => void removeConversation(conversation.id)}><Icon name="close" size={14} /></button>
       </div>
     );
   }
@@ -2750,6 +2778,7 @@ export function App() {
             <div className="chat-column" ref={chatContent}>
               {runs.map((run) => (
                 <RunView
+                  onFilesChanged={() => { if (fileConversation.current === run.conversation_id) setFileRevision((value) => value + 1); }}
                   key={run.id}
                   run={run}
                   timeline={timelines[run.id] || []}
@@ -2873,7 +2902,7 @@ export function App() {
                 }}
                 onSelect={(e) => updateSkillMention(e.currentTarget.value, e.currentTarget.selectionStart)}
                 onKeyDown={handleComposerKeyDown}
-                disabled={busy || active}
+                disabled={busy || active || deletingCurrent}
                 rows={3}
               />
               {draggingPath && <span className="path-drop-hint" role="status">Drop to insert relative path</span>}
@@ -3042,6 +3071,7 @@ export function App() {
                 )}
               </div>
             </div>
+            {configReady && (!selectedProvider?.enabled || !selectedModel) && <p className="composer-note" role="status">This model provider is not connected or has no available models. Set OPENAI_API_KEY in .env and restart the backend, or sign in through Settings → General → ChatGPT connection and select ChatGPT. For Azure, check your configured deployment.</p>}
             {hasOtherConnections && <p className="composer-note">Start a new chat to use a model from a different connection.</p>}
             <p className="composer-note">Sandboxed: network access is disabled; only files in the mounted workspace can be modified.</p>
           </form>
