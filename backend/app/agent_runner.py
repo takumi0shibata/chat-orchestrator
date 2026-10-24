@@ -409,7 +409,8 @@ class RunManager:
         binding = (route.connection.id, route.connection.base_url) if request.provider == "azure_openai" else None
         run = self.store.create_run(request.model_dump(), azure_binding=binding)
         if self.store.claim_title(request.conversation_id):
-            title_task = asyncio.create_task(self.generate_title(run["id"], request))
+            first_request = self.store.runs(request.conversation_id)[0]["request"]
+            title_task = asyncio.create_task(self.generate_title(run["id"], type(request).model_validate(first_request)))
             self.title_tasks.add(title_task)
             title_task.add_done_callback(self.title_tasks.discard)
         task = asyncio.create_task(self.execute(run["id"], request))
@@ -431,6 +432,7 @@ class RunManager:
 
     async def generate_title(self, rid, request):
         fallback = self.fallback_title(request)
+        complete = True
         try:
             selected = self.title_selection()
             provider, model = selected["title_provider"], selected["title_model"]
@@ -474,7 +476,8 @@ class RunManager:
         except Exception as error:
             log.warning("Unable to generate title for conversation %s: %s", request.conversation_id, self.redact(str(error)))
             title = fallback
-        if self.store.finish_title(request.conversation_id, title):
+            complete = False
+        if self.store.finish_title(request.conversation_id, title, complete=complete):
             try:
                 self.store.run(rid)
             except KeyError:
