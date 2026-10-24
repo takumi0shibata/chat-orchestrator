@@ -22,6 +22,7 @@
 - Reworked the English README with setup, authentication, everyday workflows, safety limits, and troubleshooting. Standardized application-generated labels, messages, and audit drafts in English while preserving user content and existing records.
 
 ### Fixed
+- Apply saved or system appearance before the application bundle loads to avoid a light flash in dark mode.
 - Make bundled Guild Journal and Project Audit records follow the requested language, preserve user wording, and use recognized English or Japanese structural headings.
 - Coalesce streamed recovery text and cap serialized journal size so stopped replies do not inflate later model context with per-token JSON.
 - Use singular file wording for one-file artifact events and Undo confirmation.
