@@ -149,9 +149,18 @@ class Sandbox:
         try:
             await docker(*self.arguments(), timeout=60)
         except (OSError, RuntimeError, TimeoutError) as error:
+            detail = str(error).strip()
+            if any(marker in detail.lower() for marker in (
+                "no such image", "unable to find image", "pull access denied",
+            )):
+                raise SandboxStartError(
+                    f"Sandbox image '{self.settings.sandbox_image}' is unavailable. "
+                    "Run `make sandbox-build` from the application repository for the default image. "
+                    "For a custom SANDBOX_IMAGE, build or pull that image and check the configured name, then retry."
+                ) from error
             raise SandboxStartError(
                 "The sandbox could not be started. Check Docker and try again. "
-                + str(error).strip()[:500]
+                + detail[:500]
             ) from error
 
     async def close(self):

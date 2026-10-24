@@ -22,6 +22,7 @@
 - Reworked the English README with setup, authentication, everyday workflows, safety limits, and troubleshooting. Standardized application-generated labels, messages, and audit drafts in English while preserving user content and existing records.
 
 ### Fixed
+- Explain how to build or configure a missing sandbox image instead of only suggesting a Docker retry.
 - Show provider setup guidance beside the composer when the selected connection cannot send messages.
 - Show an inline error for unavailable result files instead of downloading a JSON error response.
 - Refresh the Files panel after a successful Undo.
