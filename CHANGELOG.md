@@ -11,6 +11,10 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-24
+
+This release includes the appearance selector as a PATCH by explicit maintainer decision. No manual data migration is required.
+
 ### Added
 
 - Added a browser-local Appearance selector in Settings → General with System, Light, and Dark modes. System mode follows live OS changes.
