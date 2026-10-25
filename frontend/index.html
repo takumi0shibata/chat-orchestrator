@@ -3,8 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#18181a" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#fafafa" />
+    <style>
+      html { background: #fafafa; color-scheme: light; }
+      html[data-theme="dark"] { background: #202022; color-scheme: dark; }
+    </style>
+    <script>
+      (() => {
+        let appearance = "system";
+        try {
+          const saved = localStorage.getItem("orchestrator-appearance");
+          if (saved === "light" || saved === "dark") appearance = saved;
+        } catch {}
+        const dark = appearance === "dark" || (appearance === "system" && window.matchMedia?.("(prefers-color-scheme: dark)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+        document.querySelector('meta[name="theme-color"]').setAttribute("content", dark ? "#202022" : "#fafafa");
+      })();
+    </script>
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />

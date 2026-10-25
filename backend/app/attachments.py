@@ -101,7 +101,7 @@ async def save_upload(store, cid, upload: UploadFile, limit):
             while chunk := await upload.read(1024 * 1024):
                 size += len(chunk)
                 if size > limit:
-                    raise ValueError("Attachment exceeds upload size limit")
+                    raise ValueError(f"Attachment exceeds upload size limit ({limit:,} bytes)")
                 f.write(chunk)
         data = dict(
             id=aid,

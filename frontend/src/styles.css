@@ -1,4 +1,6 @@
 :root {
+  color-scheme: light;
+  --sidebar-bg: #fafafa;
   font-family:
     Inter,
     -apple-system,
@@ -1984,12 +1986,12 @@ button.model-panel-icon:disabled { opacity: .3; }
   border: 0;
   border-radius: 7px;
   background: transparent;
-  color: var(--success, #687d6e);
+  color: var(--text-3, #777980);
   font-size: 12px;
   text-align: left;
 }
 .history-more:hover,
-.history-more:focus-visible { background: var(--surface-2, #e9efeb); color: var(--success, #31513d); }
+.history-more:focus-visible { background: var(--surface-2, #efeff0); color: var(--text-2, #56585e); }
 .conversation { margin-bottom: 0; }
 .conversation.nested > button:first-child { padding-left: 9px; }
 .conversation.selected { background: var(--surface-3, #e4e4e7); }
@@ -2583,14 +2585,13 @@ button.model-panel-icon:disabled { opacity: .3; }
 .project-row .project-audit { margin-right: 0; }
 .project-row .project-audit[aria-current="page"] { opacity: 1; pointer-events: auto; background: var(--surface-3, #dedee2); color: var(--text, #292b30); }
 
-/* Dark mode. Colors above are written as var(--token, <light color>); the tokens
-   exist only here, so light mode keeps its exact original colors. */
-@media (prefers-color-scheme: dark) {
-  :root {
+/* Dark overrides follow the resolved browser appearance preference. */
+:root:where([data-theme="dark"]) {
+  & {
     color-scheme: dark;
-    --bg: #1f1f21;
+    --bg: #242426;
     --bg-elevated: #2a2a2d;
-    --sidebar-bg: #18181a;
+    --sidebar-bg: #202022;
     --surface-1: #252528;
     --surface-2: #2c2c2f;
     --surface-3: #36363a;
@@ -2673,3 +2674,9 @@ button.model-panel-icon:disabled { opacity: .3; }
   .diff-view .diff-del { background: rgb(248 81 73 / 15%); }
   .text-editor-dialog::backdrop { background: rgb(0 0 0 / 60%); }
 }
+
+.appearance-setting { margin-bottom: 28px; }
+.appearance-setting > label { font-size: 16px; font-weight: 550; }
+.appearance-setting .settings-description { margin: 6px 0 12px; }
+.appearance-setting select { min-width: 180px; }
+.sidebar .conversation.selected { background: var(--surface-3, #eeeef0); }

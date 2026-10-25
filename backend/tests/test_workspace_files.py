@@ -62,6 +62,10 @@ def test_reused_states_skip_stat_unless_stale(tmp_path):
     first = scan_files(tmp_path)
     (tmp_path / "a.txt").write_text("changed")
     (tmp_path / "b.txt").write_text("changed")
+    # Same-size writes can share a filesystem timestamp tick (e.g. ext4).
+    # Make the stale file's metadata change explicit; keep its size unchanged.
+    info = (tmp_path / "b.txt").stat()
+    os.utime(tmp_path / "b.txt", ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
     write(tmp_path, "new.txt")
     second = scan_files(tmp_path, reuse=first, stale={"b.txt"})
     # Reused states are trusted as is; stale and new files are stat'ed.
