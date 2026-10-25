@@ -11,6 +11,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Prevent deleting chats with unconfirmed sandbox cleanup, preserving restart recovery and workspace protection.
+- Serialize storage cleanup with run creation, uploads, and chat deletion, retaining the guard until background cleanup finishes even if its request is cancelled. Recheck ownership before pruning attachments and checkpoint refs so newly created data is preserved.
+
 ### Added
 
 - Added the MIT License for Orchestrator and matching application license metadata, preserving third-party licenses and attribution.

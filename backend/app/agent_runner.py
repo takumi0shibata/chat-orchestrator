@@ -336,11 +336,15 @@ class RunManager:
         cutoff = (
             datetime.now(timezone.utc) - timedelta(days=older_than_days)
         ).isoformat()
-        runs = self.store.run_dates()
         removed = 0
         for repo in self.checkpoints.repos():
-            stale = {r for r in self.checkpoints.run_ids(repo) if r not in runs or runs[r] < cutoff}
-            removed += self.checkpoints.delete_runs(repo, stale)
+            with self.checkpoints.transaction(repo):
+                # Read ownership after listing refs, while snapshots/Undo cannot
+                # change them. A newly created run is never mistaken for an orphan.
+                checkpoint_runs = self.checkpoints.run_ids(repo)
+                runs = self.store.run_dates()
+                stale = {r for r in checkpoint_runs if r not in runs or runs[r] < cutoff}
+                removed += self.checkpoints.delete_runs(repo, stale)
         return dict(removed_runs=removed, usage=self.storage_usage())
 
     def prune_orphan_attachments(self):
@@ -352,6 +356,9 @@ class RunManager:
         freed = 0
         for directory in (root.iterdir() if root.exists() else []):
             if directory.is_dir() and not directory.is_symlink() and directory.name not in conversations:
+                # The initial listing can predate a new conversation/upload.
+                if directory.name in self.store.conversation_ids():
+                    continue
                 freed += directory_size(directory)
                 shutil.rmtree(directory)
         return dict(freed_bytes=freed, usage=self.storage_usage())
