@@ -49,6 +49,23 @@ TERMINAL_HOSTS = {
 
 def create_app(settings=None, manager_factory=RunManager):
     settings = settings or get_settings()
+    # Cleanup runs in a worker thread; keep ownership mutations on the event
+    # loop outside that interval, including uploads which await file reads.
+    storage_operations = asyncio.Lock()
+
+    async def storage_cleanup(operation, *args):
+        async with storage_operations:
+            worker = asyncio.create_task(asyncio.to_thread(operation, *args))
+            try:
+                return await asyncio.shield(worker)
+            finally:
+                # Cancelling an HTTP request does not stop its worker thread.
+                # Do not admit new writes until the cleanup actually finishes.
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
 
     @asynccontextmanager
     async def lifespan(app):
@@ -273,13 +290,13 @@ def create_app(settings=None, manager_factory=RunManager):
 
     @app.post("/api/storage/checkpoints/prune")
     async def prune_checkpoints(body: CheckpointPrune):
-        return await asyncio.to_thread(
+        return await storage_cleanup(
             app.state.manager.prune_checkpoints, body.older_than_days
         )
 
     @app.post("/api/storage/attachments/prune-orphans")
     async def prune_orphan_attachments():
-        return await asyncio.to_thread(app.state.manager.prune_orphan_attachments)
+        return await storage_cleanup(app.state.manager.prune_orphan_attachments)
 
     @app.get("/api/costs/monthly")
     async def monthly_costs():
@@ -344,7 +361,8 @@ def create_app(settings=None, manager_factory=RunManager):
 
     @app.delete("/api/conversations/{cid}")
     async def delete_conversation(cid: str):
-        app.state.store.delete_conversation(cid)
+        async with storage_operations:
+            app.state.store.delete_conversation(cid)
         # Intentionally retain managed files as well; no recursive delete touches user mounts.
         return {"ok": True}
 
@@ -352,12 +370,13 @@ def create_app(settings=None, manager_factory=RunManager):
     async def attachments(
         conversation_id: str = Form(...), files: list[UploadFile] = File(...)
     ):
-        return [
-            await save_upload(
-                app.state.store, conversation_id, f, settings.max_upload_bytes
-            )
-            for f in files
-        ]
+        async with storage_operations:
+            return [
+                await save_upload(
+                    app.state.store, conversation_id, f, settings.max_upload_bytes
+                )
+                for f in files
+            ]
 
     def workspace(cid):
         c = app.state.store.conversation(cid)
@@ -447,7 +466,8 @@ def create_app(settings=None, manager_factory=RunManager):
 
     @app.post("/api/runs")
     async def run(body: RunCreate):
-        return app.state.manager.start(body)
+        async with storage_operations:
+            return app.state.manager.start(body)
 
     @app.get("/api/runs/{rid}")
     async def get_run(rid: str):

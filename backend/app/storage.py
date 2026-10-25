@@ -681,9 +681,21 @@ class Store:
 
     def delete_conversation(self, cid):
         self.conversation(cid)
-        if any(r["status"] not in TERMINAL for r in self.runs(cid)):
-            raise ValueError("Stop the active run before deleting the conversation")
         with self.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            runs = c.execute(
+                """SELECT r.status, (SELECT e.type FROM events e
+                   WHERE e.run_id=r.id AND e.type IN ('sandbox_cleanup_failed','sandbox_cleanup_completed')
+                   ORDER BY e.seq DESC LIMIT 1) AS cleanup
+                   FROM runs r WHERE r.conversation_id=?""", (cid,),
+            ).fetchall()
+            if any(run["status"] not in TERMINAL for run in runs):
+                raise ValueError("Stop the active run before deleting the conversation")
+            if any(run["cleanup"] == "sandbox_cleanup_failed" for run in runs):
+                raise ValueError(
+                    "Cannot delete this chat until sandbox cleanup is confirmed. "
+                    "Fix Docker and restart the backend, then retry."
+                )
             c.execute(
                 "DELETE FROM events WHERE run_id IN (SELECT id FROM runs WHERE conversation_id=?)",
                 (cid,),
