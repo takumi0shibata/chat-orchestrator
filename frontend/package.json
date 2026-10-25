@@ -1,6 +1,7 @@
 {
   "name": "chat-orchestrator-frontend",
   "private": true,
+  "license": "MIT",
   "version": "0.3.2",
   "type": "module",
   "scripts": {

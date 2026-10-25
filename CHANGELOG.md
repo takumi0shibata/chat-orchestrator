@@ -11,6 +11,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the MIT License for Orchestrator and matching application license metadata, preserving third-party licenses and attribution.
+
 ## [0.3.2] - 2026-10-24
 
 This release includes the appearance selector as a PATCH by explicit maintainer decision. No manual data migration is required.
