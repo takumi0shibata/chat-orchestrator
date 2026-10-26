@@ -2189,3 +2189,51 @@ it("rejects oversized attachments before uploading", async () => {
   expect(await screen.findByText(/Each attachment must be 2 bytes or smaller/)).toBeInTheDocument();
   expect(fetchMock.mock.calls.some(([url]) => url === "/api/attachments")).toBe(false);
 });
+
+it.each(["config", "conversations", "settings"])("waits for initial %s restoration before creating a chat", async (delayed) => {
+  localStorage.setItem("workspace-conversation", "restored");
+  localStorage.setItem("workspace-last-project", "w");
+  const restored = { id: "restored", workspace_id: "w", title: "Restored chat", updated_at: run.updated_at };
+  const fresh = { id: "fresh", workspace_id: "w", title: "New chat", updated_at: run.updated_at };
+  const initial = {
+    config: { providers: [], workspaces: [{ id: "w", label: "Research", path: "/research" }], skills: [], resources: [], mcp_servers: [] },
+    conversations: [restored],
+    settings: { title_provider: "openai", title_model: "gpt-6-luna", theme_color: "#25262A" },
+  };
+  let release!: (response: Response) => void;
+  const pending = new Promise<Response>((resolve) => { release = resolve; });
+  let delayedOnce = false;
+  let created = false;
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = String(input);
+    if (url === "/api/conversations" && init?.method === "POST") {
+      created = true;
+      return new Response(JSON.stringify(fresh));
+    }
+    if (url === `/api/${delayed}` && !delayedOnce) {
+      delayedOnce = true;
+      return pending;
+    }
+    if (url === "/api/config") return new Response(JSON.stringify(initial.config));
+    if (url === "/api/settings") return new Response(JSON.stringify(initial.settings));
+    if (url === "/api/conversations") return new Response(JSON.stringify(created ? [fresh, restored] : [restored]));
+    if (url === "/api/conversations/restored") return new Response(JSON.stringify({ ...restored, runs: [] }));
+    if (url === "/api/conversations/fresh") return new Response(JSON.stringify({ ...fresh, runs: [] }));
+    return new Response(JSON.stringify([]));
+  });
+  render(<App />);
+  const create = screen.getByRole("button", { name: "New chat" });
+  expect(create).toBeDisabled();
+  fireEvent.click(create);
+  expect(created).toBe(false);
+  await act(async () => { release(new Response(JSON.stringify(initial[delayed as keyof typeof initial]))); });
+  await screen.findByRole("heading", { name: "Restored chat" });
+  await waitFor(() => expect(create).toBeEnabled());
+  fireEvent.click(create);
+  await screen.findByRole("heading", { name: "New chat" });
+  const message = await screen.findByRole("textbox", { name: "Message" });
+  fireEvent.change(message, { target: { value: "Keep this new-chat draft" } });
+  await waitFor(() => expect(localStorage.getItem("workspace-conversation")).toBe("fresh"));
+  expect(message).toHaveValue("Keep this new-chat draft");
+  expect(fetch.mock.calls.filter(([url, init]) => url === "/api/conversations" && init?.method === "POST")).toHaveLength(1);
+});

@@ -2177,7 +2177,7 @@ export function App() {
   }, []);
 
   async function newConversation(projectId = workspace) {
-    if (!projectId || busy) return;
+    if (!configReady || !projectId || busy) return;
     if (newChat && current?.title === "New chat" && current.workspace_id === projectId && !input.trim() && !attachments.length && !skills.length && !resources.length && !mcps.length) {
       setSettingsPage("chat");
       messageInput.current?.focus();
@@ -2583,7 +2583,7 @@ export function App() {
             <Shield size={19} strokeWidth={1.7} />
             <span>Guild Board</span>
           </button>
-          <button className="sidebar-command" disabled={!workspace || busy} onClick={() => void newConversation()}>
+          <button className="sidebar-command" disabled={!configReady || !workspace || busy} onClick={() => void newConversation()}>
             <Icon name="compose" size={19} />
             <span>New chat</span>
           </button>
