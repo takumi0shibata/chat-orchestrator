@@ -1,6 +1,7 @@
 import subprocess
 import json
 import os
+import signal
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -393,6 +394,61 @@ def test_pruning_runs_keeps_blobs_of_the_saved_state(setup):
     cp.git(repo, "gc", "--prune=now", "--quiet")
     commit = cp.snapshot(work, "after prune")["commit"]
     assert cp.git(repo, "cat-file", "-p", cp.tree(repo, commit)["a.txt"][1]) == b"content"
+
+
+@pytest.mark.parametrize("packed", [False, True])
+def test_pruning_runs_drops_their_objects_without_repacking_retained_ones(setup, packed):
+    cp, work = setup
+    repo = cp.repo(work)
+    blobs = []
+    for rid, text in [("old1", "old packed"), ("kept", "kept"), ("old2", "old loose")]:
+        (work / "a.txt").write_text(text)
+        commit = cp.snapshot_run(work, rid, "before")["commit"]
+        blobs.append(cp.tree(repo, commit)["a.txt"][1])
+        if packed and rid == "kept":
+            # Older releases left gc packs behind.
+            cp.git(repo, "gc", "--quiet")
+    (work / "a.txt").write_text("kept after")
+    cp.snapshot_run(work, "kept", "after")
+    assert cp.delete_runs(repo, {"old1", "old2"}) == 2
+    for sha in blobs[0], blobs[2]:
+        with pytest.raises(RuntimeError):
+            cp.git(repo, "cat-file", "-e", sha)
+    # Nothing unreachable remains, and every retained object is intact.
+    assert cp.git(repo, "fsck", "--strict", "--unreachable", "--no-reflogs") == b""
+    # Objects written after the last gc stay loose: nothing was repacked.
+    assert b"\ncount: 0\n" not in b"\n" + cp.git(repo, "count-objects", "-v")
+    cp.restore_run(work, "kept")
+    assert (work / "a.txt").read_text() == "kept"
+
+
+def test_git_timeout_stops_the_processes_git_started(tmp_path, monkeypatch):
+    child = tmp_path / "child"
+    fake = tmp_path / "bin" / "git"
+    fake.parent.mkdir()
+    fake.write_text(f"#!/bin/sh\nsleep 60 &\necho $! > '{child}'\nwait\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(checkpoint_module, "GIT_TIMEOUT", 1)
+    cp = Checkpoints(tmp_path / "data", max_file_bytes=1024)
+    with pytest.raises(subprocess.TimeoutExpired):
+        cp.git(tmp_path / "repo.git", "gc")
+    pid = int(child.read_text())
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail("git's child process outlived the timeout")
+    finally:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def test_saved_index_deltas_build_the_same_tree_as_a_full_rebuild(watched, tmp_path):

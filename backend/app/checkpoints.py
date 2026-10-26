@@ -13,12 +13,13 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
 import time
 from bisect import bisect_left
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path, PurePosixPath
 
 from app.workspace_files import scan_files
@@ -33,6 +34,7 @@ GIT_ENV = {
     "GIT_COMMITTER_NAME": "chat-orchestrator",
     "GIT_COMMITTER_EMAIL": "checkpoints@localhost",
 }
+GIT_TIMEOUT = 600
 MAX_PATCH_CHARS = 200_000
 # Hashing reports progress and honours cancellation between batches.
 HASH_BATCH = 2000
@@ -225,16 +227,24 @@ class Checkpoints:
 
     def git(self, repo, *args, input=None, env=None, bare_init=False):
         command = ["git"] + ([] if bare_init else [f"--git-dir={repo}"]) + list(args)
-        result = subprocess.run(
-            command, input=input, capture_output=True, check=False,
-            env={**os.environ, **GIT_ENV, **(env or {})}, timeout=600,
-        )
-        if result.returncode:
+        # A session of its own lets a timeout stop the processes git starts
+        # (e.g. pack-objects), not only git itself.
+        with subprocess.Popen(
+            command, stdin=subprocess.DEVNULL if input is None else subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, **GIT_ENV, **(env or {})}, start_new_session=True,
+        ) as process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=GIT_TIMEOUT)
+            except BaseException:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                raise
+        if process.returncode:
             raise RuntimeError(
-                "git " + args[0] + " failed: "
-                + result.stderr.decode(errors="replace")[-2000:]
+                "git " + args[0] + " failed: " + stderr.decode(errors="replace")[-2000:]
             )
-        return result.stdout
+        return stdout
 
     def snapshot(self, workspace: Path, label: str, *, rehash=(), progress=None):
         """Return a commit for the workspace's current regular files.
@@ -434,8 +444,45 @@ class Checkpoints:
         if not refs:
             return 0
         self.git(repo, "update-ref", "--stdin", input="".join(f"delete {r}\n" for r in refs).encode())
-        self.git(repo, "gc", "--prune=now", "--quiet")
+        self.discard_unreachable(repo)
         return len({r.split("/")[2] for r in refs})
+
+    def discard_unreachable(self, repo):
+        """Delete objects no ref reaches without recompressing the others.
+
+        Snapshots write only loose objects. git gc would compress all of them
+        into a pack with a delta search on every core, which keeps the CPU busy
+        for minutes per few GB, so loose objects are pruned in place. Packs (left by the gc
+        of older releases) are rewritten only to drop unreachable objects; the
+        retained objects are copied as stored.
+        """
+        self.git(repo, "prune", "--expire=now")
+        directory = repo / "objects" / "pack"
+        packs = sorted(directory.glob("pack-*.pack"))
+        if not packs:
+            return
+        packed = set()
+        for pack in packs:
+            index = self.git(repo, "show-index", input=pack.with_suffix(".idx").read_bytes())
+            packed.update(line.split()[1] for line in index.decode().splitlines())
+        reachable = {
+            line.split(" ", 1)[0]
+            for line in self.git(repo, "rev-list", "--objects", "--all").decode().splitlines()
+        }
+        keep = packed & reachable
+        if keep == packed:
+            return
+        name = self.git(
+            repo, "pack-objects", "--window=0", "-q", str(directory / "pack"),
+            input="".join(sha + "\n" for sha in sorted(keep)).encode(),
+        ).decode().strip() if keep else None
+        for pack in packs:
+            if pack.stem != f"pack-{name}":
+                for path in directory.glob(pack.stem + ".*"):
+                    path.unlink()
+        # gc's commit-graph may list the deleted commits.
+        (repo / "objects" / "info" / "commit-graph").unlink(missing_ok=True)
+        shutil.rmtree(repo / "objects" / "info" / "commit-graphs", ignore_errors=True)
 
     def set_ref(self, workspace, rid, name, commit):
         self.git(self.repo(workspace), "update-ref", f"refs/checkpoints/{rid}/{name}", commit)
