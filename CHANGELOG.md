@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- Serialize checkpoint repository initialization so startup warm-up cannot race the first run and leave its Undo checkpoint unavailable.
+
 - Wait for initial configuration, conversation, and settings restoration before enabling New chat, preventing late restoration from replacing a newly selected chat and hiding its draft.
 
 - Prevent deleting chats with unconfirmed sandbox cleanup, preserving restart recovery and workspace protection.

@@ -216,13 +216,15 @@ class Checkpoints:
         os.replace(temporary, path)
         (repo / "snapshot-cache.json").unlink(missing_ok=True)
 
-    def repo(self, workspace: Path):
+    def repo(self, workspace: Path, *, progress=None):
         key = hashlib.sha256(str(workspace.resolve()).encode()).hexdigest()[:16]
         repo = self.root / f"{key}.git"
-        if not (repo / "HEAD").exists():
-            repo.parent.mkdir(parents=True, exist_ok=True)
-            self.git(repo, "init", "--quiet", "--bare", str(repo), bare_init=True)
-            (repo / "workspace").write_text(str(workspace.resolve()))
+        # Warm-up and the first run can both arrive before the repo exists.
+        with self.transaction(repo, progress):
+            if not (repo / "HEAD").exists():
+                repo.parent.mkdir(parents=True, exist_ok=True)
+                self.git(repo, "init", "--quiet", "--bare", str(repo), bare_init=True)
+                (repo / "workspace").write_text(str(workspace.resolve()))
         return repo
 
     def git(self, repo, *args, input=None, env=None, bare_init=False):
@@ -252,7 +254,7 @@ class Checkpoints:
         progress(done, total) is called while files are hashed, including while
         waiting for another snapshot of the same workspace (e.g. the warm-up).
         """
-        repo = self.repo(workspace)
+        repo = self.repo(workspace, progress=progress)
         lock = self.locked(repo, progress)
         try:
             return self._snapshot(workspace, repo, label, rehash, progress)
@@ -262,7 +264,7 @@ class Checkpoints:
 
     def snapshot_run(self, workspace, rid, name, *, progress=None):
         # GC must not run between creating a commit and publishing its run ref.
-        with self.transaction(self.repo(workspace), progress):
+        with self.transaction(self.repo(workspace, progress=progress), progress):
             result = self.snapshot(workspace, f"{rid} {name}", progress=progress)
             self.set_ref(workspace, rid, name, result["commit"])
             return result
