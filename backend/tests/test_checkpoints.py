@@ -23,6 +23,41 @@ def setup(tmp_path):
     return Checkpoints(tmp_path / "data", max_file_bytes=1024), work
 
 
+def test_first_run_waits_for_checkpoint_repository_initialization(setup, monkeypatch):
+    cp, work = setup
+    (work / "a.txt").write_text("before")
+    initializing = threading.Event()
+    release = threading.Event()
+    duplicate_init = threading.Event()
+    git = cp.git
+
+    def delayed_git(repo, *args, **kwargs):
+        if kwargs.get("bare_init"):
+            if initializing.is_set():
+                duplicate_init.set()
+            else:
+                initializing.set()
+                assert release.wait(5)
+        return git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(cp, "git", delayed_git)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        warmup = pool.submit(cp.snapshot, work, "warm-up")
+        assert initializing.wait(5)
+        run = pool.submit(cp.snapshot_run, work, "first-run", "before")
+        try:
+            assert not duplicate_init.wait(0.2)
+        finally:
+            release.set()
+        warmup.result(timeout=5)
+        before = run.result(timeout=5)
+    assert cp.get_ref(work, "first-run", "before") == before["commit"]
+    (work / "a.txt").write_text("after")
+    cp.snapshot_run(work, "first-run", "after")
+    assert cp.restore_run(work, "first-run")["restored"] == ["a.txt"]
+    assert (work / "a.txt").read_text() == "before"
+
+
 def test_snapshot_includes_gitignored_files_without_applying_filters(setup):
     cp, work = setup
     subprocess.run(["git", "init", "-q", str(work / "nested")], check=True)
