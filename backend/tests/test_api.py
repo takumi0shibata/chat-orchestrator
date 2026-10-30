@@ -260,6 +260,32 @@ def test_upload_limits_and_signature(tmp_path):
         direct_input(dict(path=str(pdf), size=21 * 1024 * 1024, name="file.pdf"))
 
 
+@pytest.mark.parametrize("suffix,content", [
+    (".pdf", b"%PDF-1.4\n"),
+    (".png", b"\x89PNG\r\n\x1a\n"),
+    (".jpg", b"\xff\xd8\xff"),
+    (".jpeg", b"\xff\xd8\xff"),
+    (".webp", b"RIFF0000WEBP"),
+])
+def test_long_attachment_names_keep_direct_input_extension(app_client, suffix, content):
+    from app.attachments import direct_input
+
+    http, _, _ = app_client
+    store = http.app.state.store
+    cid = store.create_conversation("work")["id"]
+    response = http.post(
+        "/api/attachments", data={"conversation_id": cid},
+        files=[("files", ("p" * 198 + suffix, content, "application/octet-stream"))],
+    )
+    assert response.status_code == 200
+    uploaded = response.json()[0]
+    assert len(uploaded["name"]) == 200 and uploaded["name"].endswith(suffix)
+    attachment = store.attachment(uploaded["id"], cid)
+    assert direct_input(attachment)["type"] == ("input_file" if suffix == ".pdf" else "input_image")
+    download = http.get(f"/api/conversations/{cid}/attachments/{uploaded['id']}")
+    assert download.status_code == 200 and download.content == content
+
+
 def test_search_and_pin_api(app_client):
     http, _, _ = app_client
     c = http.post("/api/conversations", json={"workspace_id": "work"}).json()
