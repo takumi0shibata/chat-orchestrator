@@ -92,7 +92,10 @@ async def save_upload(store, cid, upload: UploadFile, limit):
     store.conversation(cid)
     aid = uuid4().hex
     name = Path((upload.filename or "attachment").replace("\\", "/")).name
-    name = "".join(c for c in name if c.isprintable())[:200] or "attachment"
+    name = "".join(c for c in name if c.isprintable()) or "attachment"
+    if len(name) > 200:
+        suffix = Path(name).suffix
+        name = name[:200 - len(suffix)] + suffix if len(suffix) < 200 else name[:200]
     path = store.root / "attachments" / cid / aid / name
     path.parent.mkdir(parents=True, exist_ok=True)
     size = 0
