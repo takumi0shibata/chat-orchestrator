@@ -672,11 +672,11 @@ class Store:
             raise KeyError("Attachment not found in this conversation")
         return dict(row)
 
-    def add_attachment(self, data):
+    def add_attachments(self, attachments):
         with self.connect() as c:
-            c.execute(
+            c.executemany(
                 "INSERT INTO attachments VALUES(:id,:conversation_id,:name,:content_type,:size,:path)",
-                data,
+                attachments,
             )
 
     def delete_conversation(self, cid):

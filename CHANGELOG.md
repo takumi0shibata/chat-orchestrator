@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- Roll back newly saved attachments when a multi-file upload fails or is cancelled, preserving existing attachments and workspace files.
+
 - Keep the extension when shortening long attachment names, so supported images and PDFs remain available for direct model input.
 
 - Serialize checkpoint repository initialization so startup warm-up cannot race the first run and leave its Undo checkpoint unavailable.
