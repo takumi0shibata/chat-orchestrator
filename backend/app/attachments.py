@@ -88,7 +88,7 @@ def list_files(root: Path, relative=""):
         os.close(fd)
 
 
-async def save_upload(store, cid, upload: UploadFile, limit):
+async def _write_upload(store, cid, upload: UploadFile, limit):
     store.conversation(cid)
     aid = uuid4().hex
     name = Path((upload.filename or "attachment").replace("\\", "/")).name
@@ -100,27 +100,40 @@ async def save_upload(store, cid, upload: UploadFile, limit):
     path.parent.mkdir(parents=True, exist_ok=True)
     size = 0
     try:
-        with path.open("xb") as f:
-            while chunk := await upload.read(1024 * 1024):
-                size += len(chunk)
-                if size > limit:
-                    raise ValueError(f"Attachment exceeds upload size limit ({limit:,} bytes)")
-                f.write(chunk)
-        data = dict(
-            id=aid,
-            conversation_id=cid,
-            name=name,
-            content_type=upload.content_type or "application/octet-stream",
-            size=size,
-            path=str(path),
-        )
-        store.add_attachment(data)
-        return {k: v for k, v in data.items() if k != "path"}
+        try:
+            with path.open("xb") as f:
+                while chunk := await upload.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > limit:
+                        raise ValueError(f"Attachment exceeds upload size limit ({limit:,} bytes)")
+                    f.write(chunk)
+            return dict(
+                id=aid,
+                conversation_id=cid,
+                name=name,
+                content_type=upload.content_type or "application/octet-stream",
+                size=size,
+                path=str(path),
+            )
+        finally:
+            await upload.close()
     except BaseException:
         path.unlink(missing_ok=True)
         raise
-    finally:
-        await upload.close()
+
+
+async def save_uploads(store, cid, uploads, limit):
+    saved = []
+    try:
+        for upload in uploads:
+            saved.append(await _write_upload(store, cid, upload, limit))
+        # No await separates committing the metadata from returning success.
+        store.add_attachments(saved)
+    except BaseException:
+        for attachment in saved:
+            Path(attachment["path"]).unlink(missing_ok=True)
+        raise
+    return [{k: v for k, v in attachment.items() if k != "path"} for attachment in saved]
 
 
 def direct_input(attachment):

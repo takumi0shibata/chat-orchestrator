@@ -14,7 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.agent_runner import RunManager
-from app.attachments import list_files, open_regular, save_upload
+from app.attachments import list_files, open_regular, save_uploads
 from app.audit import read_audit
 from app.checkpoints import CheckpointConflict
 from app.config import get_settings
@@ -371,12 +371,9 @@ def create_app(settings=None, manager_factory=RunManager):
         conversation_id: str = Form(...), files: list[UploadFile] = File(...)
     ):
         async with storage_operations:
-            return [
-                await save_upload(
-                    app.state.store, conversation_id, f, settings.max_upload_bytes
-                )
-                for f in files
-            ]
+            return await save_uploads(
+                app.state.store, conversation_id, files, settings.max_upload_bytes
+            )
 
     def workspace(cid):
         c = app.state.store.conversation(cid)

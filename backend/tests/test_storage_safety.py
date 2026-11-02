@@ -89,7 +89,7 @@ def test_orphan_prune_does_not_remove_new_live_conversation_upload(tmp_path):
     async def scenario():
         from io import BytesIO
         from fastapi import UploadFile
-        from app.attachments import save_upload
+        from app.attachments import save_uploads
         manager, store, _, _ = setup(tmp_path, [], checkpoints=False)
         entered, release = threading.Event(), threading.Event()
         original = store.conversation_ids
@@ -106,7 +106,7 @@ def test_orphan_prune_does_not_remove_new_live_conversation_upload(tmp_path):
             prune = asyncio.create_task(asyncio.to_thread(manager.prune_orphan_attachments))
             assert await asyncio.to_thread(entered.wait, 5)
             cid = store.create_conversation('work')['id']
-            added = await save_upload(store, cid, UploadFile(filename='important.txt', file=BytesIO(b'isolated important data')), 1000)
+            added = (await save_uploads(store, cid, [UploadFile(filename='important.txt', file=BytesIO(b'isolated important data'))], 1000))[0]
             from pathlib import Path
             path = Path(store.attachment(added['id'], cid)['path'])
             assert path.exists()
@@ -166,11 +166,11 @@ def test_cancelled_cleanup_holds_writes_until_worker_finishes(app_client, monkey
         operation = lambda: routes['/api/runs', 'POST'](RunCreate(
             conversation_id=cid, input='test', model='gpt-6-sol'))
     elif mutation == 'upload':
-        original = main.save_upload
+        original = main.save_uploads
         async def upload(*args):
             writes.append('upload')
             return await original(*args)
-        monkeypatch.setattr(main, 'save_upload', upload)
+        monkeypatch.setattr(main, 'save_uploads', upload)
         operation = lambda: routes['/api/attachments', 'POST'](
             conversation_id=cid, files=[UploadFile(filename='test.txt', file=BytesIO(b'test'))])
     else:
