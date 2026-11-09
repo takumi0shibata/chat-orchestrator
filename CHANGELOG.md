@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- Keep the workspace locked until an in-progress file-editor save finishes after request cancellation, preventing overlapping saves or agent runs from changing the same files.
+
 - Keep the extension when shortening long attachment names, so supported images and PDFs remain available for direct model input.
 
 - Serialize checkpoint repository initialization so startup warm-up cannot race the first run and leave its Undo checkpoint unavailable.
