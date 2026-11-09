@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import os
+import threading
 
 import pytest
 
@@ -121,3 +122,59 @@ def test_save_detects_external_change_during_write(tmp_path, monkeypatch):
         text_files.save_text_file(tmp_path, target.name, "changed", original["revision"])
     assert target.read_text() == "external edit"
     assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_cancelled_save_keeps_workspace_locked_until_write_finishes(app_client, monkeypatch, failure):
+    from fastapi import HTTPException
+    from app.schemas import TextFileUpdate
+    import app.main as main
+
+    http, work, _ = app_client
+    target = work / "note.txt"
+    target.write_text("original")
+    revision = text_files.read_text_file(work, target.name)["revision"]
+    cid = http.app.state.store.create_conversation("work")["id"]
+    endpoint = next(route.endpoint for route in http.app.routes
+                    if route.path == "/api/conversations/{cid}/file" and "PUT" in route.methods)
+    entered, release = threading.Event(), threading.Event()
+    original_save = main.save_text_file
+
+    def paused_save(*args):
+        entered.set()
+        assert release.wait(10)
+        if failure:
+            raise OSError("test write failed")
+        return original_save(*args)
+
+    monkeypatch.setattr(main, "save_text_file", paused_save)
+
+    async def scenario():
+        lock = http.app.state.manager.locks.setdefault(str(work), asyncio.Lock())
+        body = TextFileUpdate(content="saved", revision=revision)
+        saving = asyncio.create_task(endpoint(cid, target.name, body))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            saving.cancel()
+            await asyncio.sleep(0)
+            saving.cancel()
+            await asyncio.sleep(0)
+            assert lock.locked(), "The worker must retain workspace ownership after request cancellation"
+            assert not saving.done()
+            with pytest.raises(HTTPException) as busy:
+                await endpoint(cid, target.name, body)
+            assert busy.value.status_code == 409
+            assert "workspace is busy" in busy.value.detail
+        finally:
+            release.set()
+            result = await asyncio.gather(saving, return_exceptions=True)
+        assert isinstance(result[0], asyncio.CancelledError)
+        assert not lock.locked()
+        assert target.read_text() == ("original" if failure else "saved")
+        assert list(work.iterdir()) == [target]
+        monkeypatch.setattr(main, "save_text_file", original_save)
+        updated = text_files.read_text_file(work, target.name)
+        retried = await endpoint(cid, target.name, TextFileUpdate(content="retry", revision=updated["revision"]))
+        assert retried["content"] == target.read_text() == "retry"
+
+    http.portal.call(scenario)

@@ -47,6 +47,24 @@ TERMINAL_HOSTS = {
 }
 
 
+async def finish_thread(operation, *args):
+    worker = asyncio.create_task(asyncio.to_thread(operation, *args))
+    try:
+        return await asyncio.shield(worker)
+    finally:
+        # Request cancellation cannot stop a thread. Keep the caller's lock
+        # until it finishes, even after repeated cancellation requests.
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not worker.cancelled():
+            worker.exception()  # Retrieve late failures without replacing cancellation.
+
+
 def create_app(settings=None, manager_factory=RunManager):
     settings = settings or get_settings()
     # Cleanup runs in a worker thread; keep ownership mutations on the event
@@ -55,17 +73,7 @@ def create_app(settings=None, manager_factory=RunManager):
 
     async def storage_cleanup(operation, *args):
         async with storage_operations:
-            worker = asyncio.create_task(asyncio.to_thread(operation, *args))
-            try:
-                return await asyncio.shield(worker)
-            finally:
-                # Cancelling an HTTP request does not stop its worker thread.
-                # Do not admit new writes until the cleanup actually finishes.
-                while not worker.done():
-                    try:
-                        await asyncio.shield(worker)
-                    except asyncio.CancelledError:
-                        continue
+            return await finish_thread(operation, *args)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -407,7 +415,7 @@ def create_app(settings=None, manager_factory=RunManager):
             raise HTTPException(409, "The workspace is busy. Wait for the current run to finish, then save again.")
         async with lock:
             try:
-                return await asyncio.to_thread(save_text_file, root, path, body.content, body.revision)
+                return await finish_thread(save_text_file, root, path, body.content, body.revision)
             except FileChanged as error:
                 raise HTTPException(409, str(error)) from None
             except OSError:
